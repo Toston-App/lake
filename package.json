@@ -1,0 +1,39 @@
+{
+    "name": "Wallet",
+    "private": true,
+    "description": "",
+    "keywords": [],
+    "homepage": "",
+    "bugs": {
+      "url": ""
+    },
+    "repository": {
+      "type": "git",
+      "url": ""
+    },
+    "license": "MIT",
+    "author": "",
+    "workspaces": [
+      "backend/**"
+    ],
+    "scripts": {
+      "cm": "git-cz"
+    },
+    "commitlint": {
+      "extends": [
+        "@commitlint/config-conventional",
+        "@commitlint/config-lerna-scopes"
+      ]
+    },
+    "config": {
+      "commitizen": {
+        "path": "./node_modules/cz-conventional-changelog"
+      }
+    },
+    "devDependencies": {
+      "@commitlint/config-conventional": "^17.4.2",
+      "@commitlint/config-lerna-scopes": "^17.4.2",
+      "commitizen": "^4.3.0",
+      "husky": "^8.0.3"
+    }
+  }

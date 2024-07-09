@@ -1,0 +1,437 @@
+categories_and_sub = [
+  {
+    "name": "Compras",
+    "icon": "shoppingBag",
+    "color": "#FF5733",
+    "sub_categories": [
+      {
+        "name": "Compras",
+        "icon": "shoppingBag"
+      },
+      {
+        "name": "Bebés, niños",
+        "icon": "baby"
+      },
+      {
+        "name": "Casa y jardín",
+        "icon": "lampDesk"
+      },
+      {
+        "name": "Electrónica, accesorios",
+        "icon": "laptop2"
+      },
+      {
+        "name": "Joyas, accesorios",
+        "icon": "gem"
+      },
+      {
+        "name": "Mascotas, animales",
+        "icon": "cat"
+      },
+      {
+        "name": "Papelería, herramientas",
+        "icon": "scissors"
+      },
+      {
+        "name": "Regalos",
+        "icon": "gift"
+      },
+      {
+        "name": "Ropa y calzado",
+        "icon": "shirt"
+      },
+      {
+        "name": "Tiempo libre",
+        "icon": "mountain"
+      },
+      {
+        "name": "Libros",
+        "icon": "book"
+      }
+    ]
+  },
+  {
+    "name": "Alimentos y bebidas",
+    "icon": "apple",
+    "color": "#6DDA6B",
+    "sub_categories": [
+      {
+        "name": "Alimentos y bebidas",
+        "icon": "apple"
+      },
+      {
+        "name": "Comestibles, despensa",
+        "icon": "beef"
+      },
+      {
+        "name": "Restaurante, comida rápida",
+        "icon": "pizza"
+      },
+      {
+        "name": "Café",
+        "icon": "coffee"
+      },
+      {
+        "name": "Alcohol",
+        "icon": "beer"
+      },
+      {
+        "name": "Vino",
+        "icon": "wine"
+      }
+    ]
+  },
+  {
+    "name": "Seguros",
+    "icon": "receipt",
+    "color": "#4F4F4F",
+    "sub_categories": [
+      {
+        "name": "Seguros",
+        "icon": "receipt"
+      },
+      {
+        "name": "Hogar",
+        "icon": "home"
+      },
+      {
+        "name": "Médico",
+        "icon": "stethoscope"
+      },
+      {
+        "name": "Viaje",
+        "icon": "plane"
+      },
+      {
+        "name": "Vida",
+        "icon": "heart"
+      },
+      {
+        "name": "Auto",
+        "icon": "car"
+      },
+      {
+        "name": "Motocicleta",
+        "icon": "bike"
+      },
+      {
+        "name": "Mascota",
+        "icon": "dog"
+      }
+    ]
+  },
+  {
+    "name": "Vivienda",
+    "icon": "home",
+    "color": "#FFC300",
+    "sub_categories": [
+      {
+        "name": "Vivienda",
+        "icon": "home"
+      },
+      {
+        "name": "Renta",
+        "icon": "dollarSign"
+      },
+      {
+        "name": "Mantenimiento, reparaciones",
+        "icon": "hammer"
+      },
+      {
+        "name": "Servicio doméstico",
+        "icon": "personStanding"
+      },
+      {
+        "name": "Alarmas y seguridad",
+        "icon": "webcam"
+      }
+    ]
+  },
+  {
+    "name": "Vehículos",
+    "icon": "car",
+    "color": "#B041FF",
+    "sub_categories": [
+      {
+        "name": "Vehículos",
+        "icon": "car"
+      },
+      {
+        "name": "Alquiler",
+        "icon": "dollarSign"
+      },
+      {
+        "name": "Combustible",
+        "icon": "fuel"
+      },
+      {
+        "name": "Estacionamiento",
+        "icon": "ParkingCircle"
+      },
+      {
+        "name": "Mantenimiento",
+        "icon": "wrench"
+      },
+      {
+        "name": "Compra de vehículo",
+        "icon": "store"
+      }
+    ]
+  },
+  {
+    "name": "Vida y entretenimiento",
+    "icon": "smile",
+    "color": "#FF9800",
+    "sub_categories": [
+      {
+        "name": "Vida y entretenimiento",
+        "icon": "smile"
+      },
+      {
+        "name": "Educación, desarrollo",
+        "icon": "graduationCap"
+      },
+      {
+        "name": "Pasatiempos",
+        "icon": "puzzle"
+      },
+      {
+        "name": "Vacaciones, viajes, hoteles",
+        "icon": "palmtree"
+      },
+      {
+        "name": "Apuestas",
+        "icon": "dice5"
+      },
+      {
+        "name": "Diversión y celebraciones",
+        "icon": "partyPopper"
+      },
+      {
+        "name": "Cigarros, tabaco",
+        "icon": "cigarette"
+      },
+      {
+        "name": "Bienestar, belleza",
+        "icon": "sparkles"
+      },
+      {
+        "name": "Caridad, regalos",
+        "icon": "gift"
+      },
+      {
+        "name": "Cultura, arte, eventos deportivos",
+        "icon": "flagTriangleRight"
+      }
+    ]
+  },
+  {
+    "name": "Salud y deporte",
+    "icon": "activity",
+    "color": "#27AE60",
+    "sub_categories": [
+      {
+        "name": "Salud y deporte",
+        "icon": "activity"
+      },
+      {
+        "name": "Deporte, gym",
+        "icon": "dumbbell"
+      },
+      {
+        "name": "Médico",
+        "icon": "stethoscope"
+      },
+      {
+        "name": "Farmacia",
+        "icon": "pill"
+      },
+      {
+        "name": "Optica",
+        "icon": "glasses"
+      },
+      {
+        "name": "Denstista",
+        "icon": "laugh"
+      }
+    ]
+  },
+  {
+    "name": "Suscripciones y servicios",
+    "icon": "cable",
+    "color": "#9B59B6",
+    "sub_categories": [
+      {
+        "name": "Suscripciones y servicios",
+        "icon": "cable"
+      },
+      {
+        "name": "Compras y servicios online",
+        "icon": "shoppingCart"
+      },
+      {
+        "name": "Celular",
+        "icon": "smartphone"
+      },
+      {
+        "name": "Entretenimiento digital",
+        "icon": "monitorPlay"
+      },
+      {
+        "name": "Internet, televisión, telefonía",
+        "icon": "wifi"
+      },
+
+      {
+        "name": "Software, aplicaciones, juegos",
+        "icon": "gamepad2"
+      },
+      {
+        "name": "Electricidad",
+        "icon": "plug2"
+      },
+      {
+        "name": "Agua",
+        "icon": "droplets"
+      },
+      {
+        "name": "Gas",
+        "icon": "flame"
+      }
+    ]
+  },
+  {
+    "name": "Gastos financieros",
+    "icon": "landmark",
+    "color": "#F44336",
+    "sub_categories": [
+      {
+        "name": "Gastos financieros",
+        "icon": "landmark"
+      },
+      {
+        "name": "Asignación familiar",
+        "icon": "scanFace"
+      },
+      {
+        "name": "Cargos, honorarios",
+        "icon": "banknote"
+      },
+      {
+        "name": "Asesores, abogados",
+        "icon": "scale"
+      },
+      {
+        "name": "Impuestos",
+        "icon": "badgePercent"
+      },
+
+      {
+        "name": "Multas, licencias",
+        "icon": "banknote"
+      },
+      {
+        "name": "Préstamos",
+        "icon": "wallet"
+      },
+      {
+        "name": "Seguro social, salud",
+        "icon": "fileHeart"
+      },
+      {
+        "name": "Tramites y registro civil",
+        "icon": "granttChartSquare"
+      },
+      {
+        "name": "Pensión familiar",
+        "icon": "contact2"
+      }
+    ]
+  },
+  {
+    "name": "Inversiones",
+    "icon": "activity",
+    "color": "#3498DB",
+    "sub_categories": [
+      {
+        "name": "Inversiones",
+        "icon": "activity"
+      },
+      {
+        "name": "Ahorros",
+        "icon": "piggyBank"
+      },
+      {
+        "name": "Bienes raíces",
+        "icon": "home"
+      },
+      {
+        "name": "Coleccionables",
+        "icon": "diamond"
+      },
+      {
+        "name": "Inversiones financieras",
+        "icon": "candlestickChart"
+      },
+      {
+        "name": "Vehículos, propiedades",
+        "icon": "warehouse"
+      }
+    ]
+  },
+  {
+    "name": "Ingresos",
+    "icon": "barChart",
+    "color": "#4AAE27",
+    "sub_categories": [
+      {
+        "name": "Ingresos",
+        "icon": "barChart",
+      },
+      {
+        "name": "Ventas",
+        "icon": "badgeDollarSign",
+      },
+      {
+        "name": "Salarios",
+        "icon": "briefcase",
+      },
+      {
+        "name": "Regalos",
+        "icon": "gift",
+      },
+      {
+        "name": "Devolución impuestos",
+        "icon": "building2",
+      },
+      {
+        "name": "Rembolsos",
+        "icon": "undo2",
+      },
+      {
+        "name": "Préstamos",
+        "icon": "arrowLeftRight",
+      },
+      {
+        "name": "Rentas",
+        "icon": "home",
+      },
+      {
+        "name": "Lotería, juegos de azar",
+        "icon": "dice5",
+      },
+      {
+        "name": "Pensiones",
+        "icon": "userSquare2",
+      },
+      {
+        "name": "Subvenciones y ayudas",
+        "icon": "helpingHand",
+      },
+      {
+        "name": "Rendimientos, inversiones",
+        "icon": "barChart3",
+      }
+    ]
+  }
+]

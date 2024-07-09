@@ -1,0 +1,45 @@
+from typing import Optional
+
+from pydantic import BaseModel
+
+
+# Shared properties
+class AccountBase(BaseModel):
+    name: Optional[str] = None
+    initial_balance: Optional[float] = None
+    current_balance : Optional[float] = None
+    total_expenses: Optional[float] = None
+    total_incomes: Optional[float] = None
+    total_transfers_in: Optional[float] = None
+    total_transfers_out: Optional[float] = None
+
+# Properties to receive on Account creation
+class AccountCreate(AccountBase):
+    name: str
+
+
+# Properties to receive on Account update
+class AccountUpdate(AccountBase):
+    pass
+
+
+# Properties shared by models stored in DB
+class AccountInDBBase(AccountBase):
+    id: int
+    owner_id: int
+
+    class Config:
+        orm_mode = True
+
+
+# Properties to return to client
+class Account(AccountInDBBase):
+    pass
+
+
+# Properties properties stored in DB
+class AccountInDB(AccountInDBBase):
+    pass
+
+class DeletionResponse(BaseModel):
+    message: str
