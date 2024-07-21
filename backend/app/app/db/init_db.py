@@ -24,7 +24,7 @@ async def init_db(db: AsyncSession) -> None:
             phone="88005553535",
             is_superuser=True,
             items=[],
-            country="ES-MX",
+            country="MXN",
             name="Superuser"
         )
         user = await crud.user.create(db, obj_in=user_in)  # noqa: F841

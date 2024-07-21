@@ -8,7 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from app.core.security import get_password_hash, verify_password
 from app.crud.base import CRUDBase
 from app.models.user import User
-from app.schemas.user import UserCreate, UserUpdate
+from app.schemas.user import UserCreate, UserCreateUuid, UserUpdate
 from app import crud, schemas
 from app.categories_and_sub import categories_and_sub
 
@@ -39,13 +39,34 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         result = await db.execute(select(User).filter(User.email == email))
         return result.scalars().first()
 
-    async def create(self, db: AsyncSession, *, obj_in: UserCreate) -> User:
+    async def get_by_uuid(self, db: AsyncSession, *, uuid: str) -> Optional[User]:
+        result = await db.execute(select(User).filter(User.uuid == uuid))
+        return result.scalars().first()
+
+    async def create(self, db: AsyncSession, *, obj_in: UserCreate | UserCreateUuid ) -> User:
+        if obj_in['email']:
+            db_obj = User(
+                email=obj_in.email,
+                hashed_password=get_password_hash(obj_in.password),
+                name=obj_in.name,
+                country=obj_in.country,
+                is_superuser=obj_in.is_superuser,
+                items=[]
+            )
+            db.add(db_obj)
+            await db.commit()
+            await db.refresh(db_obj)
+            await add_categories_to_db(db, db_obj.id)
+            return db_obj
+
+        #UUID auth
         db_obj = User(
-            email=obj_in.email,
-            hashed_password=get_password_hash(obj_in.password),
-            name=obj_in.name,
-            country=obj_in.country,
-            is_superuser=obj_in.is_superuser,
+            email=None,
+            hashed_password=None,
+            uuid=obj_in.uuid,
+            name=None,
+            country="MXN",
+            is_superuser=False,
             items=[]
         )
         db.add(db_obj)

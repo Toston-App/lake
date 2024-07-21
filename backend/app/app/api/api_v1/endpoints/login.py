@@ -20,27 +20,28 @@ from app.utils import (
 router = APIRouter()
 
 
-@router.post("/login/access-token", response_model=schemas.Token)
-async def login_access_token(
-        db: AsyncSession = Depends(deps.async_get_db), form_data: OAuth2PasswordRequestForm = Depends()
-) -> Any:
-    """
-    OAuth2 compatible token login, get an access token for future requests
-    """
-    user = await crud.user.authenticate(
-        db, email=form_data.username, password=form_data.password
-    )
-    if not user:
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
-    elif not crud.user.is_active(user):
-        raise HTTPException(status_code=400, detail="Inactive user")
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return {
-        "access_token": security.create_access_token(
-            jsonable_encoder(user), expires_delta=access_token_expires
-        ),
-        "token_type": "bearer",
-    }
+# TODO: When be able to use the private key and make login with email/password from the database, use this
+# @router.post("/login/access-token", response_model=schemas.Token)
+# async def login_access_token(
+#         db: AsyncSession = Depends(deps.async_get_db), form_data: OAuth2PasswordRequestForm = Depends()
+# ) -> Any:
+#     """
+#     OAuth2 compatible token login, get an access token for future requests
+#     """
+#     user = await crud.user.authenticate(
+#         db, email=form_data.username, password=form_data.password
+#     )
+#     if not user:
+#         raise HTTPException(status_code=400, detail="Incorrect email or password")
+#     elif not crud.user.is_active(user):
+#         raise HTTPException(status_code=400, detail="Inactive user")
+#     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+#     return {
+#         "access_token": security.create_access_token(
+#             jsonable_encoder(user), expires_delta=access_token_expires
+#         ),
+#         "token_type": "bearer",
+#     }
 
 
 @router.post("/login/test-token", response_model=schemas.User)

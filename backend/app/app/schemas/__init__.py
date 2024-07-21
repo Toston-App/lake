@@ -8,5 +8,5 @@ from .expense import Expense, ExpenseCreate, ExpenseInDB, ExpenseUpdate, Deletio
 from .place import Place, PlaceCreate, PlaceInDB, PlaceUpdate, DeletionResponse
 from .item import Item, ItemCreate, ItemInDB, ItemUpdate, DeletionResponse
 from .msg import Msg
-from .token import Token, TokenPayload
-from .user import User, UserCreate, UserInDB, UserUpdate
+from .token import Token, TokenPayload, TokenPayloadUuid
+from .user import User, UserCreate, UserCreateUuid, UserInDB, UserUpdate

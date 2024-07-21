@@ -1,3 +1,4 @@
+import base64
 from datetime import datetime, timedelta
 from typing import Any, Union
 
@@ -9,8 +10,10 @@ from app.core.config import settings
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-ALGORITHM = "HS256"
-
+ALGORITHM = "RS256" # Original algorithm was `HS256`
+PUBLIC_KEY = base64.b64decode(settings.SECRET_KEY).decode("utf-8")
+# TODO: I don't have the private key because I'm using Clerk auth and it olny provides the public key
+PRIVATE_KEY = "secret"
 
 def create_access_token(
     subject: Union[str, Any], expires_delta: timedelta = None
@@ -21,14 +24,18 @@ def create_access_token(
         expire = datetime.utcnow() + timedelta(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
-    to_encode = {"exp": expire, "user": {
+    to_encode = {
+        "exp": expire, "user": {
         "name": subject["name"],
         "email": subject["email"],
         "country": subject["country"],
         "id": subject["id"],
     }}
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    # TODO: When having the private key, use this line
+    # encoded_jwt = jwt.encode(to_encode, PRIVATE_KEY, algorithm=ALGORITHM)
+    # return encoded_jwt
+
+    return jwt.encode(to_encode, "foo", algorithm="HS256")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

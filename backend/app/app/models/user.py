@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 class User(Base):
     id: int = Column(Integer, primary_key=True, index=True)
     name: str = Column(String, index=True, nullable=False)
-    email: str = Column(String, unique=True, index=True, nullable=False)
+    email: str = Column(String, unique=True, index=True, nullable=True)
+    uuid = Column(String, unique=True, index=True, nullable=False)
+    # Country code in Currency format - https://simplelocalize.io/data/locales/
     country: str = Column(String, index=True, nullable=False)
     hashed_password: str = Column(String, nullable=False)
     is_active: bool = Column(Boolean(), default=True)
