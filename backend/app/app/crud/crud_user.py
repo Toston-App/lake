@@ -44,7 +44,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         return result.scalars().first()
 
     async def create(self, db: AsyncSession, *, obj_in: UserCreate | UserCreateUuid ) -> User:
-        if obj_in['email']:
+        if isinstance(obj_in, UserCreate):
             db_obj = User(
                 email=obj_in.email,
                 hashed_password=get_password_hash(obj_in.password),
