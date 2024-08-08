@@ -18,12 +18,12 @@ if TYPE_CHECKING:
 
 class User(Base):
     id: int = Column(Integer, primary_key=True, index=True)
-    name: str = Column(String, index=True, nullable=False)
+    name: str = Column(String, index=True, nullable=True)
     email: str = Column(String, unique=True, index=True, nullable=True)
-    uuid = Column(String, unique=True, index=True, nullable=False)
+    uuid:str = Column(String, unique=True, index=True, nullable=True)
     # Country code in Currency format - https://simplelocalize.io/data/locales/
     country: str = Column(String, index=True, nullable=False)
-    hashed_password: str = Column(String, nullable=False)
+    hashed_password: str = Column(String, nullable=True)
     is_active: bool = Column(Boolean(), default=True)
     is_superuser: bool = Column(Boolean(), default=False)
     balance_total: float = Column(Float, default=0.0)

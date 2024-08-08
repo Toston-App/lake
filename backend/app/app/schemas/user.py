@@ -4,6 +4,7 @@ from pydantic import BaseModel, EmailStr
 
 # Shared properties
 class UserBase(BaseModel):
+    uuid: Optional[str] = None
     email: Optional[EmailStr] = None
     is_active: Optional[bool] = True
     is_superuser: bool = False
