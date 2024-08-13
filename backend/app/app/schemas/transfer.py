@@ -8,7 +8,7 @@ from pydantic import BaseModel, validator, root_validator
 class TransferBase(BaseModel):
     description: Optional[str] = None
     amount : Optional[float] = None
-    date: Optional[date] = None
+    date: Optional[date]
     from_acc: Optional[int] = None
     to_acc: Optional[int] = None
 
