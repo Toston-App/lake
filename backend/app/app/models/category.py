@@ -18,6 +18,7 @@ class Category(Base):
     color: str = Column(String, index=True, nullable=False)
     icon: str = Column(String, index=True)
     is_default: bool = Column(Boolean, index=True, nullable=False, default=False)
+    is_income: bool = Column(Boolean, index=True, nullable=False, default=False)
     owner_id = Column(Integer, ForeignKey("user.id"))
     owner: "User" = relationship("User", back_populates="categories")
     subcategories: List["Subcategory"] = relationship("Subcategory", backref="parent_category", lazy="selectin")

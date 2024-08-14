@@ -19,7 +19,8 @@ async def add_categories_to_db(db, owner_id):
             color=category_data["color"],
             icon=category_data["icon"],
             owner_id=owner_id,
-            is_default=True
+            is_default=True,
+            is_income=True if category_data["name"] == "Ingreso" else False
         )
 
         category = await crud.category.create_with_owner(db=db, obj_in=category_data_in, owner_id=owner_id)
