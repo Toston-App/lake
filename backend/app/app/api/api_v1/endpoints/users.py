@@ -89,14 +89,16 @@ async def read_user_me(
     return current_user
 
 
-@router.post("/open", response_model=schemas.Token)
+@router.post("/open", response_model=schemas.Msg)
 async def create_user_open(
         *,
         db: AsyncSession = Depends(deps.async_get_db),
-        password: str = Body(...),
-        email: EmailStr = Body(...),
-        name: str = Body(...),
-        country: str = Body(...),
+        uuid: str = Body(...),
+        use_email: bool = Body(False),
+        email: EmailStr = Body(None),
+        password: str = Body(None),
+        name: str = Body(None),
+        country: str = Body(None),
 ) -> Any:
     """
     Create new user without the need to be logged in.
@@ -106,22 +108,46 @@ async def create_user_open(
             status_code=403,
             detail="Open user registration is forbidden on this server",
         )
-    user = await crud.user.get_by_email(db, email=email)
+
+    if use_email:
+        if not email or not password or not name or not country:
+            raise HTTPException(
+                status_code=400,
+                detail="Email, password, name and country are required",
+            )
+
+        user = await crud.user.get_by_email(db, email=email)
+        if user:
+            raise HTTPException(
+                status_code=400,
+                detail="The user with this email already exists in the system",
+            )
+
+        user_in = schemas.UserCreate(password=password, email=email, name=name, country=country)
+        user = await crud.user.create(db, obj_in=user_in)
+
+        # TODO: When be able to create tokens with the private key, return the token here or in cookies as `__session`
+        # access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        # return {
+        #     "access_token": security.create_access_token(
+        #         jsonable_encoder(user), expires_delta=access_token_expires
+        #     ),
+        #     "token_type": "bearer",
+        # }
+
+        return {"msg": "User created successfully"}
+
+    # UUID auth
+    user = await crud.user.get_by_uuid(db, uuid=uuid)
     if user:
         raise HTTPException(
             status_code=400,
             detail="The user with this username already exists in the system",
         )
-    user_in = schemas.UserCreate(password=password, email=email, name=name, country=country)
+    user_in = schemas.UserCreateUuid(uuid=uuid)
     user = await crud.user.create(db, obj_in=user_in)
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    return {
-        "access_token": security.create_access_token(
-            jsonable_encoder(user), expires_delta=access_token_expires
-        ),
-        "token_type": "bearer",
-    }
+    return {"msg": "User created successfully"}
 
 
 @router.get("/{user_id}", response_model=schemas.User)

@@ -4,10 +4,12 @@ from pydantic import BaseModel, EmailStr
 
 # Shared properties
 class UserBase(BaseModel):
+    uuid: Optional[str] = None
     email: Optional[EmailStr] = None
     is_active: Optional[bool] = True
     is_superuser: bool = False
     name: Optional[str] = None
+    # Country code in Currency format - https://simplelocalize.io/data/locales/
     country: Optional[str] = None
     balance_total: Optional[float] = 0.0
     balance_income: Optional[float] = 0.0
@@ -18,6 +20,8 @@ class UserCreate(UserBase):
     email: EmailStr
     password: str
 
+class UserCreateUuid(BaseModel):
+    uuid: str
 
 # Properties to receive via API on update
 class UserUpdate(UserBase):

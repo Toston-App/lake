@@ -152,7 +152,24 @@ async def get_all_data(
     incomes_actual, incomes_past, expenses_actual, expenses_past, accounts, places, categories = results
 
     if incomes_actual == [] and expenses_actual == []:
-        raise HTTPException(status_code=404, detail="No data found")
+        return  {
+            "currency": current_user.country,
+            "language": current_user.country,
+            "accounts": jsonable_encoder(accounts),
+            "balance": {
+                "total": round(current_user.balance_total, 2),
+                "income": round(current_user.balance_income, 2),
+                "outcome": round(current_user.balance_outcome, 2),
+            },
+            "incomes": [],
+            "expenses": [],
+            "charts": {
+                "transactions": [],
+                "categories": [],
+                "accounts_growth": [],
+                "accounts": [],
+            },
+        }
 
     dfs = get_df(expenses=jsonable_encoder(expenses_actual), incomes=jsonable_encoder(incomes_actual), accounts=jsonable_encoder(accounts), places=jsonable_encoder(places), categories=jsonable_encoder(categories))
     # print("🚀 ~ file: data.py:158 ~ dfs:", dfs)
@@ -165,26 +182,24 @@ async def get_all_data(
     accounts_growth = account_diff(past=past_accounts_total, actual=actual_accounts_total)
     account_chart = account_charts(incomes_df=dfs['incomes'], expenses_df=dfs['expenses'])
 
-    res =  {
-        "message": "ok",
-        "data": {
-            "currency": current_user.country,
-            "language": current_user.country,
-            "accounts": jsonable_encoder(accounts),
-            "balance": {
-                "total": round(current_user.balance_total, 2),
-                "income": round(current_user.balance_income, 2),
-                "outcome": round(current_user.balance_outcome, 2),
-            },
-            "charts": {
-                "transactions": transaction_chart,
-                "categories": categories_chart,
-                "accounts_growth": accounts_growth,
-                "accounts": account_chart,
-            },
+    return {
+        "currency": current_user.country,
+        "language": current_user.country,
+        "accounts": jsonable_encoder(accounts),
+        "balance": {
+            "total": round(current_user.balance_total, 2),
+            "income": round(current_user.balance_income, 2),
+            "outcome": round(current_user.balance_outcome, 2),
+        },
+        "incomes": jsonable_encoder(incomes_actual),
+        "expenses": jsonable_encoder(expenses_actual),
+        "charts": {
+            "transactions": transaction_chart,
+            "categories": categories_chart,
+            "accounts_growth": accounts_growth,
+            "accounts": account_chart,
         }
     }
-    return res
 
 
 # @router.post("/", response_model=schemas.Expense)
