@@ -17,18 +17,19 @@ async def init_db(db: AsyncSession) -> None:
     # Base.metadata.create_all(bind=engine)
 
     user = await crud.user.get_by_email(db, email=settings.FIRST_SUPERUSER)
-    if not user:
-        user_in = schemas.UserCreate(
-            email=settings.FIRST_SUPERUSER,
-            password=settings.FIRST_SUPERUSER_PASSWORD,
-            phone="88005553535",
-            is_superuser=True,
-            items=[],
-            country="MXN",
-            name="Superuser"
-        )
-        user = await crud.user.create(db, obj_in=user_in)  # noqa: F841
-        user = await crud.user.update(db, db_obj=user, obj_in={"is_active": True})  # noqa: F841
+    # TODO: this is causing an error because some jwt issues due to clerk auth. Thats why its commented.
+    # if not user:
+    #     user_in = schemas.UserCreate(
+    #         email=settings.FIRST_SUPERUSER,
+    #         password=settings.FIRST_SUPERUSER_PASSWORD,
+    #         phone="88005553535",
+    #         is_superuser=True,
+    #         items=[],
+    #         country="MXN",
+    #         name="Superuser"
+    #     )
+    #     user = await crud.user.create(db, obj_in=user_in)  # noqa: F841
+    #     user = await crud.user.update(db, db_obj=user, obj_in={"is_active": True})  # noqa: F841
 
-    if settings.SEED_DATABASE:
-        await db_seeder(db=db, owner_id=user.id)
+    # if settings.SEED_DATABASE:
+    #     await db_seeder(db=db, owner_id=user.id)
