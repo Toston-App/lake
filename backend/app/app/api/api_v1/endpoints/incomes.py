@@ -179,6 +179,11 @@ async def update_income(
         if not subcategory:
             income_in.subcategory_id = income.subcategory_id
 
+    if income_in.date:
+        try:
+            income_in.date = datetime.strptime(income_in.date, "%Y-%m-%d").date()
+        except:
+            income.date = income.date
 
     income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
 

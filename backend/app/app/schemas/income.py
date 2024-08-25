@@ -37,7 +37,7 @@ class IncomeCreate(IncomeBase):
 
 # Properties to receive on Income update
 class IncomeUpdate(IncomeBase):
-    pass
+    date: Optional[str] = None
 
 
 # Properties shared by models stored in DB
