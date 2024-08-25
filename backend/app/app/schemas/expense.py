@@ -38,7 +38,7 @@ class ExpenseCreate(ExpenseBase):
 
 # Properties to receive on Expense update
 class ExpenseUpdate(ExpenseBase):
-    pass
+    date: Optional[str] = None
 
 
 # Properties shared by models stored in DB

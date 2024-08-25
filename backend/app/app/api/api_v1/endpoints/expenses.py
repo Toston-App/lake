@@ -195,6 +195,12 @@ async def update_expense(
         if not subcategory:
             expense_in.subcategory_id = expense.subcategory_id
 
+    if expense_in.date:
+        try:
+            expense_in.date = datetime.strptime(expense_in.date, "%Y-%m-%d").date()
+        except:
+            expense_in.date = expense.date
+
     expense = await crud.expense.update(db=db, db_obj=expense, obj_in=expense_in)
 
     if expense_in.account_id:
