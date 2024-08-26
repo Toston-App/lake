@@ -172,13 +172,9 @@ async def update_expense(
     expense = await read_expense(db=db, id=id, current_user=current_user)
 
     # TODO: Check there are changes
-
-    # Update the account total expenses
-    if expense_in.account_id and expense.account_id:
-        amount = expense_in.amount or expense.amount
-
-        # amount is negative because it's an expense, and we want to subtract instead of add
-        await crud.account.update_by_id_and_field(db=db, id=expense.account_id, column='total_expenses', amount=-amount)
+    # Store original values for later comparison
+    original_amount = expense.amount
+    original_account_id = expense.account_id
 
     if expense_in.place_id:
         place = await crud.place.get(db=db, id=expense_in.place_id)
@@ -201,15 +197,47 @@ async def update_expense(
         except:
             expense_in.date = expense.date
 
-    expense = await crud.expense.update(db=db, db_obj=expense, obj_in=expense_in)
-
     if expense_in.account_id:
-        await crud.account.update_by_id_and_field(db=db, id=expense_in.account_id, column='total_expenses', amount=expense.amount)
+        account = await crud.account.get(db=db, id=expense_in.account_id)
+        if not account:
+            expense_in.account_id = expense.account_id
 
-    # Update the outcomes from the user's balance
-    await crud.user.update_balance(db=db, user_id=current_user.id, is_Expense=True, amount=-expense.amount)
 
-    return expense
+    # Update the expense in the database
+    updated_expense = await crud.expense.update(db=db, db_obj=expense, obj_in=expense_in)
+
+    print(updated_expense, original_amount, original_account_id)
+
+    if updated_expense.amount != original_amount or updated_expense.account_id != original_account_id:
+        # Update original account
+        if original_account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                id=original_account_id,
+                column='total_expenses',
+                amount=-original_amount
+            )
+
+        # Update new account
+        if updated_expense.account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                id=updated_expense.account_id,
+                column='total_expenses',
+                amount=updated_expense.amount
+            )
+
+        # Update user's global balance
+        if updated_expense.amount != original_amount:
+            amount_difference = updated_expense.amount - original_amount
+            await crud.user.update_balance(
+                db=db,
+                user_id=current_user.id,
+                is_Expense=True,
+                amount=amount_difference
+            )
+
+    return updated_expense
 
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)

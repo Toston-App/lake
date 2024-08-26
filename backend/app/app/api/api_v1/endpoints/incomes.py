@@ -162,12 +162,9 @@ async def update_income(
     income = await read_income(db=db, id=id, current_user=current_user)
 
     # TODO: Check there are changes
-
-    # Update the account total incomes
-    if income_in.account_id and income.account_id:
-        amount = income_in.amount or income.amount
-
-        await crud.account.update_by_id_and_field(db=db, id=income.account_id, column='total_incomes', amount=-amount)
+    # Store original values for later comparison
+    original_amount = income.amount
+    original_account_id = income.account_id
 
     if income_in.place_id:
         place = await crud.place.get(db=db, id=income_in.place_id)
@@ -185,15 +182,44 @@ async def update_income(
         except:
             income.date = income.date
 
-    income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
-
     if income_in.account_id:
-        await crud.account.update_by_id_and_field(db=db, id=income_in.account_id, column='total_incomes', amount=income.amount)
+        account = await crud.account.get(db=db, id=income_in.account_id)
+        if not account:
+            income_in.account_id = income.account_id
 
-    # Update the incomes from the user's balance
-    await crud.user.update_balance(db=db, user_id=current_user.id, is_Expense=False, amount=-income.amount)
 
-    return income
+    updated_income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
+
+    if updated_income.amount != original_amount or updated_income.account_id != original_account_id:
+        # Update original account
+        if original_account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                id=original_account_id,
+                column='total_incomes',
+                amount=-original_amount
+            )
+
+        # Update new account
+        if updated_income.account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                id=updated_income.account_id,
+                column='total_incomes',
+                amount=updated_income.amount
+            )
+
+        # Update user's global balance
+        if updated_income.amount != original_amount:
+            amount_difference = updated_income.amount - original_amount
+            await crud.user.update_balance(
+                db=db,
+                user_id=current_user.id,
+                is_Expense=False,
+                amount=amount_difference
+            )
+
+    return updated_income
 
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
