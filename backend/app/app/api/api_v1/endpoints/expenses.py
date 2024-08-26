@@ -206,8 +206,6 @@ async def update_expense(
     # Update the expense in the database
     updated_expense = await crud.expense.update(db=db, db_obj=expense, obj_in=expense_in)
 
-    print(updated_expense, original_amount, original_account_id)
-
     if updated_expense.amount != original_amount or updated_expense.account_id != original_account_id:
         # Update original account
         if original_account_id:
