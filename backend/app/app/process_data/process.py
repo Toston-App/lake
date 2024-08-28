@@ -15,12 +15,8 @@ def get_percentage(past, actual):
     return round(((actual - past) / abs(past)) * 100, 2)
 
 def get_df(expenses, incomes, accounts, places, categories):
-    def get_account_name(row):
-        account_id = row['account_id']
-        if pd.notna(account_id) and account_id in accounts_df.index:
-            return accounts_df.loc[account_id, 'name']
-
-        return None
+    def get_account_id(row):
+        return row['account_id']
 
     def get_category_name(row):
         category_id = row['category_id']
@@ -71,7 +67,7 @@ def get_df(expenses, incomes, accounts, places, categories):
         expenses_df['amount'] = -expenses_df['amount']
         expenses_df.set_index('id', inplace=True)
 
-        expenses_df['account'] = expenses_df.apply(get_account_name, axis=1)
+        expenses_df['account'] = expenses_df.apply(get_account_id, axis=1)
         expenses_df['category'] = expenses_df.apply(get_category_name, axis=1)
         expenses_df['place'] = expenses_df.apply(get_place_name, axis=1)
         expenses_df['subcategory'] = expenses_df.apply(get_subcategory_name, axis=1)
@@ -83,7 +79,7 @@ def get_df(expenses, incomes, accounts, places, categories):
         incomes_df['type'] = 'income'
         incomes_df.set_index('id', inplace=True)
 
-        incomes_df['account'] = incomes_df.apply(get_account_name, axis=1)
+        incomes_df['account'] = incomes_df.apply(get_account_id, axis=1)
         incomes_df['place'] = incomes_df.apply(get_place_name, axis=1)
         # TODO: add category to incomes database with id that corresponds to Ingresos
         incomes_df['subcategory'] = incomes_df.apply(get_subcategory_name, axis=1)
