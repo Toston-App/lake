@@ -2,8 +2,9 @@ import pandas as pd
 import numpy as np
 import calendar
 from app.api.deps import DateFilterType
-from datetime import datetime
+from collections import defaultdict
 from .utils import get_month_weeks, get_week_range, return_base
+
 
 def get_percentage(past, actual):
     if past == actual or actual == 0:
@@ -283,28 +284,24 @@ def account_charts(incomes_df, expenses_df):
     if incomes_df.empty and expenses_df.empty:
         return {}
 
-    if incomes_df.empty:
-        df = expenses_df.groupby(['account', 'date'])['amount'].sum().to_dict()
-    elif expenses_df.empty:
-        df = incomes_df.groupby(['account', 'date'])['amount'].sum().to_dict()
-    else:
-        combined_df = pd.concat([expenses_df, incomes_df], sort=False)
-        df = combined_df.groupby(['account', 'date'])['amount'].sum().to_dict()
+    # Combine incomes and expenses into a single DataFrame
+    transactions = pd.concat([incomes_df, expenses_df])
 
-    result = {}
+    # Sort the transactions by date
+    transactions = transactions.sort_values('date')
 
-    for account, value in df.items():
-        if account[0] not in result:
-            result[account[0]] = {
-                'xAxis': {
-                    'data': []
-                },
-                'series': {
-                    'data': []
-                }
-            }
+    # Create a dictionary to store aggregated balances for each account
+    account_data = defaultdict(lambda: {"xAxis": {"data": []}, "series": {"data": []}})
 
-        result[account[0]]['xAxis']['data'].append(datetime.strptime(account[1],'%Y-%m-%d').date())
-        result[account[0]]['series']['data'].append(value)
+    # Aggregate transactions by date for each account
+    for account_id, account_transactions in transactions.groupby('account'):
+        if account_id is not None:  # Ensure we're not processing transactions with no account
+            daily_balance = 0
+            for date, day_transactions in account_transactions.groupby('date'):
+                daily_balance += day_transactions['amount'].sum()
 
-    return result
+                account_data[account_id]["xAxis"]["data"].append(date)
+                account_data[account_id]["series"]["data"].append(daily_balance)
+
+    # Convert the defaultdict to a regular dict for JSON serialization
+    return {str(k): v for k, v in account_data.items()}
