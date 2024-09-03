@@ -87,9 +87,9 @@ async def get_all_data(
         if type(date) == str:
             raise HTTPException(status_code=400, detail="Date must be a date in the format YYYY-MM-DD")
 
-        end_date = date + timedelta(days=7)
+        end_date = date + timedelta(days=6)
 
-        results = await all_querys(db, date, date, "days", 7, owner_id=current_user.id)
+        results = await all_querys(db, date, end_date, "days", 6, owner_id=current_user.id)
 
 
     if date_filter_type == DateFilterType.month:
