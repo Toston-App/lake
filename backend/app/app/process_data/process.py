@@ -139,7 +139,7 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         quarter_incomes = all_months.merge(combined_df[combined_df['type'] == 'income'].groupby('month', as_index=False)['amount'].sum(), on='month', how='left')
         quarter_incomes = quarter_incomes[quarter_incomes['quarter'] == quarter_incomes.iloc[0]['quarter']].fillna(0)
 
-        quarter_expenses['amount'].abs()
+        quarter_expenses['amount'] = quarter_expenses['amount'].abs()
         all_months.loc[all_months['quarter'] == combined_df.iloc[0]['quarter']] = all_months.loc[all_months['quarter'] == combined_df.iloc[0]['quarter']].fillna(0)
 
         filter_quarter = quarter_total[~pd.isna(quarter_total['amount'])]
@@ -170,12 +170,12 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         month_total = month_df.merge(combined_df.groupby('week', as_index=False)['amount'].sum(), on='week', how='left').fillna(0)
         month_incomes = month_df.merge(combined_df[combined_df['type'] == 'income'].groupby('week', as_index=False)['amount'].sum(), on='week', how='left').fillna(0)
         month_expenses = month_df.merge(combined_df[combined_df['type'] == 'expense'].groupby('week', as_index=False)['amount'].sum(), on='week', how='left').fillna(0)
-        month_expenses['amount'].abs()
+        month_expenses['amount'] = month_expenses['amount'].abs()
 
         return return_base(xAxis=month_total['range'].tolist(),
                            total=month_total['amount'].tolist(),
-                           expenses=month_incomes['amount'].tolist(),
-                           incomes=month_expenses['amount'].tolist())
+                           expenses=month_expenses['amount'].tolist(),
+                           incomes=month_incomes['amount'].tolist())
 
 
     if date_filter_type == DateFilterType.week:
@@ -185,12 +185,12 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         week_incomes = all_days.merge(combined_df[combined_df['type'] == 'income'].groupby('day_of_week', as_index=False)['amount'].sum(), on='day_of_week', how='left').fillna(0)
         week_incomes['amount'].abs()
         week_expenses = all_days.merge(combined_df[combined_df['type'] == 'expense'].groupby('day_of_week', as_index=False)['amount'].sum(), on='day_of_week', how='left').fillna(0)
-        week_expenses['amount'].abs()
+        week_expenses['amount'] = week_expenses['amount'].abs()
 
         return return_base(xAxis=week_total['day_of_week'].tolist(),
                            total=week_total['amount'].tolist(),
-                           expenses=week_incomes['amount'].tolist(),
-                           incomes=week_expenses['amount'].tolist())
+                           expenses=week_expenses['amount'].tolist(),
+                           incomes=week_incomes['amount'].tolist())
 
 
     if date_filter_type == DateFilterType.date or date_filter_type == DateFilterType.range:
@@ -207,8 +207,8 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
 
             return return_base(xAxis=date_total['date'].tolist(),
                             total=date_total['amount'].tolist(),
-                            expenses=date_expenses['amount'].tolist(),
-                            incomes=date_incomes['amount'].tolist())
+                            expenses=date_incomes['amount'].tolist(),
+                            incomes=date_expenses['amount'].tolist())
 
 
 def categories_charts(incomes, expenses):
