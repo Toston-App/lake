@@ -1,4 +1,5 @@
 from datetime import timedelta
+from fastapi.responses import JSONResponse
 
 from typing import Any, List
 
@@ -126,16 +127,22 @@ async def create_user_open(
         user_in = schemas.UserCreate(password=password, email=email, name=name, country=country)
         user = await crud.user.create(db, obj_in=user_in)
 
-        # TODO: When be able to create tokens with the private key, return the token here or in cookies as `__session`
-        # access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        # return {
-        #     "access_token": security.create_access_token(
-        #         jsonable_encoder(user), expires_delta=access_token_expires
-        #     ),
-        #     "token_type": "bearer",
-        # }
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = security.create_access_token(
+            jsonable_encoder(user), expires_delta=access_token_expires
+        )
 
-        return {"msg": "User created successfully"}
+        response = JSONResponse(content={"msg": "User created successfully"})
+        response.set_cookie(
+            key="__session",
+            value=access_token,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        )
+        return response
+
 
     # UUID auth
     user = await crud.user.get_by_uuid(db, uuid=uuid)

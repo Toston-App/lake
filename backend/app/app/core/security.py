@@ -31,9 +31,6 @@ def create_access_token(
         "country": subject["country"],
         "id": subject["id"],
     }}
-    # TODO: When having the private key, use this line
-    # encoded_jwt = jwt.encode(to_encode, PRIVATE_KEY, algorithm=ALGORITHM)
-    # return encoded_jwt
 
     return jwt.encode(to_encode, "foo", algorithm="HS256")
 
