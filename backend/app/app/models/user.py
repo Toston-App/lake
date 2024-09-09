@@ -1,7 +1,8 @@
 from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Boolean, Column, Integer, String, Float
+from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
 from app.db.base_class import Base
 
@@ -29,6 +30,8 @@ class User(Base):
     balance_total: float = Column(Float, default=0.0)
     balance_income: float = Column(Float, default=0.0)
     balance_outcome: float = Column(Float, default=0.0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     items: List["Item"] = relationship("Item", back_populates="owner")
     places: List["Place"] = relationship("Place", back_populates="owner")
     expenses: List["Expense"] = relationship("Expense", back_populates="owner")

@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 from fastapi.responses import JSONResponse
 
 from typing import Any, List
@@ -75,6 +75,8 @@ async def update_user_me(
         user_in.name = name
     if email is not None:
         user_in.email = email
+
+    user_in.updated_at = datetime.now(timezone.utc)
     user = await crud.user.update(db, db_obj=current_user, obj_in=user_in)
     return user
 
