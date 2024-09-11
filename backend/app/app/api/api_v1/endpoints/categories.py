@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -77,6 +78,7 @@ async def update_category(
 
     # TODO: Check there are changes
 
+    category_in.updated_at = datetime.now(timezone.utc)
     category = await crud.category.update(db=db, db_obj=category, obj_in=category_in)
 
     return category

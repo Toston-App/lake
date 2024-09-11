@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -79,6 +80,7 @@ async def update_subcategory(
     if subcategory.is_default:
             return schemas.DeletionResponse(message=f"This item can not being deleted")
 
+    category_in.updated_at = datetime.now(timezone.utc)
     subcategory = await crud.subcategory.update(db=db, db_obj=subcategory, obj_in=category_in)
 
     return subcategory

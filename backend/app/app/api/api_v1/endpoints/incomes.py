@@ -1,5 +1,6 @@
 import calendar
-from datetime import date as Date, timedelta, datetime
+
+from datetime import date as Date, timedelta, datetime, timezone
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -188,6 +189,7 @@ async def update_income(
             income_in.account_id = income.account_id
 
 
+    income_in.updated_at = datetime.now(timezone.utc)
     updated_income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
 
     if updated_income.amount != original_amount or updated_income.account_id != original_account_id:

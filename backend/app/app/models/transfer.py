@@ -1,8 +1,9 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date
+from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
 
 from app.db.base_class import Base
@@ -23,4 +24,6 @@ class Transfer(Base):
     account_to: "Account" = relationship("Account", foreign_keys=[to_acc], back_populates="transfers_in")
     owner_id: int = Column(Integer, ForeignKey("user.id"))
     owner: "User" = relationship("User", back_populates="transfers")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

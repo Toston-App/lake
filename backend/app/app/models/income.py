@@ -1,8 +1,10 @@
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date
+from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
+
 
 
 from app.db.base_class import Base
@@ -27,3 +29,5 @@ class Income(Base):
     subcategory: "Subcategory" = relationship("Subcategory", back_populates="incomes")
     place_id: int = Column(Integer, ForeignKey("place.id"))
     place: "Place" = relationship("Place", back_populates="incomes")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

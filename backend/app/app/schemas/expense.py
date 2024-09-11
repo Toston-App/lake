@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, validator, root_validator
@@ -60,7 +60,8 @@ class Expense(ExpenseInDBBase):
 
 # Properties properties stored in DB
 class ExpenseInDB(ExpenseInDBBase):
-    pass
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class DeletionResponse(BaseModel):
     message: str

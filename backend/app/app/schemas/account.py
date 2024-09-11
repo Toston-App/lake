@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
@@ -39,7 +40,8 @@ class Account(AccountInDBBase):
 
 # Properties properties stored in DB
 class AccountInDB(AccountInDBBase):
-    pass
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class DeletionResponse(BaseModel):
     message: str

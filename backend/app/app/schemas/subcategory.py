@@ -1,4 +1,4 @@
-
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, validator
@@ -44,7 +44,8 @@ class Subcategory(SubcategoryInDBBase):
 
 # Properties properties stored in DB
 class SubcategoryInDB(SubcategoryInDBBase):
-    pass
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class DeletionResponse(BaseModel):
     message: str

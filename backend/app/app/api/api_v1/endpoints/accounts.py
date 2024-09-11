@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, List
 
 from fastapi.encoders import jsonable_encoder
@@ -87,6 +88,7 @@ async def update_account(
         account_in.initial_balance = initial_balance
         account_in.current_balance += initial_balance - account.initial_balance
 
+    account_in.updated_at = datetime.now(timezone.utc)
     account = await crud.account.update(db=db, db_obj=account, obj_in=account_in)
     return account
 

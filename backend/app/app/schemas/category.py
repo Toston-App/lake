@@ -1,5 +1,5 @@
 import re
-
+from datetime import datetime
 from typing import Optional, List
 
 from pydantic import BaseModel, validator
@@ -57,7 +57,8 @@ class Category(CategoryInDBBase):
 
 # Properties properties stored in DB
 class CategoryInDB(CategoryInDBBase):
-    pass
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 class DeletionResponse(BaseModel):
     message: str

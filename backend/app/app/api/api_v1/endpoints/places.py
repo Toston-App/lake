@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -72,6 +73,8 @@ async def update_place(
     Update an place.
     """
     place = await read_place(db=db, id=id, current_user=current_user)
+
+    place_in.updated_at = datetime.now(timezone.utc)
     place = await crud.place.update(db=db, db_obj=place, obj_in=place_in)
     return place
 

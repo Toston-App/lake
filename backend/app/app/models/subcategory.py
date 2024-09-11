@@ -1,7 +1,8 @@
 from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Boolean
+from sqlalchemy import Column, ForeignKey, Integer, String, Boolean, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
 from app.db.base_class import Base
 
@@ -22,3 +23,5 @@ class Subcategory(Base):
     category_id: int = Column(Integer, ForeignKey("category.id"))
     expenses: List["Expense"] = relationship("Expense", back_populates="subcategory")
     incomes: List["Income"] = relationship("Income", back_populates="subcategory")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

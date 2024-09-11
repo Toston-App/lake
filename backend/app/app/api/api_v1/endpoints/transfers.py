@@ -1,5 +1,5 @@
 import calendar
-from datetime import date as Date, timedelta, datetime
+from datetime import date as Date, timedelta, datetime, timezone
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -181,6 +181,7 @@ async def update_transfer(
         await crud.account.update_by_id_and_field(db=db, id=transfer_in.to_acc, column='total_transfers_in', amount=amount)
 
 
+    transfer_in.updated_at = datetime.now(timezone.utc)
     transfer = await crud.transfer.update(db=db, db_obj=transfer, obj_in=transfer_in)
 
     return transfer

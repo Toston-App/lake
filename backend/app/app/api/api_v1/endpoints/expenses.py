@@ -1,5 +1,5 @@
 import calendar
-from datetime import date as Date, timedelta, datetime
+from datetime import date as Date, timedelta, datetime, timezone
 from enum import Enum
 from typing import Any, List
 
@@ -202,6 +202,8 @@ async def update_expense(
         if not account:
             expense_in.account_id = expense.account_id
 
+
+    expense_in.updated_at = datetime.now(timezone.utc)
 
     # Update the expense in the database
     updated_expense = await crud.expense.update(db=db, db_obj=expense, obj_in=expense_in)
