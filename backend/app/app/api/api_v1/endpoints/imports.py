@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from fuzzywuzzy import fuzz
 
-from app import crud, schemas
+from app import crud, models, schemas
 from app.api import deps
 
 router = APIRouter()
@@ -63,7 +63,7 @@ async def bluecoins(
         *,
         db: AsyncSession = Depends(deps.async_get_db),
         csv_file: UploadFile = File(...),
-        # current_user: models.User = Depends(deps.get_current_active_user),
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Import from bluecoins.
@@ -81,7 +81,7 @@ async def bluecoins(
     # Create all needed accounts
     try:
         accounts = dataframe['Account'].unique().tolist()
-        accounts_with_id = await create_accounts(db=db, owner_id=3, accounts=accounts)
+        accounts_with_id = await create_accounts(db=db, owner_id=current_user.id, accounts=accounts)
     except Exception as e:
         # TODO: Log error to sentry
         print("🚀 ~ e", e)
@@ -90,7 +90,7 @@ async def bluecoins(
     # Extrapolate categories
     try:
         categories = dataframe['Category'].unique().tolist()
-        user_categories = jsonable_encoder(await crud.category.get_multi_by_owner(db=db, owner_id=3))
+        user_categories = jsonable_encoder(await crud.category.get_multi_by_owner(db=db, owner_id=current_user.id))
 
         categories_with_id = {}
 
@@ -136,7 +136,7 @@ async def bluecoins(
                     amount=amount,
                     description=description,
                 )
-                await crud.expense.create_with_owner(db=db, obj_in=expense_in, owner_id=3)
+                await crud.expense.create_with_owner(db=db, obj_in=expense_in, owner_id=current_user.id)
 
             if type == 'Income':
                 income_in = schemas.IncomeCreate(
@@ -146,7 +146,7 @@ async def bluecoins(
                     description=description,
                     subcategory_id=subcategory_id
                 )
-                await crud.income.create_with_owner(db=db, obj_in=income_in, owner_id=3)
+                await crud.income.create_with_owner(db=db, obj_in=income_in, owner_id=current_user.id)
     except Exception as e:
         print("🚀 ~ e", e)
         # TODO: Log error to sentry
