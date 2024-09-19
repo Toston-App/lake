@@ -30,6 +30,7 @@ pytest-asyncio = "^0.20.3"
 httpx = "^0.23.1"
 faker = "^19.3.1 "
 pandas = "^2.1.0"
+fuzzywuzzy = "^0.18.0"
 
 [tool.poetry.dev-dependencies]
 mypy = "^0.971"
