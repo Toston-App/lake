@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, List
+from typing import Any, List, Dict, Tuple
 import pandas as pd
 
 from app.synonyms import get_synonyms
@@ -56,67 +56,68 @@ async def create_accounts(db: AsyncSession, owner_id:int, accounts: List[str]) -
 
     return accounts_with_id
 
-
-# this imports all transactions from:Main Dashboard > Transactions > Printer > Excel(.csv)
-@router.post("/bluecoins", )
-async def bluecoins(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        csv_file: UploadFile = File(...),
-        current_user: models.User = Depends(deps.get_current_active_user),
-) -> Any:
+async def process_csv(
+    csv_file: UploadFile,
+    column_mapping: Dict[str, str],
+) -> pd.DataFrame:
     """
-    Import from bluecoins.
+    Process the CSV file and return a standardized DataFrame.
+
+    :param csv_file: The uploaded CSV file
+    :param column_mapping: A dictionary mapping standard column names to actual CSV column names
+    :return: A standardized DataFrame
     """
-    dataframe = pd.read_csv(csv_file.file)
-
-    # Validate columns
-    required_columns = ['Date', 'Title', 'Amount', 'Account', 'Category', 'Notes']
-
-    for column in required_columns:
-        if column not in dataframe.columns:
-            raise HTTPException(status_code=400, detail=f"La columna '{column}' es requerida. Por favor revisa que el archivo tenga una columna llamada '{column}'.")
-
-
-    # Create all needed accounts
     try:
-        accounts = dataframe['Account'].unique().tolist()
-        accounts_with_id = await create_accounts(db=db, owner_id=current_user.id, accounts=accounts)
+        df = pd.read_csv(csv_file.file)
+
+        # Check if all required columns are present
+        for standard_col, csv_col in column_mapping.items():
+            if csv_col not in df.columns:
+                raise ValueError(f"Column '{csv_col}' is missing from the CSV file.")
+
+        # Rename columns to standard names
+        df = df.rename(columns={v: k for k, v in column_mapping.items()})
+
+        # Ensure all standard columns are present
+        for col in ['Date', 'Amount', 'Category', 'Title', 'Description', 'Account']:
+            if col not in df.columns:
+                df[col] = ''  # Add empty column if not present
+
+        # Standardize the DataFrame
+        df['Date'] = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d')
+        df['Amount'] = df['Amount'].astype(float)
+        df['Category'] = df['Category'].fillna('')
+        df['Title'] = df['Title'].fillna('')
+        df['Description'] = df['Description'].fillna('')
+        df['Account'] = df['Account'].fillna('')
+
+        return df[['Date', 'Amount', 'Category', 'Title', 'Description', 'Account']]
     except Exception as e:
-        # TODO: Log error to sentry
-        print("🚀 ~ e", e)
-        raise HTTPException(status_code=400, detail="Hay un error con las cuentas ('Accounts'). Por favor revisa que el archivo tenga una columna llamada 'Account' y que tenga nombres válidos.")
+        raise HTTPException(status_code=400, detail=f"Error processing CSV: {str(e)}")
 
-    # Extrapolate categories
-    try:
-        categories = dataframe['Category'].unique().tolist()
-        user_categories = jsonable_encoder(await crud.category.get_multi_by_owner(db=db, owner_id=current_user.id))
-
-        categories_with_id = {}
-
-        for category in categories:
-            match = find_best_match(category, user_categories)
-            if match:
-                categories_with_id[category] = match
-
-    except Exception as e:
-        # TODO: Log error to sentry
-        print("🚀 ~ e", e)
-        raise HTTPException(status_code=400, detail="Hay un error con las categorias ('Accounts'). Por favor revisa que el archivo tenga una columna llamada 'Category' y que tenga nombres válidos.")
-
+async def import_transactions(
+    db: AsyncSession,
+    current_user: models.User,
+    df: pd.DataFrame,
+    accounts_with_id: dict,
+    categories_with_id: dict
+) -> Tuple[int, int, int, int]:
+    """
+    Import transactions from the standardized DataFrame.
+    Returns a tuple of (total_imported, expenses_imported, incomes_imported, unmatched_categories)
+    """
+    expenses_imported = 0
+    incomes_imported = 0
+    unmatched_categories = 0
 
     try:
-        for index, row in dataframe.iterrows():
+        for _, row in df.iterrows():
             account_id = accounts_with_id.get(row['Account'])
-            date = str(datetime.strptime(row['Date'], "%d/%m/%Y %H:%M").date())
-            typeIloc = row.iloc[0]
-            type = typeIloc if typeIloc in {'Expense', 'Income', 'Transfer'} else ('Expense' if row['Amount'] < 0 else 'Income')
-            amount = row['Amount']
-            if amount < 0:
-                amount = amount * -1
-            description = f"{row['Title']} {row['Category']}"
+            date = row['Date']
+            amount = abs(row['Amount'])
+            description = f"{row['Title']} {row['Description']}".strip()
+            type = 'Expense' if row['Amount'] < 0 else 'Income'
 
-            # Category and subcategory ids
             category = row['Category']
             category_id = None
             subcategory_id = None
@@ -126,6 +127,8 @@ async def bluecoins(
                 if match:
                     category_id = match['category_id']
                     subcategory_id = match['subcategory_id']
+                else:
+                    unmatched_categories += 1
 
             if type == 'Expense':
                 expense_in = schemas.ExpenseCreate(
@@ -137,8 +140,8 @@ async def bluecoins(
                     description=description,
                 )
                 await crud.expense.create_with_owner(db=db, obj_in=expense_in, owner_id=current_user.id)
-
-            if type == 'Income':
+                expenses_imported += 1
+            else:
                 income_in = schemas.IncomeCreate(
                     account_id=account_id,
                     date=date,
@@ -147,9 +150,83 @@ async def bluecoins(
                     subcategory_id=subcategory_id
                 )
                 await crud.income.create_with_owner(db=db, obj_in=income_in, owner_id=current_user.id)
-    except Exception as e:
-        print("🚀 ~ e", e)
-        # TODO: Log error to sentry
-        raise HTTPException(status_code=400, detail="Hubo un error al importar los datos. Por favor revisa que el archivo tenga el formato correcto.")
+                incomes_imported += 1
 
-    return {"message": "Importación exitosa"}
+        total_imported = expenses_imported + incomes_imported
+        return total_imported, expenses_imported, incomes_imported, unmatched_categories
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error importing transactions: {str(e)}")
+
+async def process_import(
+    db: AsyncSession,
+    current_user: models.User,
+    csv_file: UploadFile,
+    column_mapping: Dict[str, str],
+) -> Dict[str, Any]:
+    """
+    Process the import and return detailed results.
+    """
+    df = await process_csv(csv_file, column_mapping)
+
+    # Create all needed accounts
+    accounts = df['Account'].unique().tolist()
+    accounts_with_id = await create_accounts(db=db, owner_id=current_user.id, accounts=accounts)
+
+    # Extrapolate categories
+    categories = df['Category'].unique().tolist()
+    user_categories = jsonable_encoder(await crud.category.get_multi_by_owner(db=db, owner_id=current_user.id))
+    categories_with_id = {category: find_best_match(category, user_categories) for category in categories}
+
+    total_imported, expenses_imported, incomes_imported, unmatched_categories = await import_transactions(
+        db, current_user, df, accounts_with_id, categories_with_id
+    )
+
+    return {
+        "message": "Importación exitosa",
+        "total_transactions_imported": total_imported,
+        "expenses_imported": expenses_imported,
+        "incomes_imported": incomes_imported,
+        "accounts_created": len(accounts_with_id),
+        "unmatched_categories": unmatched_categories,
+        "total_rows_processed": len(df)
+    }
+
+@router.post("/bluecoins")
+async def bluecoins(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    csv_file: UploadFile = File(...),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Import from bluecoins.
+    """
+    column_mapping = {
+        'Date': 'Date',
+        'Amount': 'Amount',
+        'Category': 'Category',
+        'Title': 'Title',
+        'Description': 'Notes',
+        'Account': 'Account'
+    }
+    return await process_import(db, current_user, csv_file, column_mapping)
+
+@router.post("/csv")
+async def import_csv(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    csv_file: UploadFile = File(...),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Import from generic CSV.
+    """
+    column_mapping = {
+        'Date': 'Date',
+        'Amount': 'Amount',
+        'Category': 'Category',
+        'Title': 'Title',
+        'Description': 'Description',
+        'Account': 'Account'
+    }
+    return await process_import(db, current_user, csv_file, column_mapping)
