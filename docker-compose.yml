@@ -41,8 +41,8 @@ services:
     env_file:
       - .env
     environment:
-      - SERVER_NAME=${DOMAIN?Variable not set}
-      - SERVER_HOST=https://${DOMAIN?Variable not set}
+      - SERVER_NAME=localhost
+      - SERVER_HOST=https://localhost
     build:
       context: ./backend
       dockerfile: backend.dockerfile
