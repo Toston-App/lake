@@ -35,7 +35,7 @@ services:
     networks:
       - app-network
     ports:
-      - "80:80"
+      - "8888:80"
     depends_on:
       - db
     env_file:
