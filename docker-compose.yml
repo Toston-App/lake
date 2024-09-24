@@ -47,7 +47,7 @@ services:
       context: ./backend
       dockerfile: backend.dockerfile
       args:
-        INSTALL_DEV="false"
+        INSTALL_DEV: false
 
 volumes:
   postgres_data:
