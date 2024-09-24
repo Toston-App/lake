@@ -111,6 +111,9 @@ class Settings(BaseSettings):
 
     SEED_DATABASE: bool = False
 
+    SERVER_NAME: str = "localhost"
+    SERVER_HOST: str = "http://localhost"
+
     class Config:
         case_sensitive = True
 
