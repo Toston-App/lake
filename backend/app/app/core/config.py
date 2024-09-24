@@ -16,17 +16,8 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     SERVER_NAME: str
     SERVER_HOST: AnyHttpUrl
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
     TEST_MODE: bool = False
     PROFILE_QUERY_MODE: bool = False
-
-    @validator("BACKEND_CORS_ORIGINS", pre=True)
-    def parse_cors(v: Any) -> list[str] | str:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, list | str):
-            return v
-        raise ValueError(v)
 
     PROJECT_NAME: str
     SENTRY_DSN: Optional[HttpUrl] = None

@@ -23,18 +23,15 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Response status: {response.status_code}")
     return response
 
-print("🚀 ~ settings.BACKEND_CORS_ORIGINS:", settings.BACKEND_CORS_ORIGINS)
-print([str(origin).strip("/") for origin in settings.BACKEND_CORS_ORIGINS])
 
 # Set all CORS enabled origins
-if settings.BACKEND_CORS_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[str(origin).strip("/") for origin in settings.BACKEND_CORS_ORIGINS] + ["http://localhost:4321", "https://dev.cleverbill.ing"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:4321", "https://dev.cleverbill.ing", "http://localhost", "http://localhost:4200", "http://localhost:3000", "http://localhost:8080", "https://localhost", "https://localhost:4200", "https://localhost:3000", "https://localhost:8080", "https://localhost:8888", "https://localhost:9000", "http://dev.wallet.com", "https://stag.wallet.com", "https://wallet.com", "http://local.dockertoolbox.tiangolo.com", "http://localhost.tiangolo.com"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
