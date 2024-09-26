@@ -71,8 +71,8 @@ async def get_current_user(
                 token_data = schemas.TokenPayloadUuid(**payload)
 
             break  # If decoding succeeds, exit the loop
-        except (jwt.JWTError, ValidationError):
-            print("🚀 ~ jwt.JWTError:", jwt.JWTError)
+        except (jwt.JWTError, ValidationError) as e:
+            print("🚀 ~ jwt.JWTError:", e)
             if key == "foo":  # If this was the last attempt
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
