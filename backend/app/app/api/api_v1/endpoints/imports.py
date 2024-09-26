@@ -93,7 +93,7 @@ async def process_csv(
 
         return df[['Date', 'Amount', 'Category', 'Title', 'Description', 'Account']]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing CSV: {str(e)}")
+        raise HTTPException(status_code=409, detail=f"Error processing CSV: {str(e)}")
 
 async def import_transactions(
     db: AsyncSession,
