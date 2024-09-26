@@ -50,8 +50,7 @@ async def async_get_db() -> AsyncGenerator:
 async def get_current_user(
         db: AsyncSession = Depends(async_get_db), token: str = Depends(reusable_oauth2)
 ) -> models.User:
-    print("🚀 ~ using reusable_oauth2")
-
+    # TODO add a env var to switch between the devel and prod and change this
     for key in [security.PUBLIC_KEY, "foo"]:
         try:
             if key == "foo":

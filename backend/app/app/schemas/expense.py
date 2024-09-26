@@ -39,7 +39,7 @@ class ExpenseCreate(ExpenseBase):
 # Properties to receive on Expense update
 class ExpenseUpdate(ExpenseBase):
     date: Optional[str] = None
-
+    updated_at: Optional[datetime] = None
 
 # Properties shared by models stored in DB
 class ExpenseInDBBase(ExpenseBase):

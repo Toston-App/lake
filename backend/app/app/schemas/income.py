@@ -38,6 +38,7 @@ class IncomeCreate(IncomeBase):
 # Properties to receive on Income update
 class IncomeUpdate(IncomeBase):
     date: Optional[str] = None
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB

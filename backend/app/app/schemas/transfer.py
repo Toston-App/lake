@@ -37,7 +37,7 @@ class TransferCreate(TransferBase):
 
 # Properties to receive on Transfer update
 class TransferUpdate(TransferBase):
-    pass
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB
