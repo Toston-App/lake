@@ -72,6 +72,7 @@ async def get_current_user(
 
             break  # If decoding succeeds, exit the loop
         except (jwt.JWTError, ValidationError):
+            print("🚀 ~ jwt.JWTError:", jwt.JWTError)
             if key == "foo":  # If this was the last attempt
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
