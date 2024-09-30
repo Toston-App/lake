@@ -276,7 +276,10 @@ def account_diff(past, actual):
         if account in past:
             result[account] = get_percentage(past[account], value)
         else:
-            result[account] = 100
+            if value > 0:
+                result[account] = 100
+            else:
+                result[account] = -100
 
     return result
 
