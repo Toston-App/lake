@@ -21,7 +21,7 @@ class AccountCreate(AccountBase):
 
 # Properties to receive on Account update
 class AccountUpdate(AccountBase):
-    pass
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB

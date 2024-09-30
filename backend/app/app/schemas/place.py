@@ -17,7 +17,7 @@ class PlaceCreate(PlaceBase):
 
 # Properties to receive on place update
 class PlaceUpdate(PlaceBase):
-    pass
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB
