@@ -340,7 +340,7 @@ categories_and_sub = [
       },
       {
         "name": "Tramites y registro civil",
-        "icon": "granttChartSquare"
+        "icon": "squareChartGantt"
       },
       {
         "name": "Pensión familiar",
