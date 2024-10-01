@@ -66,7 +66,7 @@ async def all_querys(db, start_date, end_date, type="days", time_difference = 0,
     return results
 
 
-@router.get("/{date_filter_type}/{date}/", response_model=Any)
+@router.get("/{date_filter_type}/{date}", response_model=Any)
 async def get_all_data(
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,

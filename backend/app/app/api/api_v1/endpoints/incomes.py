@@ -32,7 +32,7 @@ async def read_incomes(
 
     return incomes
 
-@router.get("/{date_filter_type}/{date}/", response_model=List[schemas.Income])
+@router.get("/{date_filter_type}/{date}", response_model=List[schemas.Income])
 async def read_incomes(
         db: AsyncSession = Depends(deps.async_get_db),
         date_filter_type: DateFilterType = DateFilterType.date,

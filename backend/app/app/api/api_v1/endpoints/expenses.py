@@ -41,7 +41,7 @@ class DateFilterType(str, Enum):
     range = "range"
 
 
-@router.get("/{date_filter_type}/{date}/", response_model=List[schemas.Expense])
+@router.get("/{date_filter_type}/{date}", response_model=List[schemas.Expense])
 async def read_expenses(
         db: AsyncSession = Depends(deps.async_get_db),
         date_filter_type: DateFilterType = DateFilterType.date,

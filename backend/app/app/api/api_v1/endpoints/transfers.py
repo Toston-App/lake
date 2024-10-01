@@ -31,7 +31,7 @@ async def read_transfers(
 
     return transfers
 
-@router.get("/{date_filter_type}/{date}/", response_model=List[schemas.Transfer])
+@router.get("/{date_filter_type}/{date}", response_model=List[schemas.Transfer])
 async def read_transfers(
         db: AsyncSession = Depends(deps.async_get_db),
         date_filter_type: DateFilterType = DateFilterType.date,

@@ -40,7 +40,7 @@ async def log_requests(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://api.cleverbill.ing", "https://dev.cleverbill.ing", "http://dev.cleverbill.ing", "https://dev.cleverbill.ing/api/v1", "https:\/\/*\.cleverbill\.ing", "https:\/\/*\.cleverbill\.ing/", "http:\/\/*\.cleverbill\.ing", "http:\/\/*\.cleverbill\.ing/","http://localhost:4321", "http://localhost", "http://localhost:4200", "http://localhost:3000", "http://localhost:8080", "https://localhost", "https://localhost:4200", "https://localhost:3000", "https://localhost:8080", "https://localhost:8888", "https://localhost:9000", "http://dev.wallet.com", "https://stag.wallet.com", "https://wallet.com", "http://local.dockertoolbox.tiangolo.com", "http://localhost.tiangolo.com"],
+    "https://www.cleverbill.ing", "https://cleverbill.ing", "https://api.cleverbill.ing", "http://api.cleverbill.ing", "https://dev.cleverbill.ing", "http://dev.cleverbill.ing", "https://dev.cleverbill.ing/api/v1", "https:\/\/*\.cleverbill\.ing", "https:\/\/*\.cleverbill\.ing/", "http:\/\/*\.cleverbill\.ing", "http:\/\/*\.cleverbill\.ing/","http://localhost:4321", "http://localhost", "http://localhost:4200", "http://localhost:3000", "http://localhost:8080", "https://localhost", "https://localhost:4200", "https://localhost:3000", "https://localhost:8080", "https://localhost:8888", "https://localhost:9000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
