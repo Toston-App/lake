@@ -29,6 +29,9 @@ services:
       - .env
     volumes:
       - pgadmin-data:/var/lib/pgadmin
+    labels:
+      # Basic auth for pgadmin using the environment variables PG_USERNAME and PG_HASHED_PASSWORD
+      - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME?Variable not set}:${PG_HASHED_PASSWORD?Variable not set}
 
   backend:
     restart: always
