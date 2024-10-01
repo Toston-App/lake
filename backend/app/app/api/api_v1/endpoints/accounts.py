@@ -11,7 +11,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas.Account])
+@router.get("", response_model=List[schemas.Account])
 async def read_accounts(
         db: AsyncSession = Depends(deps.async_get_db),
         skip: int = 0,

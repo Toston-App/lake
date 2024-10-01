@@ -10,7 +10,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas.Subcategory])
+@router.get("", response_model=List[schemas.Subcategory])
 async def read_subcategories(
         db: AsyncSession = Depends(deps.async_get_db),
         skip: int = 0,
@@ -29,7 +29,7 @@ async def read_subcategories(
 
     return categories
 
-@router.post("/", response_model=schemas.Subcategory)
+@router.post("", response_model=schemas.Subcategory)
 async def create_subcategory(
         *,
         db: AsyncSession = Depends(deps.async_get_db),

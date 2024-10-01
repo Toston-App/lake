@@ -10,7 +10,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas.Place])
+@router.get("", response_model=List[schemas.Place])
 async def read_places(
         db: AsyncSession = Depends(deps.async_get_db),
         skip: int = 0,
@@ -29,7 +29,7 @@ async def read_places(
     return places
 
 
-@router.post("/", response_model=schemas.Place)
+@router.post("", response_model=schemas.Place)
 async def create_place(
         *,
         db: AsyncSession = Depends(deps.async_get_db),

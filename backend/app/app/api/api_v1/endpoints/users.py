@@ -17,7 +17,7 @@ from app.utils import send_new_account_email
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas.User])
+@router.get("", response_model=List[schemas.User])
 async def read_users(
         db: AsyncSession = Depends(deps.async_get_db),
         skip: int = 0,
@@ -31,7 +31,7 @@ async def read_users(
     return users
 
 
-@router.post("/", response_model=schemas.User)
+@router.post("", response_model=schemas.User)
 async def create_user(
         *,
         db: AsyncSession = Depends(deps.async_get_db),
@@ -134,7 +134,7 @@ async def create_user_open(
             jsonable_encoder(user), expires_delta=access_token_expires
         )
 
-        response = JSONResponse(content={"msg": "User created successfully"})
+        response = JSONResponse(content={"msg": "User created successfully", "jwt": access_token})
         response.set_cookie(
             key="__session",
             value=access_token,

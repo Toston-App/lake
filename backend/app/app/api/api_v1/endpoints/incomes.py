@@ -115,7 +115,7 @@ async def read_incomes(
 
     return incomes
 
-@router.post("/", response_model=schemas.Income)
+@router.post("", response_model=schemas.Income)
 async def create_income(
         *,
         db: AsyncSession = Depends(deps.async_get_db),

@@ -124,7 +124,7 @@ async def read_expenses(
 
     return expenses
 
-@router.post("/", response_model=schemas.Expense)
+@router.post("", response_model=schemas.Expense)
 async def create_expense(
         *,
         db: AsyncSession = Depends(deps.async_get_db),
