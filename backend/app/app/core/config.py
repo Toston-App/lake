@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     SERVER_NAME: str = "localhost"
     SERVER_HOST: str = "http://localhost"
 
+    DOCS_USER: str = "user"
+    DOCS_PASSWORD: str = "password"
+
     class Config:
         case_sensitive = True
 
