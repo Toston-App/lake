@@ -30,7 +30,7 @@ async def read_accounts(
 
     return accounts
 
-@router.post("/", response_model=schemas.Account)
+@router.post("", response_model=schemas.Account)
 async def create_account(
         *,
         db: AsyncSession = Depends(deps.async_get_db),

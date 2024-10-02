@@ -114,7 +114,7 @@ async def read_transfers(
 
     return transfers
 
-@router.post("/", response_model=schemas.Transfer)
+@router.post("", response_model=schemas.Transfer)
 async def create_transfer(
         *,
         db: AsyncSession = Depends(deps.async_get_db),
