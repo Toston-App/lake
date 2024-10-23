@@ -175,10 +175,10 @@ async def process_import(
 
     # Create import record first
     import_in = schemas.ImportCreate(
-        date=datetime.now(),
         service=service,
         file_content=csv_file.file.read(),
-        file_size=csv_file.file.size,
+        # TODO: check how to get file size
+        file_size=0,
         total_rows_processed=len(df)
     )
     import_obj = await crud.imports.create_with_owner(db=db, obj_in=import_in, owner_id=current_user.id)
@@ -205,7 +205,7 @@ async def process_import(
         incomes_imported=incomes_imported,
         accounts_created=len(accounts_with_id),
         unmatched_categories=unmatched_categories,
-        ended_at=datetime.now()
+        ended_at=datetime.now().isoformat()
     )
     await crud.imports.update(db=db, db_obj=import_obj, obj_in=import_update)
 

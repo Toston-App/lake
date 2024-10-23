@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 # Shared properties
 class ImportBase(BaseModel):
-    date: str
     service: str
     file_content: str
     file_size: Optional[int] = None
@@ -43,7 +42,7 @@ class Import(ImportInDBBase):
 
 # Properties properties stored in DB
 class ImportInDB(ImportInDBBase):
-    pass
+    date: Optional[datetime] = None
 
 class DeletionResponse(BaseModel):
     message: str

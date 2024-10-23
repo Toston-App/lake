@@ -13,7 +13,7 @@ class ImportService(PyEnum):
 
 class Import(Base):
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
-    date: Date = Column(Date, index=True)
+    date: Date = Column(DateTime(timezone=True), onupdate=func.now())
     owner_id: int = Column(Integer, ForeignKey("user.id"))
     created_at: Date = Column(DateTime(timezone=True), server_default=func.now())
     updated_at: Date = Column(DateTime(timezone=True), onupdate=func.now())
