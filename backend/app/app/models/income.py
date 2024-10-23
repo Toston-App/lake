@@ -31,3 +31,4 @@ class Income(Base):
     place: "Place" = relationship("Place", back_populates="incomes")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    import_id: int = Column(Integer, ForeignKey("import.id"))

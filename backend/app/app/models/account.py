@@ -32,3 +32,4 @@ class Account(Base):
     incomes: List["Income"] = relationship("Income", back_populates="account")
     transfers_in: List["Transfer"] = relationship("Transfer", foreign_keys="[Transfer.to_acc]", back_populates="account_to")
     transfers_out: List["Transfer"] = relationship("Transfer", foreign_keys="[Transfer.from_acc]", back_populates="account_from")
+    import_id: int = Column(Integer, ForeignKey("import.id"))
