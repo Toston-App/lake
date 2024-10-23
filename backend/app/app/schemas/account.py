@@ -13,11 +13,11 @@ class AccountBase(BaseModel):
     total_incomes: Optional[float] = None
     total_transfers_in: Optional[float] = None
     total_transfers_out: Optional[float] = None
-    import_id: Optional[int] = None
 
 # Properties to receive on Account creation
 class AccountCreate(AccountBase):
     name: str
+    import_id: Optional[int] = None
 
 
 # Properties to receive on Account update
@@ -29,6 +29,7 @@ class AccountUpdate(AccountBase):
 class AccountInDBBase(AccountBase):
     id: int
     owner_id: int
+    import_id: Optional[int] = None
 
     class Config:
         orm_mode = True

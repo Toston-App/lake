@@ -13,7 +13,6 @@ class ExpenseBase(BaseModel):
     category_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     place_id: Optional[int] = None
-    import_id: Optional[int] = None
 
     # Fix the amount to 2 decimal places
     @root_validator
@@ -35,6 +34,7 @@ class ExpenseBase(BaseModel):
 class ExpenseCreate(ExpenseBase):
     amount: float
     date : Optional[str] = None
+    import_id: Optional[int] = None
 
 
 # Properties to receive on Expense update
@@ -46,6 +46,7 @@ class ExpenseUpdate(ExpenseBase):
 class ExpenseInDBBase(ExpenseBase):
     id: int
     owner_id: int
+    import_id: Optional[int] = None
 
     class Config:
         orm_mode = True

@@ -12,7 +12,6 @@ class IncomeBase(BaseModel):
     account_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     place_id: Optional[int] = None
-    import_id: Optional[int] = None
 
     # Fix the amount to 2 decimal places
     @root_validator
@@ -34,6 +33,7 @@ class IncomeBase(BaseModel):
 class IncomeCreate(IncomeBase):
     amount: float
     date : Optional[str] = None
+    import_id: Optional[int] = None
 
 
 # Properties to receive on Income update
@@ -46,6 +46,7 @@ class IncomeUpdate(IncomeBase):
 class IncomeInDBBase(IncomeBase):
     id: int
     owner_id: int
+    import_id: Optional[int] = None
 
     class Config:
         orm_mode = True

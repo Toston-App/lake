@@ -182,7 +182,6 @@ async def process_import(
         file_content=csv_file.file.read(),
         # TODO: check how to get file size
         file_size=0,
-        total_rows_processed=len(df)
     )
     import_obj = await crud.imports.create_with_owner(db=db, obj_in=import_in, owner_id=current_user.id)
     import_id = import_obj.id  # Use this ID for related records
@@ -203,6 +202,7 @@ async def process_import(
 
      # Update import record with results
     import_update = schemas.ImportUpdate(
+        total_rows_processed=len(df),
         total_transactions_imported=total_imported,
         expenses_imported=expenses_imported,
         incomes_imported=incomes_imported,

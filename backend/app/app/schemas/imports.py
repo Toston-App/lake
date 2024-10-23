@@ -7,8 +7,8 @@ from pydantic import BaseModel
 
 # Shared properties
 class ImportBase(BaseModel):
-    service: ImportService
-    file_content: str
+    service: Optional[ImportService] = None
+    file_content: Optional[str] = None
     file_size: Optional[int] = None
     total_transactions_imported: Optional[int] = None
     expenses_imported: Optional[int] = None
@@ -25,7 +25,7 @@ class ImportCreate(ImportBase):
 
 # Properties to receive on Import update
 class ImportUpdate(ImportBase):
-    updated_at: Optional[datetime] = None
+    pass
 
 # Properties shared by models stored in DB
 class ImportInDBBase(ImportBase):
