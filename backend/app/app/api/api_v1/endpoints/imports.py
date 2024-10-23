@@ -41,10 +41,11 @@ def find_best_match(new_category, user_categories, threshold=80):
 
     return best_match
 
-async def create_accounts(db: AsyncSession, owner_id:int, accounts: List[str]) -> dict:
+async def create_accounts(db: AsyncSession, owner_id:int, accounts: List[str], import_id:str) -> dict:
     accounts_with_id = {}
     for account in accounts:
         account_data = {
+            'import_id': import_id,
             'name': account,
             'initial_balance': 0,
             'current_balance': 0,
@@ -100,7 +101,8 @@ async def import_transactions(
     current_user: models.User,
     df: pd.DataFrame,
     accounts_with_id: dict,
-    categories_with_id: dict
+    categories_with_id: dict,
+    import_id: str
 ) -> Tuple[int, int, int, int]:
     """
     Import transactions from the standardized DataFrame.
@@ -138,6 +140,7 @@ async def import_transactions(
                     date=date,
                     amount=amount,
                     description=description,
+                    import_id=import_id
                 )
                 await crud.expense.create_with_owner(db=db, obj_in=expense_in, owner_id=current_user.id)
                 expenses_imported += 1
@@ -147,7 +150,8 @@ async def import_transactions(
                     date=date,
                     amount=amount,
                     description=description,
-                    subcategory_id=subcategory_id
+                    subcategory_id=subcategory_id,
+                    import_id=import_id
                 )
                 await crud.income.create_with_owner(db=db, obj_in=income_in, owner_id=current_user.id)
                 incomes_imported += 1
@@ -162,15 +166,27 @@ async def process_import(
     current_user: models.User,
     csv_file: UploadFile,
     column_mapping: Dict[str, str],
+    service: str
 ) -> Dict[str, Any]:
     """
     Process the import and return detailed results.
     """
     df = await process_csv(csv_file, column_mapping)
 
+    # Create import record first
+    import_in = schemas.ImportCreate(
+        date=datetime.now(),
+        service=service,
+        file_content=csv_file.file.read(),
+        file_size=csv_file.file.size,
+        total_rows_processed=len(df)
+    )
+    import_obj = await crud.imports.create_with_owner(db=db, obj_in=import_in, owner_id=current_user.id)
+    import_id = import_obj.id  # Use this ID for related records
+
     # Create all needed accounts
     accounts = df['Account'].unique().tolist()
-    accounts_with_id = await create_accounts(db=db, owner_id=current_user.id, accounts=accounts)
+    accounts_with_id = await create_accounts(db=db, owner_id=current_user.id, accounts=accounts, import_id=import_id)
 
     # Extrapolate categories
     categories = df['Category'].unique().tolist()
@@ -178,8 +194,19 @@ async def process_import(
     categories_with_id = {category: find_best_match(category, user_categories) for category in categories}
 
     total_imported, expenses_imported, incomes_imported, unmatched_categories = await import_transactions(
-        db, current_user, df, accounts_with_id, categories_with_id
+        db, current_user, df, accounts_with_id, categories_with_id, import_id
     )
+
+
+     # Update import record with results
+    import_update = schemas.ImportUpdate(
+        total_transactions_imported=total_imported,
+        expenses_imported=expenses_imported,
+        incomes_imported=incomes_imported,
+        accounts_created=len(accounts_with_id),
+        unmatched_categories=unmatched_categories,
+    )
+    await crud.imports.update(db=db, db_obj=import_obj, obj_in=import_update)
 
     return {
         "message": "Importación exitosa",
@@ -209,7 +236,7 @@ async def bluecoins(
         'Description': 'Notes',
         'Account': 'Account'
     }
-    return await process_import(db, current_user, csv_file, column_mapping)
+    return await process_import(db, current_user, csv_file, column_mapping, 'bluecoins')
 
 @router.post("/csv")
 async def import_csv(
@@ -229,4 +256,4 @@ async def import_csv(
         'Description': 'Description',
         'Account': 'Account'
     }
-    return await process_import(db, current_user, csv_file, column_mapping)
+    return await process_import(db, current_user, csv_file, column_mapping, 'csv')

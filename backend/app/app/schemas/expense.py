@@ -13,6 +13,7 @@ class ExpenseBase(BaseModel):
     category_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     place_id: Optional[int] = None
+    import_id: Optional[int] = None
 
     # Fix the amount to 2 decimal places
     @root_validator

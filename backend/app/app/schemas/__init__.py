@@ -10,3 +10,4 @@ from .item import Item, ItemCreate, ItemInDB, ItemUpdate, DeletionResponse
 from .msg import Msg
 from .token import Token, TokenPayload, TokenPayloadUuid
 from .user import User, UserCreate, UserCreateUuid, UserInDB, UserUpdate
+from .imports import Import, ImportCreate, ImportInDB, ImportUpdate, DeletionResponse

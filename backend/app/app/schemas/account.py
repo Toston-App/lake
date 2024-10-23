@@ -13,6 +13,7 @@ class AccountBase(BaseModel):
     total_incomes: Optional[float] = None
     total_transfers_in: Optional[float] = None
     total_transfers_out: Optional[float] = None
+    import_id: Optional[int] = None
 
 # Properties to receive on Account creation
 class AccountCreate(AccountBase):
