@@ -16,6 +16,7 @@ class ImportBase(BaseModel):
     accounts_created: Optional[int] = None
     unmatched_categories: Optional[int] = None
     total_rows_processed: Optional[int] = None
+    ended_at: Optional[datetime] = None
 
 
 # Properties to receive on Import creation
