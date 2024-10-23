@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import Optional
 
+from app.models.imports import ImportService
 from pydantic import BaseModel
 
 
 # Shared properties
 class ImportBase(BaseModel):
-    service: str
+    service: ImportService
     file_content: str
     file_size: Optional[int] = None
     total_transactions_imported: Optional[int] = None

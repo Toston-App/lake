@@ -3,6 +3,7 @@ from typing import Any, List, Dict, Tuple
 import pandas as pd
 
 from app.synonyms import get_synonyms
+from app.models.imports import ImportService
 from fastapi.encoders import jsonable_encoder
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -166,7 +167,7 @@ async def process_import(
     current_user: models.User,
     csv_file: UploadFile,
     column_mapping: Dict[str, str],
-    service: str
+    service: ImportService
 ) -> Dict[str, Any]:
     """
     Process the import and return detailed results.
@@ -174,6 +175,8 @@ async def process_import(
     df = await process_csv(csv_file, column_mapping)
 
     # Create import record first
+    print("🚀 ~ csv_file.file.read():", csv_file.file.read())
+    print("🚀 ~ csv_file.file.size:", csv_file.file)
     import_in = schemas.ImportCreate(
         service=service,
         file_content=csv_file.file.read(),
@@ -237,7 +240,7 @@ async def bluecoins(
         'Description': 'Notes',
         'Account': 'Account'
     }
-    return await process_import(db, current_user, csv_file, column_mapping, 'bluecoins')
+    return await process_import(db, current_user, csv_file, column_mapping, ImportService.BLUECOINS)
 
 @router.post("/csv")
 async def import_csv(
@@ -257,4 +260,4 @@ async def import_csv(
         'Description': 'Description',
         'Account': 'Account'
     }
-    return await process_import(db, current_user, csv_file, column_mapping, 'csv')
+    return await process_import(db, current_user, csv_file, column_mapping, ImportService.CSV)
