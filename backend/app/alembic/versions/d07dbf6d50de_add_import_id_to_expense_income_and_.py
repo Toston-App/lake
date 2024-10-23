@@ -1,4 +1,4 @@
-"""Add import_id to expense, income, and account models
+"""Add import table fr now
 
 Revision ID: d07dbf6d50de
 Revises: d4b9d02d4abb

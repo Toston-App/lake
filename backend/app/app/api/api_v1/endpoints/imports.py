@@ -205,6 +205,7 @@ async def process_import(
         incomes_imported=incomes_imported,
         accounts_created=len(accounts_with_id),
         unmatched_categories=unmatched_categories,
+        ended_at=datetime.now()
     )
     await crud.imports.update(db=db, db_obj=import_obj, obj_in=import_update)
 
