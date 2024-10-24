@@ -172,14 +172,19 @@ async def process_import(
     """
     Process the import and return detailed results.
     """
+    if(csv_file.filename == ''):
+        raise HTTPException(status_code=400, detail="Filename is empty")
+
+    if(csv_file.content_type != 'text/csv'):
+        raise HTTPException(status_code=400, detail="File is not a CSV")
+
     df = await process_csv(csv_file, column_mapping)
 
     # Create import record first
-    print("🚀 ~ csv_file.file.read():", csv_file.file.read())
-    print("🚀 ~ csv_file.file.size:", csv_file.file)
     import_in = schemas.ImportCreate(
         service=service,
-        file_content=csv_file.file.read(),
+        # this doesn't sound like a good idea after all i think. if somehow the table get leaked, the expenses, accounts, incomes and more data will be accessible thanks to this shitty. im to lazy to remove it lol
+        file_content='',
         # TODO: check how to get file size
         file_size=0,
     )
