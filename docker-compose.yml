@@ -32,9 +32,9 @@ services:
     environment:
       - PG_USERNAME=${PG_USERNAME}
       - PG_HASHED_PASSWORD=${PG_HASHED_PASSWORD}
-    labels:
+    # labels:
       # Basic auth for pgadmin using the environment variables PG_USERNAME and PG_HASHED_PASSWORD
-      - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME}:${PG_HASHED_PASSWORD}
+      # - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME}:${PG_HASHED_PASSWORD}
 
   backend:
     restart: always
