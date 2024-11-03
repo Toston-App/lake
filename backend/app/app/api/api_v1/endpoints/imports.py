@@ -175,9 +175,6 @@ async def process_import(
     if(csv_file.filename == ''):
         raise HTTPException(status_code=400, detail="Filename is empty")
 
-    if(csv_file.content_type != 'text/csv'):
-        raise HTTPException(status_code=400, detail="File is not a CSV")
-
     df = await process_csv(csv_file, column_mapping)
 
     # Create import record first
