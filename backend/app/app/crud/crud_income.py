@@ -54,6 +54,25 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         await db.refresh(db_obj)
         return db_obj
 
+    async def create_multi_with_owner(
+        self, db: AsyncSession, *, obj_list: List[IncomeCreate], owner_id: int
+    ) -> List[Income]:
+        created_incomes = []
+        for obj_in in obj_list:
+            income = await self.create_with_owner(db, obj_in=obj_in, owner_id=owner_id)
+            created_incomes.append(income)
+        return created_incomes
+
+    async def remove_multi(
+        self, db: AsyncSession, *, ids: List[int]
+    ) -> List[Income]:
+        removed_incomes = []
+        for id in ids:
+            income = await self.remove(db, id=id)
+            if income:
+                removed_incomes.append(income)
+        return removed_incomes
+
     async def get_multi_by_owner(
             self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
     ) -> List[Income]:

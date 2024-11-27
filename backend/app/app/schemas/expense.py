@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import BaseModel, validator, root_validator
 
@@ -67,3 +67,7 @@ class ExpenseInDB(ExpenseInDBBase):
 
 class DeletionResponse(BaseModel):
     message: str
+
+class BulkDeletionResponse(BaseModel):
+    message: str
+    deleted_ids: List[int]

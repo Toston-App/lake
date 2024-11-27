@@ -140,6 +140,22 @@ async def create_expense(
     return expense
 
 
+@router.post("/bulk", response_model=List[schemas.Expense])
+async def create_expenses_bulk(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    expenses_in: List[schemas.ExpenseCreate],
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Create multiple expenses at once.
+    """
+    expenses = await crud.expense.create_multi_with_owner(
+        db=db, obj_list=expenses_in, owner_id=current_user.id
+    )
+    return expenses
+
+
 @router.get("/{id}", response_model=schemas.Expense)
 async def read_expense(
         *,
@@ -263,3 +279,55 @@ async def delete_expense(
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
     return expense
+
+@router.delete("/bulk/{ids}", response_model=schemas.BulkDeletionResponse)
+async def delete_expenses_bulk(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    ids: str,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Delete multiple expenses at once.
+    Format: /bulk/1,2,3
+    """
+    try:
+        id_list = [int(id.strip()) for id in ids.split(",")]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid ID format. Use comma-separated integers")
+
+    # Verify permissions for all expenses
+    valid_ids = []
+    for id in id_list:
+        expense = await crud.expense.get(db=db, id=id)
+        if not expense:
+            continue
+        if not crud.user.is_superuser(current_user) and (expense.owner_id != current_user.id):
+            raise HTTPException(status_code=400, detail=f"Not enough permissions for expense {id}")
+        valid_ids.append(expense.id)
+
+    if not valid_ids:
+        raise HTTPException(status_code=404, detail="No valid expenses found")
+
+    removed_expenses = await crud.expense.remove_multi(db=db, ids=valid_ids)
+
+    # Update balances
+    for expense in removed_expenses:
+        await crud.user.update_balance(
+            db=db,
+            user_id=current_user.id,
+            is_Expense=True,
+            amount=-expense.amount
+        )
+        if expense.account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                id=expense.account_id,
+                column='total_expenses',
+                amount=-expense.amount
+            )
+
+    return schemas.BulkDeletionResponse(
+        message=f"Deleted {len(removed_expenses)} expenses",
+        deleted_ids=[e.id for e in removed_expenses]
+    )

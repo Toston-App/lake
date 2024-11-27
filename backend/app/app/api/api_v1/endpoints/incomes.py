@@ -131,6 +131,22 @@ async def create_income(
     return income
 
 
+@router.post("/bulk", response_model=List[schemas.Income])
+async def create_incomes_bulk(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    incomes_in: List[schemas.IncomeCreate],
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Create multiple incomes at once.
+    """
+    incomes = await crud.income.create_multi_with_owner(
+        db=db, obj_list=incomes_in, owner_id=current_user.id
+    )
+    return incomes
+
+
 @router.get("/{id}", response_model=schemas.Income)
 async def read_income(
         *,
@@ -247,3 +263,58 @@ async def delete_income(
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
     return income
+
+
+@router.delete("/bulk/{ids}", response_model=schemas.BulkDeletionResponse)
+async def delete_incomes_bulk(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    ids: str,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Delete multiple incomes at once.
+    Format: /bulk/1,2,3
+    """
+    try:
+        id_list = [int(id.strip()) for id in ids.split(",")]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid ID format. Use comma-separated integers")
+
+    # Collect valid incomes first
+    valid_incomes = []
+    for id in id_list:
+        income = await crud.income.get(db=db, id=id)
+        if not income:
+            continue
+        if not crud.user.is_superuser(current_user) and (income.owner_id != current_user.id):
+            raise HTTPException(status_code=400, detail=f"Not enough permissions for income {id}")
+        valid_incomes.append(income)
+
+    if not valid_incomes:
+        raise HTTPException(status_code=404, detail="No valid incomes found")
+
+    # Only attempt to remove existing incomes
+    valid_ids = [income.id for income in valid_incomes]
+    removed_incomes = await crud.income.remove_multi(db=db, ids=valid_ids)
+
+    # Update balances for successfully removed incomes
+    for income in removed_incomes:
+        await crud.user.update_balance(
+            db=db,
+            user_id=current_user.id,
+            is_Expense=False,
+            amount=-income.amount
+        )
+        if income.account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                id=income.account_id,
+                column='total_incomes',
+                amount=-income.amount
+            )
+
+    return schemas.BulkDeletionResponse(
+        message=f"Deleted {len(removed_incomes)} incomes",
+        deleted_ids=[i.id for i in removed_incomes]
+    )
