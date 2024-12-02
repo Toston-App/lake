@@ -1,3 +1,4 @@
+# TODO: refactor bulk to only update balance once and not for each expense
 from typing import List
 from datetime import datetime
 

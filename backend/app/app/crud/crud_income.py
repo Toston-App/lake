@@ -54,6 +54,7 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         await db.refresh(db_obj)
         return db_obj
 
+    # refactor this to only update balance once and not for each income
     async def create_multi_with_owner(
         self, db: AsyncSession, *, obj_list: List[IncomeCreate], owner_id: int
     ) -> List[Income]:
