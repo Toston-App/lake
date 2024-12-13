@@ -45,6 +45,9 @@ def find_best_match(new_category, user_categories, threshold=80):
 async def create_accounts(db: AsyncSession, owner_id:int, accounts: List[str], import_id:str) -> dict:
     accounts_with_id = {}
     for account in accounts:
+        if account == '':
+            continue
+
         account_data = {
             'import_id': import_id,
             'name': account,
@@ -61,6 +64,9 @@ async def create_accounts(db: AsyncSession, owner_id:int, accounts: List[str], i
 async def create_sites(db: AsyncSession, owner_id:int, sites: List[str], import_id:str) -> dict:
     sites_with_id = {}
     for site in sites:
+        if site == '':
+            continue
+
         site_data = {
             'import_id': import_id,
             'name': site,
@@ -150,6 +156,7 @@ async def import_transactions(
                     subcategory_id = match['subcategory_id']
                 else:
                     unmatched_categories += 1
+                    print(f"🚀🚀🚀🚀🚀 - Unmatched category: {category}")
 
             if type == 'Expense':
                 expense_in = schemas.ExpenseCreate(
