@@ -26,5 +26,6 @@ class Import(Base):
     expenses_imported: int = Column(Integer)
     incomes_imported: int = Column(Integer)
     accounts_created: int = Column(Integer)
+    sites_created: int = Column(Integer)
     unmatched_categories: int = Column(Integer)
     total_rows_processed: int = Column(Integer)

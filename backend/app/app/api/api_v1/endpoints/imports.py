@@ -58,6 +58,21 @@ async def create_accounts(db: AsyncSession, owner_id:int, accounts: List[str], i
 
     return accounts_with_id
 
+async def create_sites(db: AsyncSession, owner_id:int, sites: List[str], import_id:str) -> dict:
+    sites_with_id = {}
+    for site in sites:
+        site_data = {
+            'import_id': import_id,
+            'name': site,
+            'is_online': False,
+        }
+        site_in = schemas.PlaceCreate(**site_data)
+        new_site = await crud.place.create_with_owner(db=db, obj_in=site_in, owner_id=owner_id)
+
+        sites_with_id[site] = new_site.id
+
+    return sites_with_id
+
 async def process_csv(
     csv_file: UploadFile,
     column_mapping: Dict[str, str],
@@ -81,7 +96,7 @@ async def process_csv(
         df = df.rename(columns={v: k for k, v in column_mapping.items()})
 
         # Ensure all standard columns are present
-        for col in ['Date', 'Amount', 'Category', 'Title', 'Description', 'Account']:
+        for col in ['Date', 'Amount', 'Category', 'Title', 'Description', 'Account', 'Site']:
             if col not in df.columns:
                 df[col] = ''  # Add empty column if not present
 
@@ -92,8 +107,9 @@ async def process_csv(
         df['Title'] = df['Title'].fillna('')
         df['Description'] = df['Description'].fillna('')
         df['Account'] = df['Account'].fillna('')
+        df['Site'] = df['Site'].fillna('')
 
-        return df[['Date', 'Amount', 'Category', 'Title', 'Description', 'Account']]
+        return df[['Date', 'Amount', 'Category', 'Title', 'Description', 'Account', 'Site']]
     except Exception as e:
         raise HTTPException(status_code=409, detail=f"Error processing CSV: {str(e)}")
 
@@ -102,6 +118,7 @@ async def import_transactions(
     current_user: models.User,
     df: pd.DataFrame,
     accounts_with_id: dict,
+    sites_with_id: dict,
     categories_with_id: dict,
     import_id: str
 ) -> Tuple[int, int, int, int]:
@@ -116,6 +133,7 @@ async def import_transactions(
     try:
         for _, row in df.iterrows():
             account_id = accounts_with_id.get(row['Account'])
+            site_id = sites_with_id.get(row['Site'])
             date = row['Date']
             amount = abs(row['Amount'])
             description = f"{row['Title']} {row['Description']}".strip()
@@ -141,6 +159,7 @@ async def import_transactions(
                     date=date,
                     amount=amount,
                     description=description,
+                    place_id=site_id,
                     import_id=import_id
                 )
                 await crud.expense.create_with_owner(db=db, obj_in=expense_in, owner_id=current_user.id)
@@ -152,6 +171,7 @@ async def import_transactions(
                     amount=amount,
                     description=description,
                     subcategory_id=subcategory_id,
+                    place_id=site_id,
                     import_id=import_id
                 )
                 await crud.income.create_with_owner(db=db, obj_in=income_in, owner_id=current_user.id)
@@ -192,13 +212,17 @@ async def process_import(
     accounts = df['Account'].unique().tolist()
     accounts_with_id = await create_accounts(db=db, owner_id=current_user.id, accounts=accounts, import_id=import_id)
 
+    # Create all needed sites
+    sites = df['Site'].unique().tolist()
+    sites_with_id = await create_sites(db=db, owner_id=current_user.id, sites=sites, import_id=import_id)
+
     # Extrapolate categories
     categories = df['Category'].unique().tolist()
     user_categories = jsonable_encoder(await crud.category.get_multi_by_owner(db=db, owner_id=current_user.id))
     categories_with_id = {category: find_best_match(category, user_categories) for category in categories}
 
     total_imported, expenses_imported, incomes_imported, unmatched_categories = await import_transactions(
-        db, current_user, df, accounts_with_id, categories_with_id, import_id
+        db, current_user, df, accounts_with_id, sites_with_id, categories_with_id, import_id
     )
 
 
@@ -209,6 +233,7 @@ async def process_import(
         expenses_imported=expenses_imported,
         incomes_imported=incomes_imported,
         accounts_created=len(accounts_with_id),
+        sites_created=len(sites_with_id),
         unmatched_categories=unmatched_categories,
         ended_at=datetime.now().isoformat()
     )
@@ -220,6 +245,7 @@ async def process_import(
         "expenses_imported": expenses_imported,
         "incomes_imported": incomes_imported,
         "accounts_created": len(accounts_with_id),
+        "sites_created": len(sites_with_id),
         "unmatched_categories": unmatched_categories,
         "total_rows_processed": len(df)
     }
@@ -260,6 +286,7 @@ async def import_csv(
         'Category': 'Category',
         'Title': 'Title',
         'Description': 'Description',
-        'Account': 'Account'
+        'Account': 'Account',
+        'Site': 'Site',
     }
     return await process_import(db, current_user, csv_file, column_mapping, ImportService.CSV)

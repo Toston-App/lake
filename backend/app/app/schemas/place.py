@@ -13,6 +13,7 @@ class PlaceBase(BaseModel):
 # Properties to receive on place creation
 class PlaceCreate(PlaceBase):
     name: str
+    import_id: Optional[int] = None
 
 
 # Properties to receive on place update
@@ -24,6 +25,7 @@ class PlaceUpdate(PlaceBase):
 class PlaceInDBBase(PlaceBase):
     id: int
     owner_id: int
+    import_id: Optional[int] = None
 
     class Config:
         orm_mode = True
