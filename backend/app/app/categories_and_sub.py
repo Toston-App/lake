@@ -166,7 +166,7 @@ categories_and_sub = [
       },
       {
         "name": "Estacionamiento",
-        "icon": "ParkingCircle"
+        "icon": "circleParking"
       },
       {
         "name": "Mantenimiento",
@@ -175,6 +175,33 @@ categories_and_sub = [
       {
         "name": "Compra de vehículo",
         "icon": "store"
+      }
+    ]
+  },
+  {
+    "name": "Transporte",
+    "icon": "tramFront",
+    "color": "#00A8D4",
+    "sub_categories": [
+      {
+        "name": "Larga distancia",
+        "icon": "plane"
+      },
+      {
+        "name": "Taxi",
+        "icon": "carTaxiFront"
+      },
+      {
+        "name": "Transporte público",
+        "icon": "busFront"
+      },
+      {
+        "name": "Viajes de negocio",
+        "icon": "briefcaseBusiness"
+      },
+      {
+        "name": "Estacionamiento y casetas",
+        "icon": "towerControl"
       }
     ]
   },
