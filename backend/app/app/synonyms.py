@@ -8,6 +8,7 @@ def get_synonyms():
         'comprar': 'compras',
         'adquisición': 'compras',
         'compra': 'compras',
+        'compras': 'compras',
 
         # Compras - Bebés, niños
         'baby': 'bebés, niños',
@@ -17,6 +18,7 @@ def get_synonyms():
         'niños': 'bebés, niños',
         'bebé': 'bebés, niños',
         'pequeños': 'bebés, niños',
+        'bebés, niños': 'bebés, niños',
 
         # Compras - Casa y jardín
         'home': 'casa y jardín',
@@ -27,6 +29,7 @@ def get_synonyms():
         'casa': 'casa y jardín',
         'jardín': 'casa y jardín',
         'mejoras del hogar': 'casa y jardín',
+        'casa y jardín': 'casa y jardín',
 
         # Compras - Electrónica, accesorios
         'electronics': 'electrónica, accesorios',
@@ -36,6 +39,7 @@ def get_synonyms():
         'accessories': 'electrónica, accesorios',
         'electrónica': 'electrónica, accesorios',
         'accesorios': 'electrónica, accesorios',
+        'electrónica, accesorios': 'electrónica, accesorios',
 
         # Compras - Joyas, accesorios
         'jewelry': 'joyas, accesorios',
@@ -45,6 +49,7 @@ def get_synonyms():
         'joyería': 'joyas, accesorios',
         'joyas': 'joyas, accesorios',
         'accesorios': 'joyas, accesorios',
+        'joyas, accesorios': 'joyas, accesorios',
 
         # Compras - Mascotas, animales
         'pets': 'mascotas, animales',
@@ -53,6 +58,7 @@ def get_synonyms():
         'pet care': 'mascotas, animales',
         'mascotas': 'mascotas, animales',
         'animales': 'mascotas, animales',
+        'mascotas, animales': 'mascotas, animales',
 
         # Compras - Papelería, herramientas
         'stationery': 'papelería, herramientas',
@@ -61,6 +67,7 @@ def get_synonyms():
         'writing supplies': 'papelería, herramientas',
         'papelería': 'papelería, herramientas',
         'herramientas': 'papelería, herramientas',
+        'papelería, herramientas': 'papelería, herramientas',
 
         # Compras - Regalos
         'gifts': 'regalos',
@@ -69,6 +76,7 @@ def get_synonyms():
         'regalo': 'regalos',
         'presente': 'regalos',
         'obsequios': 'regalos',
+        'regalos': 'regalos',
 
         # Compras - Ropa y calzado
         'clothing': 'ropa y calzado',
@@ -78,6 +86,7 @@ def get_synonyms():
         'clothes': 'ropa y calzado',
         'ropa': 'ropa y calzado',
         'calzado': 'ropa y calzado',
+        'ropa y calzado': 'ropa y calzado',
 
         # Compras - Tiempo libre
         'leisure': 'tiempo libre',
@@ -87,6 +96,8 @@ def get_synonyms():
         'tiempo libre': 'tiempo libre',
         'ocio': 'tiempo libre',
         'recreación': 'tiempo libre',
+        'pasatiempos': 'tiempo libre',
+        'tiempo libre': 'tiempo libre',
 
         # Compras - Libros
         'books': 'libros',
@@ -97,6 +108,7 @@ def get_synonyms():
         'lectura': 'libros',
         'novela': 'libros',
         'literatura': 'libros',
+        'libros': 'libros',
 
         # ---------------------------------------------------------
 
@@ -108,6 +120,7 @@ def get_synonyms():
         'comida': 'alimentos y bebidas',
         'bebidas': 'alimentos y bebidas',
         'alimentación': 'alimentos y bebidas',
+        'alimentos y bebidas': 'alimentos y bebidas',
 
         # Alimentos y bebidas - Comestibles, despensa
         'groceries': 'comestibles, despensa',
@@ -118,6 +131,8 @@ def get_synonyms():
         'despensa': 'comestibles, despensa',
         'víveres': 'comestibles, despensa',
         'provisiones': 'comestibles, despensa',
+        'abarrotes': 'comestibles, despensa',
+        'comestibles, despensa': 'comestibles, despensa',
 
         # Alimentos y bebidas - Restaurante, comida rápida
         'restaurant': 'restaurante, comida rápida',
@@ -128,6 +143,7 @@ def get_synonyms():
         'comida rápida': 'restaurante, comida rápida',
         'comida para llevar': 'restaurante, comida rápida',
         'comida rápida': 'restaurante, comida rápida',
+        'restaurante, comida rápida': 'restaurante, comida rápida',
 
         # Alimentos y bebidas - Café
         'coffee': 'café',
@@ -267,6 +283,7 @@ def get_synonyms():
         'mantenimiento': 'mantenimiento, reparaciones',
         'reparaciones': 'mantenimiento, reparaciones',
         'arreglos': 'mantenimiento, reparaciones',
+        'mantenimiento, reparaciones': 'mantenimiento, reparaciones',
 
         # Vivienda - Servicio doméstico
         'domestic service': 'servicio doméstico',
@@ -289,6 +306,7 @@ def get_synonyms():
         'seguridad': 'alarmas y seguridad',
         'sistemas de seguridad': 'alarmas y seguridad',
         'sistemas de alarmas': 'alarmas y seguridad',
+        'alarmas y seguridad': 'alarmas y seguridad',
 
         # ---------------------------------------------------------
 
@@ -353,6 +371,82 @@ def get_synonyms():
 
         # ---------------------------------------------------------
 
+        # Transporte - Transporte
+        'transport': 'transporte',
+        'vehicles': 'transporte',
+        'cars': 'transporte',
+        'bikes': 'transporte',
+        'trucks': 'transporte',
+        'automobiles': 'transporte',
+        'motos': 'transporte',
+        'vehículos': 'transporte',
+        'transporte': 'transporte',
+        'transporte, vehículos': 'transporte',
+
+        # Transporte - Larga distancia
+        'long distance transport': 'larga distancia',
+        'intercity': 'larga distancia',
+        'highway travel': 'larga distancia',
+        'road trip': 'larga distancia',
+        'viaje largo': 'larga distancia',
+        'transporte interurbano': 'larga distancia',
+        'transporte largo': 'larga distancia',
+        'larga distancia': 'larga distancia',
+        'viajes largos': 'larga distancia',
+        'autobús de larga distancia': 'larga distancia',
+
+        # Transporte - Taxi
+        'taxi': 'taxi',
+        'cab': 'taxi',
+        'ride-hailing': 'taxi',
+        'uber': 'taxi',
+        'lyft': 'taxi',
+        'auto de alquiler': 'taxi',
+        'vehículo privado': 'taxi',
+        'taxista': 'taxi',
+        'transporte privado': 'taxi',
+        'transporte en taxi': 'taxi',
+
+        # Transporte - Transporte público
+        'public transport': 'transporte público',
+        'bus': 'transporte público',
+        'metro': 'transporte público',
+        'train': 'transporte público',
+        'subway': 'transporte público',
+        'trolebús': 'transporte público',
+        'autobús público': 'transporte público',
+        'transporte colectivo': 'transporte público',
+        'transporte masivo': 'transporte público',
+        'transporte urbano': 'transporte público',
+        'transporte público': 'transporte público',
+
+        # Transporte - Viajes de negocio
+        'business trip': 'viajes de negocio',
+        'corporate travel': 'viajes de negocio',
+        'work trip': 'viajes de negocio',
+        'business travel': 'viajes de negocio',
+        'viaje de trabajo': 'viajes de negocio',
+        'viaje corporativo': 'viajes de negocio',
+        'viaje de negocios': 'viajes de negocio',
+        'traslado corporativo': 'viajes de negocio',
+        'viaje profesional': 'viajes de negocio',
+        'viajes de negocio': 'viajes de negocio',
+
+        # Transporte - Estacionamiento y casetas
+        'parking': 'estacionamiento y casetas',
+        'parking lot': 'estacionamiento y casetas',
+        'parqueadero': 'estacionamiento y casetas',
+        'garaje': 'estacionamiento y casetas',
+        'casetas de peaje': 'estacionamiento y casetas',
+        'peaje': 'estacionamiento y casetas',
+        'estacionamiento': 'estacionamiento y casetas',
+        'área de estacionamiento': 'estacionamiento y casetas',
+        'peaje de carretera': 'estacionamiento y casetas',
+        'parqueo': 'estacionamiento y casetas',
+        'estacionamiento y casetas': 'estacionamiento y casetas',
+
+        # ---------------------------------------------------------
+
         # Vida y entretenimiento - Vida y entretenimiento
         'life and entertainment': 'vida y entretenimiento',
         'entertainment': 'vida y entretenimiento',
@@ -370,6 +464,7 @@ def get_synonyms():
         'desarrollo': 'educación, desarrollo',
         'formación': 'educación, desarrollo',
         'aprendizaje': 'educación, desarrollo',
+        'educación, desarrollo': 'educación, desarrollo',
 
         # Vida y entretenimiento - Pasatiempos
         'hobbies': 'pasatiempos',
@@ -392,6 +487,7 @@ def get_synonyms():
         'viajes': 'vacaciones, viajes, hoteles',
         'hoteles': 'vacaciones, viajes, hoteles',
         'turismo': 'vacaciones, viajes, hoteles',
+        'vacaciones, viajes, hoteles': 'vacaciones, viajes, hoteles',
 
         # Vida y entretenimiento - Apuestas
         'gambling': 'apuestas',
@@ -409,6 +505,7 @@ def get_synonyms():
         'fiestas': 'diversión y celebraciones',
         'diversiones': 'diversión y celebraciones',
         'celebraciones': 'diversión y celebraciones',
+        'diversión y celebraciones': 'diversión y celebraciones',
 
         # Vida y entretenimiento - Cigarros, tabaco
         'cigarettes': 'cigarros, tabaco',
@@ -417,6 +514,8 @@ def get_synonyms():
         'cigars': 'cigarros, tabaco',
         'cigarros': 'cigarros, tabaco',
         'tabaco': 'cigarros, tabaco',
+        'fumar': 'cigarros, tabaco',
+        'cigarros, tabaco': 'cigarros, tabaco',
 
         # Vida y entretenimiento - Bienestar, belleza
         'well-being': 'bienestar, belleza',
@@ -426,6 +525,9 @@ def get_synonyms():
         'wellness': 'bienestar, belleza',
         'bienestar': 'bienestar, belleza',
         'belleza': 'bienestar, belleza',
+        'salud': 'bienestar, belleza',
+        'cuidado de la piel': 'bienestar, belleza',
+        'bienestar, belleza': 'bienestar, belleza',
 
         # Vida y entretenimiento - Caridad, regalos
         'charity': 'caridad, regalos',
@@ -434,6 +536,8 @@ def get_synonyms():
         'giving': 'caridad, regalos',
         'caridad': 'caridad, regalos',
         'regalos': 'caridad, regalos',
+        'donaciones': 'caridad, regalos',
+        'caridad, regalos': 'caridad, regalos',
 
         # Vida y entretenimiento - Cultura, arte, eventos deportivos
         'culture': 'cultura, arte, eventos deportivos',
@@ -445,6 +549,7 @@ def get_synonyms():
         'arte': 'cultura, arte, eventos deportivos',
         'eventos deportivos': 'cultura, arte, eventos deportivos',
         'espectáculos': 'cultura, arte, eventos deportivos',
+        'cultura, arte, eventos deportivos': 'cultura, arte, eventos deportivos',
 
         # ---------------------------------------------------------
         # Salud y deporte - Salud y deporte
@@ -464,6 +569,7 @@ def get_synonyms():
         'cardio': 'salud y deporte',
         'meditation': 'salud y deporte',
         'crossfit': 'salud y deporte',
+        'salud y deporte': 'salud y deporte',
 
         # Salud y deporte - Deporte, gym
         'weightlifting': 'deporte, gym',
@@ -498,6 +604,7 @@ def get_synonyms():
         'calistenia': 'deporte, gym',
         'gym membership': 'deporte, gym',
         'membresía de gimnasio': 'deporte, gym',
+        'deporte, gym': 'deporte, gym',
 
         # Salud y deporte - Medico
         'doctor': 'medico',
@@ -521,6 +628,11 @@ def get_synonyms():
         'pediatría': 'medico',
         'cardiology': 'medico',
         'cardiología': 'medico',
+        'dermatology': 'medico',
+        'dermatología': 'medico',
+        'gynecology': 'medico',
+        'ginecología': 'medico',
+        'medico': 'medico',
 
         # Salud y deporte - Farmacia
         'pharmacy': 'farmacia',
@@ -559,6 +671,9 @@ def get_synonyms():
         'gafas graduadas': 'optica',
         'eye doctor': 'optica',
         'oftalmólogo': 'optica',
+        'optometrist': 'optica',
+        'optometrista': 'optica',
+        'optica': 'optica',
 
         # Salud y deporte - Dentista
         'dentist': 'dentista',
@@ -590,6 +705,7 @@ def get_synonyms():
         'tarifa mensual': 'suscripciones y servicios',
         'renewal': 'suscripciones y servicios',
         'renovación': 'suscripciones y servicios',
+        'suscripciones y servicios': 'suscripciones y servicios',
 
         # Suscripciones y servicios - Compras y servicios online
         'online shopping': 'compras y servicios online',
@@ -603,6 +719,7 @@ def get_synonyms():
         'home delivery': 'compras y servicios online',
         'entrega a domicilio': 'compras y servicios online',
         'online': 'compras y servicios online',
+        'compras y servicios online': 'compras y servicios online',
 
         # Suscripciones y servicios - Celular
         'cellphone': 'celular',
@@ -631,6 +748,7 @@ def get_synonyms():
         'audiobook': 'entretenimiento digital',
         'libro de audio': 'entretenimiento digital',
         'podcasts': 'entretenimiento digital',
+        'entretenimiento digital': 'entretenimiento digital',
 
         # Suscripciones y servicios - Internet, televisión, telefonía
         'internet': 'internet, televisión, telefonía',
@@ -644,6 +762,7 @@ def get_synonyms():
         'landline': 'internet, televisión, telefonía',
         'línea fija': 'internet, televisión, telefonía',
         'tv': 'internet, televisión, telefonía',
+        'internet, televisión, telefonía': 'internet, televisión, telefonía',
 
         # Suscripciones y servicios - Software, aplicaciones, juegos
         'software': 'software, aplicaciones, juegos',
@@ -655,7 +774,8 @@ def get_synonyms():
         'juegos para PC': 'software, aplicaciones, juegos',
         'app subscription': 'software, aplicaciones, juegos',
         'suscripción a aplicaciones': 'software, aplicaciones, juegos',
-        'app': 'internet, televisión, telefonía',
+        'app': 'software, aplicaciones, juegos',
+        'software, aplicaciones, juegos': 'software, aplicaciones, juegos',
 
         # Suscripciones y servicios - Electricidad
         'electricity': 'electricidad',
@@ -718,6 +838,7 @@ def get_synonyms():
         'cargo por servicio': 'cargos, honorarios',
         'commission': 'cargos, honorarios',
         'comisión': 'cargos, honorarios',
+        'cargos, honorarios': 'cargos, honorarios',
 
         # Gastos financieros - Asesores, abogados
         'advisor': 'asesores, abogados',
@@ -728,6 +849,7 @@ def get_synonyms():
         'servicios legales': 'asesores, abogados',
         'consultant': 'asesores, abogados',
         'consultor': 'asesores, abogados',
+        'asesores, abogados': 'asesores, abogados',
 
         # Gastos financieros - Impuestos
         'tax': 'impuestos',
@@ -740,6 +862,9 @@ def get_synonyms():
         'property tax': 'impuestos',
         'impuesto predial': 'impuestos',
         'predial': 'impuestos',
+        'tax return': 'impuestos',
+        'declaración de impuestos': 'impuestos',
+        'impuestos': 'impuestos',
 
         # Gastos financieros - Multas, licencias
         'fines': 'multas, licencias',
@@ -750,6 +875,8 @@ def get_synonyms():
         'multa de tráfico': 'multas, licencias',
         'renewal fee': 'multas, licencias',
         'cargo de renovación': 'multas, licencias',
+        'penalty': 'multas, licencias',
+        'multas, licencias': 'multas, licencias',
 
         # Gastos financieros - Tramites y registro civil
         'civil registry': 'tramites y registro civil',
@@ -760,6 +887,7 @@ def get_synonyms():
         'certificado de nacimiento': 'tramites y registro civil',
         'marriage license': 'tramites y registro civil',
         'licencia de matrimonio': 'tramites y registro civil',
+        'tramites y registro civil': 'tramites y registro civil',
 
         # Gastos financieros - Préstamos
         'loan': 'préstamos',
@@ -771,6 +899,7 @@ def get_synonyms():
         'credit line': 'préstamos',
         'línea de crédito': 'préstamos',
         'crédito': 'préstamos',
+        'préstamos': 'préstamos',
 
         # Gastos financieros - Pensión familiar
         'family pension': 'pensión familiar',
@@ -791,6 +920,7 @@ def get_synonyms():
         'cuidado de la salud': 'seguro social, salud',
         'medical insurance': 'seguro social, salud',
         'seguro médico': 'seguro social, salud',
+        'seguro social, salud': 'seguro social, salud',
 
         # ---------------------------------------------------------
         # Inversiones - Inversiones
@@ -803,6 +933,7 @@ def get_synonyms():
         'activos': 'inversiones',
         'financial growth': 'inversiones',
         'crecimiento financiero': 'inversiones',
+        'inversiones': 'inversiones',
 
         # Inversiones - Coleccionables
         'collectibles': 'coleccionables',
@@ -870,6 +1001,7 @@ def get_synonyms():
         'automóviles de lujo': 'vehículos, propiedades',
         'investment property': 'vehículos, propiedades',
         'propiedad de inversión': 'vehículos, propiedades',
+        'vehículos, propiedades': 'vehículos, propiedades',
 
         # ---------------------------------------------------------
         # Ingresos - Ingresos
@@ -889,6 +1021,9 @@ def get_synonyms():
         'nómina': 'salarios',
         'monthly income': 'salarios',
         'ingreso mensual': 'salarios',
+        'hourly wage': 'salarios',
+        'salario por hora': 'salarios',
+        'salarios': 'salarios',
 
         # Ingresos - Rembolsos
         'reimbursement': 'reembolsos',
@@ -897,6 +1032,7 @@ def get_synonyms():
         'devolución': 'reembolsos',
         'expense claim': 'reembolsos',
         'reclamación de gastos': 'reembolsos',
+        'reembolsos': 'reembolsos',
 
         # Ingresos - Lotería, juegos de azar
         'lottery': 'lotería, juegos de azar',
@@ -907,6 +1043,7 @@ def get_synonyms():
         'casino': 'lotería, juegos de azar',
         'ganancias de casino': 'lotería, juegos de azar',
         'casino': 'lotería, juegos de azar',
+        'lotería, juegos de azar': 'lotería, juegos de azar',
 
         # Ingresos - Rendimientos, inversiones
         'returns': 'rendimientos, inversiones',
@@ -917,6 +1054,8 @@ def get_synonyms():
         'dividendos': 'rendimientos, inversiones',
         'capital gains': 'rendimientos, inversiones',
         'ganancias de capital': 'rendimientos, inversiones',
+        'interest income': 'rendimientos, inversiones',
+        'ingresos por intereses': 'rendimientos, inversiones',
 
         # Ingresos - Regalos
         'gift': 'regalos',
@@ -927,6 +1066,7 @@ def get_synonyms():
         'obsequio': 'regalos',
         'family gift': 'regalos',
         'regalo familiar': 'regalos',
+        'regalos': 'regalos',
 
         # Ingresos - Préstamos
         'loan': 'préstamos',
@@ -935,6 +1075,7 @@ def get_synonyms():
         'dinero prestado': 'préstamos',
         'lending': 'préstamos',
         'préstamo recibido': 'préstamos',
+        'préstamos': 'préstamos',
 
         # Ingresos - Pensiones
         'pension': 'pensiones',
@@ -943,6 +1084,7 @@ def get_synonyms():
         'ingreso de jubilación': 'pensiones',
         'retirement funds': 'pensiones',
         'fondos de jubilación': 'pensiones',
+        'pensiones': 'pensiones',
 
         # Ingresos - Ventas
         'sales': 'ventas',
@@ -959,6 +1101,7 @@ def get_synonyms():
         'impuestos': 'devolución impuestos',
         'tax return': 'devolución impuestos',
         'reembolso fiscal': 'devolución impuestos',
+        'devolución impuestos': 'devolución impuestos',
 
         # Ingresos - Rentas
         'rental income': 'rentas',
@@ -968,6 +1111,7 @@ def get_synonyms():
         'leasing': 'rentas',
         'arrendamiento': 'rentas',
         'renta': 'rentas',
+        'rentas': 'rentas',
 
         # Ingresos - Subvenciones y ayudas
         'grant': 'subvenciones y ayudas',
@@ -978,4 +1122,5 @@ def get_synonyms():
         'apoyo financiero': 'subvenciones y ayudas',
         'government aid': 'subvenciones y ayudas',
         'ayuda gubernamental': 'subvenciones y ayudas',
+        'subvenciones y ayudas': 'subvenciones y ayudas',
 }
