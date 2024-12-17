@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from .account import Account  # noqa: F401
     from .category import Category  # noqa: F401
     from .subcategory import Subcategory  # noqa: F401
-
+    from .imports import Import  # noqa: F401
 
 class User(Base):
     id: int = Column(Integer, primary_key=True, index=True)
@@ -40,3 +40,4 @@ class User(Base):
     accounts: List["Account"] = relationship("Account", back_populates="owner", cascade="all, delete-orphan")
     categories: List["Category"] = relationship("Category", back_populates="owner", cascade="all, delete-orphan")
     subcategories: List["Subcategory"] = relationship("Subcategory", back_populates="owner", cascade="all, delete-orphan")
+    imports: List["Import"] = relationship("Import", back_populates="owner", cascade="all, delete-orphan")

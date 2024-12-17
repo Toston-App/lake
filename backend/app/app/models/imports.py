@@ -29,3 +29,5 @@ class Import(Base):
     sites_created: int = Column(Integer)
     unmatched_categories: int = Column(Integer)
     total_rows_processed: int = Column(Integer)
+    owner = relationship("User", back_populates="imports")
+    accounts = relationship("Account", back_populates="import_source", cascade="all, delete-orphan")
