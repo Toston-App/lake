@@ -46,7 +46,7 @@ async def read_transfers(
         if type(date) == str:
             raise HTTPException(status_code=400, detail="Date must be a date in the format YYYY-MM-DD")
 
-        transfers = await crud.transfer.get_multi_by_date(db=db, start_date=date, end_date=date)
+        transfers = await crud.transfer.get_multi_by_date(db=db, owner_id=current_user.id, start_date=date, end_date=date)
 
     if date_filter_type == DateFilterType.week:
         if type(date) == str:
@@ -54,7 +54,7 @@ async def read_transfers(
 
         end_date = date + timedelta(days=7)
 
-        transfers = await crud.transfer.get_multi_by_date(db=db, start_date=date, end_date=end_date)
+        transfers = await crud.transfer.get_multi_by_date(db=db, owner_id=current_user.id, start_date=date, end_date=end_date)
 
     if date_filter_type == DateFilterType.month:
         if isinstance(date, Date):
@@ -66,7 +66,7 @@ async def read_transfers(
 
         end_date =  datetime.strptime(f"{start_date.year}-{start_date.month}-{calendar.monthrange(start_date.year, start_date.month)[1]}", "%Y-%m-%d").date()
 
-        transfers = await crud.transfer.get_multi_by_date(db=db, start_date=start_date, end_date=end_date)
+        transfers = await crud.transfer.get_multi_by_date(db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date)
 
     if date_filter_type == DateFilterType.quarter:
         if isinstance(date, Date):
@@ -85,7 +85,7 @@ async def read_transfers(
         start_date = datetime.strptime(f"{year}-{(quarterNum - 1) * 3 + 1}-01", "%Y-%m-%d").date()
         end_date =  datetime.strptime(f"{year}-{quarterNum * 3}-{calendar.monthrange(int(year), quarterNum * 3)[1]}", "%Y-%m-%d").date()
 
-        transfers = await crud.transfer.get_multi_by_date(db=db, start_date=start_date, end_date=end_date)
+        transfers = await crud.transfer.get_multi_by_date(db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date)
 
     if date_filter_type == DateFilterType.year:
         if isinstance(date, Date) or not "x" in date or len(date.split("x")[0]) != 4 :
@@ -98,7 +98,7 @@ async def read_transfers(
         except ValueError:
             raise HTTPException(status_code=400, detail="Date must be a date in the format YYYYx")
 
-        transfers = await crud.transfer.get_multi_by_date(db=db, start_date=start_date, end_date=end_date)
+        transfers = await crud.transfer.get_multi_by_date(db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date)
 
     if date_filter_type == DateFilterType.range:
         if(date_filter_type == DateFilterType.range and to is None):
@@ -110,7 +110,7 @@ async def read_transfers(
         if date > to:
             raise HTTPException(status_code=400, detail="Start date must be before end date")
 
-        transfers = await crud.transfer.get_multi_by_date(db=db, start_date=date, end_date=to)
+        transfers = await crud.transfer.get_multi_by_date(db=db, owner_id=current_user.id, start_date=date, end_date=to)
 
     return transfers
 

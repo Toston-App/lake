@@ -92,12 +92,13 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
         return result.scalars().all()
 
     async def get_multi_by_date(
-            self, db: AsyncSession, *, start_date: Date = None, end_date: str = None
+            self, db: AsyncSession, *, owner_id: int, start_date: Date = None, end_date: str = None
     ) -> List[Expense]:
         query = select(self.model)
 
         query = query.where(
             and_(
+                self.model.owner_id == owner_id,
                 cast(self.model.date, Date) >= start_date,
                 cast(self.model.date, Date) <= end_date
             )

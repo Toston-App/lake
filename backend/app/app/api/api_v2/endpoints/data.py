@@ -40,11 +40,11 @@ async def read_all_expenses(
 async def all_querys(db, start_date, end_date, type="days", time_difference = 0, owner_id = None):
     reldelta = relativedelta(days=time_difference) if type == "days" else relativedelta(months=time_difference)
 
-    incomes_actual_task = crud.income.get_multi_by_date(db=db, start_date=start_date, end_date=end_date)
-    incomes_past_task = crud.income.get_multi_by_date(db=db, start_date=start_date  - reldelta, end_date=end_date  - reldelta)
-    expenses_actual_task = crud.expense.get_multi_by_date(db=db, start_date=start_date, end_date=end_date)
-    expenses_past_task = crud.expense.get_multi_by_date(db=db, start_date=start_date  - reldelta, end_date=end_date  - reldelta)
-    # transfers_task = crud.transfer.get_multi_by_date(db=db, start_date=start_date, end_date=end_date)
+    incomes_actual_task = crud.income.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date, end_date=end_date)
+    incomes_past_task = crud.income.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date  - reldelta, end_date=end_date  - reldelta)
+    expenses_actual_task = crud.expense.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date, end_date=end_date)
+    expenses_past_task = crud.expense.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date  - reldelta, end_date=end_date  - reldelta)
+    # transfers_task = crud.transfer.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date, end_date=end_date)
 
     accounts_task = crud.account.get_multi_by_owner(db=db, owner_id=owner_id)
     places_task = crud.place.get_multi_by_owner(db=db, owner_id=owner_id)
