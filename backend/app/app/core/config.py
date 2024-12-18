@@ -105,6 +105,8 @@ class Settings(BaseSettings):
     DOCS_USER: str = "user"
     DOCS_PASSWORD: str = "password"
 
+    OPENAI_API_KEY: str
+
     class Config:
         case_sensitive = True
 
