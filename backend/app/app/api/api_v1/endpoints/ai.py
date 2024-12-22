@@ -1,10 +1,11 @@
 from typing import Any
 
-import tempfile
 import os
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, status
-from sqlalchemy.ext.asyncio import AsyncSession
+import tempfile
 import filetype
+import logging
+from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, status
 
 from app import crud, models, schemas
 from app.api import deps
@@ -14,6 +15,12 @@ from app.core.config import settings
 router = APIRouter()
 ocr = OCRHelper(settings.OPENAI_API_KEY)
 
+logging.basicConfig(
+    filename='ocr_requests.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # TODO: Validate size: https://github.com/fastapi/fastapi/issues/362
 def validate_file_type(file: UploadFile) -> None:
@@ -47,6 +54,8 @@ async def ocr_image(
     image: UploadFile = File(...),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
+    logging.info(f"OCR request received - User ID: {current_user.id} - File: {image.filename}")
+
     validate_file_type(image)
 
     try:
@@ -61,8 +70,13 @@ async def ocr_image(
 
             # Remove temporary file
             os.unlink(temp_file.name)
+
+            logging.info(f"OCR request completed - User ID: {current_user.id} - File: {image.filename}")
+
             return parsed_transaction
     except Exception as e:
+        logging.error(f"OCR request failed - User ID: {current_user.id} - File: {image.filename} - Error: {str(e)}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=e

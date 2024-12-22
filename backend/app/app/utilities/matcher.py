@@ -29,7 +29,6 @@ def find_cat_match(name:str, categories: List[Category], threshold=80):
 
 def find_subcat_match(name:str, category_id: int, categories: List[Category], threshold=80):
     name_normalized = get_synonym(name)
-    print("🚀 ~ name_normalized:", name_normalized)
     best_match = None
     best_score = 0
 
