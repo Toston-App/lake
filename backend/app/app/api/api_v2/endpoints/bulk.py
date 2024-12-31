@@ -3,8 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
-from app.api.api_v1.endpoints.incomes import delete_incomes_bulk
-from app.api.api_v1.endpoints.expenses import delete_expenses_bulk
+from app.api.api_v1.endpoints.incomes import delete_incomes_bulk, create_incomes_bulk
+from app.api.api_v1.endpoints.expenses import delete_expenses_bulk, create_expenses_bulk
 from app.api import deps
 
 router = APIRouter()
@@ -59,6 +59,36 @@ async def bulk_delete(
         delete_function=delete_expenses_bulk,
         current_user=current_user,
         entity_type="expenses"
+    )
+
+    return {
+        "incomes": incomes_result,
+        "expenses": expenses_result,
+    }
+
+@router.post("/", response_model=schemas.BulkCreationsResponse)
+async def bulk_create(
+    db: AsyncSession = Depends(deps.async_get_db),
+    to_create: schemas.BulkCreate = None,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Create incomes and expenses in bulk by id."""
+    if not to_create:
+        raise HTTPException(
+            status_code=400,
+            detail="No data provided for deletion"
+        )
+
+    incomes_result = await create_incomes_bulk(
+        db=db,
+        incomes_in=to_create.incomes,
+        current_user=current_user
+    )
+
+    expenses_result = await create_expenses_bulk(
+        db=db,
+        expenses_in=to_create.expenses,
+        current_user=current_user
     )
 
     return {
