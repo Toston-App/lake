@@ -32,7 +32,7 @@ async def process_bulk_deletion(
     except Exception as e:
         return []
 
-@router.delete("/", response_model=schemas.BulkDeletionsResponse)
+@router.delete("", response_model=schemas.BulkDeletionsResponse)
 async def bulk_delete(
     db: AsyncSession = Depends(deps.async_get_db),
     to_delete: schemas.BulkDelete = None,
@@ -66,7 +66,7 @@ async def bulk_delete(
         "expenses": expenses_result,
     }
 
-@router.post("/", response_model=schemas.BulkCreationsResponse)
+@router.post("", response_model=schemas.BulkCreationsResponse)
 async def bulk_create(
     db: AsyncSession = Depends(deps.async_get_db),
     to_create: schemas.BulkCreate = None,
