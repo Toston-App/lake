@@ -7,7 +7,8 @@ from pydantic import BaseModel
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.encoders import jsonable_encoder
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, RateLimitError
+
 
 from app import crud, models, schemas
 from app.utilities.matcher import find_cat_match, find_subcat_match
@@ -73,6 +74,10 @@ class OCRHelper:
                 max_tokens=1000
             )
             return response.choices[0].message.content
+        except RateLimitError as e:
+            if "insufficient_quota" in str(e):
+                return "Insufficient API credits"
+            return "Rate limit exceeded"
         except Exception as e:
             raise Exception(f"Error analyzing image: {str(e)}")
 

@@ -65,19 +65,29 @@ async def ocr_image(
             temp_file.write(contents)
             temp_file.flush()
 
-            transaction = await ocr.analyze_image(temp_file.name)
-            parsed_transaction = await ocr.parse_response(db=db, owner_id=current_user.id, response_text=transaction)
+            try:
+                transaction = await ocr.analyze_image(temp_file.name)
 
-            # Remove temporary file
-            os.unlink(temp_file.name)
+                if transaction == "Insufficient API credits":
+                    logging.info(f"OCR request failed - User ID: {current_user.id} - File: {image.filename} - Error: Insufficient API credits")
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail="Insufficient API credits",
+                    )
 
-            logging.info(f"OCR request completed - User ID: {current_user.id} - File: {image.filename}")
+                parsed_transaction = await ocr.parse_response(db=db, owner_id=current_user.id, response_text=transaction)
+                logging.info(f"OCR request completed - User ID: {current_user.id} - File: {image.filename}")
+                return parsed_transaction
 
-            return parsed_transaction
+            finally:
+                # Remove temporary file
+                os.unlink(temp_file.name)
+
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"OCR request failed - User ID: {current_user.id} - File: {image.filename} - Error: {str(e)}")
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=e
+            detail=str(e)
         )
