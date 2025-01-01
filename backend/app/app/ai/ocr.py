@@ -86,15 +86,28 @@ class OCRHelper:
         try:
             user_categories = jsonable_encoder(await crud.category.get_multi_by_owner(db=db, owner_id=owner_id))
             transactions = json.loads(response_text)["transactions"]
+            count = 0
 
             for transaction in transactions:
+                # add id
+                transaction["id"] = count
+                count += 1
+
                 if "category" in transaction:
                     cat_match = find_cat_match(transaction["category"], user_categories)
-                    transaction["category"] = cat_match['id'] if cat_match else None
+                    transaction["category_id"] = cat_match['id'] if cat_match else None
 
                 if "subcategory" in transaction:
                     subcat_match = find_subcat_match(transaction["subcategory"], transaction["category"], user_categories)
-                    transaction["subcategory"] = subcat_match['id'] if subcat_match else None
+
+                    if subcat_match is None and transaction["category_id"]:
+                        for cat in user_categories:
+                            if cat["id"] == transaction["category_id"]:
+                                subcat_match = cat['subcategories'][0]
+                                break
+
+
+                    transaction["subcategory_id"] = subcat_match['id'] if subcat_match else None
 
                 # Ensure amount is float
                 if "amount" in transaction:
