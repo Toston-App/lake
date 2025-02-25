@@ -10,6 +10,7 @@ The backup system uses [docker-volume-backup](https://github.com/offen/docker-vo
 2. Upload backups to Cloudflare R2 storage (S3-compatible)
 3. Maintain a local backup copy
 4. Automatically prune old backups based on retention policy
+5. Send notifications to Telegram about backup status
 
 ## Configuration
 
@@ -41,6 +42,10 @@ AWS_S3_BUCKET_NAME=your_backup_bucket_name
 AWS_DEFAULT_REGION=auto
 AWS_S3_PATH=postgres-backups/
 
+# Telegram Notifications
+TELEGRAM_NOTIFICATION_URL=telegram://bot_token@telegram/?chat_id=chat_id
+BACKUP_NOTIFICATION_LEVEL=all  # Options: all, warning, error
+
 # Optional: Local backup path (defaults to ./backups if not set)
 BACKUP_ARCHIVE_PATH=./backups
 
@@ -65,6 +70,30 @@ BACKUP_CRON_EXPRESSION=0 4 * * *
 # Keep backups for 30 days
 BACKUP_RETENTION_DAYS=30
 ```
+
+### 4. Telegram Notifications Setup
+
+To receive notifications about your backups via Telegram:
+
+1. Create a Telegram bot using [@BotFather](https://t.me/botfather) and get your bot token
+2. Get your chat ID (you can use [@userinfobot](https://t.me/userinfobot) or other methods)
+3. Configure the Telegram notification URL in your `.env` file:
+
+```
+TELEGRAM_NOTIFICATION_URL=telegram://bot_token@telegram/?chat_id=chat_id
+```
+
+Replace `bot_token` with your actual bot token and `chat_id` with your chat ID.
+
+You can also configure the notification level:
+```
+BACKUP_NOTIFICATION_LEVEL=all  # Get notifications for all events
+```
+
+Available notification levels:
+- `all`: Receive notifications for all events (success, warnings, errors)
+- `warning`: Only receive notifications for warnings and errors
+- `error`: Only receive notifications for errors
 
 ## Restore from Backup
 
@@ -100,6 +129,7 @@ The backup system supports additional features that can be configured in your `.
 - Compression level adjustment
 - Backup encryption
 - Custom backup paths
+- Notifications (Telegram, Discord, Slack, etc.)
 
 ## Testing Backups
 

@@ -30,6 +30,10 @@ services:
       - db
     env_file:
       - .env
+    environment:
+      # Enable notification settings from environment variables
+      - NOTIFICATION_URLS=${TELEGRAM_NOTIFICATION_URL:-}
+      - NOTIFICATION_LEVEL=${BACKUP_NOTIFICATION_LEVEL:-warning}
     volumes:
       - postgres_data:/backup/postgres:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
