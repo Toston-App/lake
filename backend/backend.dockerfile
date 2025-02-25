@@ -6,6 +6,8 @@ RUN pip install --no-cache-dir uvicorn[standard]==0.18.3
 RUN pip install --no-cache-dir gunicorn==20.1.0
 RUN pip install --no-cache-dir pandas==2.2.2
 RUN pip install --no-cache-dir fuzzywuzzy==0.18.0
+RUN pip install --no-cache-dir filetype==1.2.0
+RUN pip install --no-cache-dir openai==1.64.0
 
 EXPOSE 80
 
