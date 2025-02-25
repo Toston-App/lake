@@ -21,21 +21,42 @@ Before using the backup system, you need to set up Cloudflare R2:
 2. Create a new R2 bucket for your backups
 3. Generate API keys (Access Key ID and Secret Access Key) with appropriate permissions
 
-### 2. Configure `backup.env`
+### 2. Configure Your .env File
 
-Edit the `backup.env` file and update the following variables:
+Add the following variables to your existing `.env` file:
 
 ```
-# Replace with your actual Cloudflare R2 credentials
+# Backup Settings
+BACKUP_CRON_EXPRESSION=0 4 * * *
+BACKUP_FILENAME=postgres-backup-%Y-%m-%dT%H-%M-%S.tar.gz
+BACKUP_RETENTION_DAYS=30
+BACKUP_PRUNING_PREFIX=postgres-backup-
+BACKUP_STOP_CONTAINER_LABEL=docker-volume-backup.stop-during-backup
+
+# Cloudflare R2 Configuration (S3 compatible)
 AWS_ACCESS_KEY_ID=your_cloudflare_r2_access_key_id
 AWS_SECRET_ACCESS_KEY=your_cloudflare_r2_secret_access_key
 AWS_ENDPOINT=https://your_account_id.r2.cloudflarestorage.com
 AWS_S3_BUCKET_NAME=your_backup_bucket_name
+AWS_DEFAULT_REGION=auto
+AWS_S3_PATH=postgres-backups/
+
+# Optional: Local backup path (defaults to ./backups if not set)
+BACKUP_ARCHIVE_PATH=./backups
+
+# Optional: set compression level
+# BACKUP_COMPRESSION=gzip
+# BACKUP_COMPRESSION_LEVEL=9
+
+# Optional: set encryption if needed
+# BACKUP_ENCRYPTION_KEY=your_encryption_key
 ```
+
+Make sure your `.env` file is properly excluded from your Git repository (add it to `.gitignore` if not already there).
 
 ### 3. Backup Schedule and Retention
 
-By default, backups run daily at 4:00 AM and are kept for 30 days. You can modify these settings in the `backup.env` file:
+By default, backups run daily at 4:00 AM and are kept for 30 days. You can modify these settings in the `.env` file:
 
 ```
 # Run at 4 AM daily (cron syntax)
@@ -74,13 +95,11 @@ To restore from a backup:
 
 ## Additional Options
 
-The backup system supports additional features that are commented out in the `backup.env` file:
+The backup system supports additional features that can be configured in your `.env` file:
 
 - Compression level adjustment
 - Backup encryption
 - Custom backup paths
-
-Uncomment and configure these options as needed.
 
 ## Testing Backups
 
