@@ -38,7 +38,7 @@ BACKUP_STOP_DURING_BACKUP_LABEL=docker-volume-backup.stop-during-backup
 # Cloudflare R2 Configuration (S3 compatible)
 AWS_ACCESS_KEY_ID=your_cloudflare_r2_access_key_id
 AWS_SECRET_ACCESS_KEY=your_cloudflare_r2_secret_access_key
-AWS_ENDPOINT=https://your_account_id.r2.cloudflarestorage.com
+AWS_ENDPOINT=your_account_id.r2.cloudflarestorage.com
 AWS_S3_BUCKET_NAME=your_backup_bucket_name
 AWS_DEFAULT_REGION=auto
 AWS_S3_PATH=postgres-backups/
