@@ -16,6 +16,24 @@ services:
       - .env
     environment:
       - PGDATA=/var/lib/postgresql/data/pgdata
+    labels:
+      # This means the container will be stopped during backup to ensure
+      # backup integrity.
+      - docker-volume-backup.stop-during-backup=true
+
+  backup:
+    image: offen/docker-volume-backup:latest
+    restart: always
+    networks:
+      - app-network
+    depends_on:
+      - db
+    env_file:
+      - backup.env
+    volumes:
+      - postgres_data:/backup/postgres:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${BACKUP_ARCHIVE_PATH:-./backups}:/archive
 
   pgadmin:
     image: dpage/pgadmin4:latest
