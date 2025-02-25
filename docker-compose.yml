@@ -33,11 +33,12 @@ services:
     environment:
       # Enable notification settings from environment variables
       - NOTIFICATION_URLS=${TELEGRAM_NOTIFICATION_URL:-}
-      - NOTIFICATION_LEVEL=${BACKUP_NOTIFICATION_LEVEL:-warning}
+      - NOTIFICATION_LEVEL=${BACKUP_NOTIFICATION_LEVEL:-error}
     volumes:
       - postgres_data:/backup/postgres:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${BACKUP_ARCHIVE_PATH:-./backups}:/archive
+      # Local path to store the backup archives
+      # - ${BACKUP_ARCHIVE_PATH:-./backups}:/archive
 
   pgadmin:
     image: dpage/pgadmin4:latest

@@ -28,11 +28,12 @@ Add the following variables to your existing `.env` file:
 
 ```
 # Backup Settings
+# Cron expression on UTC time zone
 BACKUP_CRON_EXPRESSION=0 4 * * *
 BACKUP_FILENAME=postgres-backup-%Y-%m-%dT%H-%M-%S.tar.gz
 BACKUP_RETENTION_DAYS=30
 BACKUP_PRUNING_PREFIX=postgres-backup-
-BACKUP_STOP_CONTAINER_LABEL=docker-volume-backup.stop-during-backup
+BACKUP_STOP_DURING_BACKUP_LABEL=docker-volume-backup.stop-during-backup
 
 # Cloudflare R2 Configuration (S3 compatible)
 AWS_ACCESS_KEY_ID=your_cloudflare_r2_access_key_id
@@ -43,10 +44,11 @@ AWS_DEFAULT_REGION=auto
 AWS_S3_PATH=postgres-backups/
 
 # Telegram Notifications
-TELEGRAM_NOTIFICATION_URL=telegram://bot_token@telegram/?chat_id=chat_id
-BACKUP_NOTIFICATION_LEVEL=all  # Options: all, warning, error
+TELEGRAM_NOTIFICATION_URL=telegram://bot_token@telegram/?chats=chat_id
+# info for all events, even successful backups
+BACKUP_NOTIFICATION_LEVEL=error  # Options: info, error
 
-# Optional: Local backup path (defaults to ./backups if not set)
+# Local backup path. Uncomment docker-compose.yml to use local backup
 BACKUP_ARCHIVE_PATH=./backups
 
 # Optional: set compression level
@@ -101,7 +103,7 @@ To restore from a backup:
 
 1. Stop the running services:
    ```
-   docker-compose down
+   docker compose down
    ```
 
 2. Download the desired backup file from Cloudflare R2
@@ -119,7 +121,7 @@ To restore from a backup:
 
 5. Start the services again:
    ```
-   docker-compose up -d
+   docker compose up -d
    ```
 
 ## Additional Options
@@ -136,11 +138,11 @@ The backup system supports additional features that can be configured in your `.
 To manually trigger a backup:
 
 ```
-docker-compose exec backup /bin/backup
+docker compose exec backup backup
 ```
 
 To check backup logs:
 
 ```
-docker-compose logs backup
-``` 
+docker compose logs backup
+```
