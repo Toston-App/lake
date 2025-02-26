@@ -1,10 +1,8 @@
-
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-
 
 
 from app.db.base_class import Base

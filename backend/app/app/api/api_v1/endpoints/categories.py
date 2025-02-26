@@ -12,10 +12,10 @@ router = APIRouter()
 
 @router.get("", response_model=List[schemas.Category])
 async def read_categories(
-        db: AsyncSession = Depends(deps.async_get_db),
-        skip: int = 0,
-        limit: int = 100,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(deps.async_get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Retrieve categories.
@@ -29,12 +29,13 @@ async def read_categories(
 
     return categories
 
+
 @router.post("", response_model=schemas.Category)
 async def create_category(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        category_in: schemas.CategoryCreate,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    category_in: schemas.CategoryCreate,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Create new category.
@@ -47,10 +48,10 @@ async def create_category(
 
 @router.get("/{id}", response_model=schemas.Category)
 async def read_category(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        id: int,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get category by ID.
@@ -58,18 +59,20 @@ async def read_category(
     category = await crud.category.get(db=db, id=id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    if not crud.user.is_superuser(current_user) and (category.owner_id != current_user.id):
+    if not crud.user.is_superuser(current_user) and (
+        category.owner_id != current_user.id
+    ):
         raise HTTPException(status_code=400, detail="Not enough permissions")
     return category
 
 
 @router.put("/{id}", response_model=schemas.Category)
 async def update_category(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        id: int,
-        category_in: schemas.CategoryUpdate,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    id: int,
+    category_in: schemas.CategoryUpdate,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Update an category.
@@ -86,10 +89,10 @@ async def update_category(
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_category(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        id: int,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Delete an category.
@@ -97,7 +100,7 @@ async def delete_category(
     category = await read_category(db=db, id=id, current_user=current_user)
 
     if category.is_default:
-            return schemas.DeletionResponse(message=f"This item can not being deleted")
+        return schemas.DeletionResponse(message=f"This item can not being deleted")
 
     category = await crud.category.remove(db=db, id=id)
 

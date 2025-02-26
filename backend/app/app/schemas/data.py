@@ -7,7 +7,7 @@ from pydantic import BaseModel, validator, root_validator
 # Shared properties
 class DataBase(BaseModel):
     description: Optional[str] = None
-    amount : Optional[float] = None
+    amount: Optional[float] = None
     date: Optional[date] = None
     account_id: Optional[int] = None
     category_id: Optional[int] = None
@@ -17,11 +17,10 @@ class DataBase(BaseModel):
     # Fix the amount to 2 decimal places
     @root_validator
     def round_amount(cls, values):
-        amount = values.get('amount')
+        amount = values.get("amount")
         if amount is not None:
-            values['amount'] = round(amount, 2)
+            values["amount"] = round(amount, 2)
         return values
-
 
     # Validate that the amount is positive
     @validator("amount", pre=True, always=True)
@@ -30,10 +29,11 @@ class DataBase(BaseModel):
             raise ValueError("Amount must be positive")
         return v
 
+
 # Properties to receive on Data creation
 class DataCreate(DataBase):
     amount: float
-    date : Optional[str] = None
+    date: Optional[str] = None
 
 
 # Properties to receive on Data update
@@ -61,6 +61,7 @@ class Data(DataInDBBase):
 # Properties properties stored in DB
 class DataInDB(DataInDBBase):
     pass
+
 
 class DeletionResponse(BaseModel):
     message: str

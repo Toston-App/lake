@@ -19,6 +19,7 @@ class TransactionType(str, Enum):
     INCOME = "income"
     TRANSFER = "transfer"
 
+
 class Transaction(BaseModel):
     type: TransactionType
     amount: float
@@ -28,6 +29,7 @@ class Transaction(BaseModel):
     place: Optional[str]
     description: Optional[str]
 
+
 class OCRHelper:
     def __init__(self, api_key: str):
         self.client = AsyncOpenAI(api_key=api_key)
@@ -35,9 +37,11 @@ class OCRHelper:
     def encode_image(self, image_path: str) -> str:
         """Convert image to base64 string"""
         with open(image_path, "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode('utf-8')
+            return base64.b64encode(image_file.read()).decode("utf-8")
 
-    async def analyze_image(self, image_path: str, model: str = "gpt-4o-mini", json: bool = True) -> str:
+    async def analyze_image(
+        self, image_path: str, model: str = "gpt-4o-mini", json: bool = True
+    ) -> str:
         """Analyze image using OpenAI Vision API"""
         base64_image = self.encode_image(image_path)
 
@@ -66,12 +70,12 @@ class OCRHelper:
                                 "type": "image_url",
                                 "image_url": {
                                     "url": f"data:image/jpeg;base64,{base64_image}",
-                                }
-                            }
-                        ]
+                                },
+                            },
+                        ],
                     }
                 ],
-                max_tokens=1000
+                max_tokens=1000,
             )
             return response.choices[0].message.content
         except RateLimitError as e:
@@ -81,10 +85,17 @@ class OCRHelper:
         except Exception as e:
             raise Exception(f"Error analyzing image: {str(e)}")
 
-    async def parse_response(self, db: AsyncSession, owner_id: int, response_text: str,) -> Dict[str, Any]:
+    async def parse_response(
+        self,
+        db: AsyncSession,
+        owner_id: int,
+        response_text: str,
+    ) -> Dict[str, Any]:
         """Parse OpenAI response and match categories with synonyms"""
         try:
-            user_categories = jsonable_encoder(await crud.category.get_multi_by_owner(db=db, owner_id=owner_id))
+            user_categories = jsonable_encoder(
+                await crud.category.get_multi_by_owner(db=db, owner_id=owner_id)
+            )
             transactions = json.loads(response_text)["transactions"]
             count = 0
 
@@ -95,28 +106,37 @@ class OCRHelper:
 
                 if "category" in transaction:
                     cat_match = find_cat_match(transaction["category"], user_categories)
-                    transaction["category_id"] = cat_match['id'] if cat_match else None
+                    transaction["category_id"] = cat_match["id"] if cat_match else None
 
                 if "subcategory" in transaction:
-                    subcat_match = find_subcat_match(transaction["subcategory"], transaction["category"], user_categories)
+                    subcat_match = find_subcat_match(
+                        transaction["subcategory"],
+                        transaction["category"],
+                        user_categories,
+                    )
 
                     if subcat_match is None and transaction["category_id"]:
                         for cat in user_categories:
                             if cat["id"] == transaction["category_id"]:
-                                subcat_match = cat['subcategories'][0]
+                                subcat_match = cat["subcategories"][0]
                                 break
 
-
-                    transaction["subcategory_id"] = subcat_match['id'] if subcat_match else None
+                    transaction["subcategory_id"] = (
+                        subcat_match["id"] if subcat_match else None
+                    )
 
                 # Ensure amount is float
                 if "amount" in transaction:
-                    transaction["amount"] = float(str(transaction["amount"]).replace(",", ""))
+                    transaction["amount"] = float(
+                        str(transaction["amount"]).replace(",", "")
+                    )
 
                 # Parse date string to datetime
                 if "date" in transaction and transaction["date"]:
                     try:
-                        transaction["date"] = datetime.strptime(transaction["date"], "%Y-%m-%d").date()
+                        transaction["date"] = datetime.strptime(
+                            transaction["date"], "%Y-%m-%d"
+                        ).date()
                     except:
                         transaction["date"] = None
 

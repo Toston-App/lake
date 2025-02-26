@@ -2,12 +2,14 @@ from typing import Dict, AsyncGenerator
 import asyncio
 import pytest_asyncio
 from websockets.client import ClientConnection as Connect
+
 # from fastapi.testclient import TestClient
 # from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from httpx import AsyncClient
 
 from app.core.config import settings
+
 # from app.db.session import SessionLocal
 from app.db.session import async_session, engine_async
 from app.main import app
@@ -48,14 +50,16 @@ async def superuser_token_headers(event_loop, client: AsyncClient) -> Dict[str, 
 
 
 @pytest_asyncio.fixture
-async def normal_user_token_headers(client: AsyncClient, async_get_db: AsyncSession) -> Dict[str, str]:
+async def normal_user_token_headers(
+    client: AsyncClient, async_get_db: AsyncSession
+) -> Dict[str, str]:
     headers = await authentication_token_from_email(
         client=client, email=settings.EMAIL_TEST_USER, db=async_get_db
     )
     return headers
 
 
-@pytest_asyncio.fixture(scope='session')
+@pytest_asyncio.fixture(scope="session")
 def event_loop(request):
     """Create an instance of the default event loop for each test case."""
     loop = asyncio.get_event_loop_policy().new_event_loop()
@@ -63,7 +67,7 @@ def event_loop(request):
     loop.close()
 
 
-@pytest_asyncio.fixture(scope='module', autouse=True)
+@pytest_asyncio.fixture(scope="module", autouse=True)
 async def clear_db(async_get_db: AsyncSession) -> None:
     try:
         # Try to create session to check if DB is awake

@@ -5,13 +5,14 @@ Revises: cc8061d8a16a
 Create Date: 2023-08-31 02:24:22.498088
 
 """
+
 from alembic import op
 import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '18fdd60ecac9'
-down_revision = 'cc8061d8a16a'
+revision = "18fdd60ecac9"
+down_revision = "cc8061d8a16a"
 branch_labels = None
 depends_on = None
 

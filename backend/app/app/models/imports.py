@@ -12,6 +12,7 @@ class ImportService(str, PyEnum):
     CSV = "csv"
     BLUECOINS = "bluecoins"
 
+
 class Import(Base):
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
     date: Date = Column(DateTime(timezone=True), onupdate=func.now())
@@ -19,7 +20,15 @@ class Import(Base):
     created_at: Date = Column(DateTime(timezone=True), server_default=func.now())
     updated_at: Date = Column(DateTime(timezone=True), onupdate=func.now())
     ended_at: Date = Column(DateTime(timezone=True))
-    service: ImportService = Column(SQLAlchemyEnum(ImportService, name='importservice', create_constraint=True, native_enum=True), nullable=False)
+    service: ImportService = Column(
+        SQLAlchemyEnum(
+            ImportService,
+            name="importservice",
+            create_constraint=True,
+            native_enum=True,
+        ),
+        nullable=False,
+    )
     file_content: str = Column(String, nullable=False)
     file_size: int = Column(Integer)
     total_transactions_imported: int = Column(Integer)
@@ -30,4 +39,6 @@ class Import(Base):
     unmatched_categories: int = Column(Integer)
     total_rows_processed: int = Column(Integer)
     owner = relationship("User", back_populates="imports")
-    accounts = relationship("Account", back_populates="import_source", cascade="all, delete-orphan")
+    accounts = relationship(
+        "Account", back_populates="import_source", cascade="all, delete-orphan"
+    )

@@ -5,13 +5,14 @@ Revises: d3a45bc07f9a
 Create Date: 2024-09-15 03:46:10.793537
 
 """
+
 from alembic import op
 import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = 'f49f6f53a283'
-down_revision = 'd3a45bc07f9a'
+revision = "f49f6f53a283"
+down_revision = "d3a45bc07f9a"
 branch_labels = None
 depends_on = None
 

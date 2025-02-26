@@ -14,39 +14,48 @@ from app import crud
 
 class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
     async def create_with_owner(
-            self, db: AsyncSession, *, obj_in: IncomeCreate, owner_id: int
+        self, db: AsyncSession, *, obj_in: IncomeCreate, owner_id: int
     ) -> Income:
         obj_in_data = jsonable_encoder(obj_in)
 
         # Convert date string to datetime object
-        date_str = obj_in_data['date']
+        date_str = obj_in_data["date"]
         if date_str:
             try:
-                obj_in_data['date'] = datetime.strptime(date_str, "%Y-%m-%d").date()
+                obj_in_data["date"] = datetime.strptime(date_str, "%Y-%m-%d").date()
             except:
-                obj_in_data['date'] = None
+                obj_in_data["date"] = None
 
         # Update account balance
-        if obj_in_data['account_id']:
-            update = await crud.account.update_by_id_and_field(db=db, id=obj_in_data['account_id'], column='total_incomes', amount=obj_in_data['amount'])
+        if obj_in_data["account_id"]:
+            update = await crud.account.update_by_id_and_field(
+                db=db,
+                id=obj_in_data["account_id"],
+                column="total_incomes",
+                amount=obj_in_data["amount"],
+            )
 
             if update == None:
-                obj_in_data['account_id'] = None
+                obj_in_data["account_id"] = None
 
-        if obj_in_data['subcategory_id']:
-            subcategory = await crud.subcategory.get(db=db, id=obj_in_data['subcategory_id'])
+        if obj_in_data["subcategory_id"]:
+            subcategory = await crud.subcategory.get(
+                db=db, id=obj_in_data["subcategory_id"]
+            )
 
             if not subcategory:
-                obj_in_data['subcategory_id'] = None
+                obj_in_data["subcategory_id"] = None
 
-        if obj_in_data['place_id']:
-            place = await crud.place.get(db=db, id=obj_in_data['place_id'])
+        if obj_in_data["place_id"]:
+            place = await crud.place.get(db=db, id=obj_in_data["place_id"])
 
             if not place:
-                obj_in_data['place_id'] = None
+                obj_in_data["place_id"] = None
 
         # Update User balance and total incomes
-        await crud.user.update_balance(db=db, user_id=owner_id, is_Expense=False, amount=obj_in_data['amount'])
+        await crud.user.update_balance(
+            db=db, user_id=owner_id, is_Expense=False, amount=obj_in_data["amount"]
+        )
 
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
@@ -64,9 +73,7 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
             created_incomes.append(income)
         return created_incomes
 
-    async def remove_multi(
-        self, db: AsyncSession, *, ids: List[int]
-    ) -> List[Income]:
+    async def remove_multi(self, db: AsyncSession, *, ids: List[int]) -> List[Income]:
         removed_incomes = []
         for id in ids:
             income = await self.remove(db, id=id)
@@ -75,7 +82,7 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         return removed_incomes
 
     async def get_multi_by_owner(
-            self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
+        self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
     ) -> List[Income]:
         result = await db.execute(
             select(self.model)
@@ -86,7 +93,12 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         return result.scalars().all()
 
     async def get_multi_by_date(
-            self, db: AsyncSession, *, owner_id: int, start_date: Date = None, end_date: str = None
+        self,
+        db: AsyncSession,
+        *,
+        owner_id: int,
+        start_date: Date = None,
+        end_date: str = None,
     ) -> List[Income]:
         query = select(self.model)
 
@@ -94,14 +106,13 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
             and_(
                 self.model.owner_id == owner_id,
                 cast(self.model.date, Date) >= start_date,
-                cast(self.model.date, Date) <= end_date
+                cast(self.model.date, Date) <= end_date,
             )
         ).order_by(asc(self.model.date))
 
         result = await db.execute(query)
 
         return result.scalars().all()
-
 
 
 income = CRUDIncome(Income)

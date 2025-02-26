@@ -22,10 +22,11 @@ app = FastAPI(
     version="0.9.0",
     docs_url=None,
     redoc_url=None,
-    openapi_url = None,
+    openapi_url=None,
 )
 
 security = HTTPBasic()
+
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -40,7 +41,29 @@ async def log_requests(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-    "https://www.cleverbill.ing", "https://cleverbill.ing", "https://api.cleverbill.ing", "http://api.cleverbill.ing", "https://dev.cleverbill.ing", "http://dev.cleverbill.ing", "https://dev.cleverbill.ing/api/v1", "https:\/\/*\.cleverbill\.ing", "https:\/\/*\.cleverbill\.ing/", "http:\/\/*\.cleverbill\.ing", "http:\/\/*\.cleverbill\.ing/","http://localhost:4321", "http://localhost", "http://localhost:4200", "http://localhost:3000", "http://localhost:8080", "https://localhost", "https://localhost:4200", "https://localhost:3000", "https://localhost:8080", "https://localhost:8888", "https://localhost:9000"],
+        "https://www.cleverbill.ing",
+        "https://cleverbill.ing",
+        "https://api.cleverbill.ing",
+        "http://api.cleverbill.ing",
+        "https://dev.cleverbill.ing",
+        "http://dev.cleverbill.ing",
+        "https://dev.cleverbill.ing/api/v1",
+        "https:\/\/*\.cleverbill\.ing",
+        "https:\/\/*\.cleverbill\.ing/",
+        "http:\/\/*\.cleverbill\.ing",
+        "http:\/\/*\.cleverbill\.ing/",
+        "http://localhost:4321",
+        "http://localhost",
+        "http://localhost:4200",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        "https://localhost",
+        "https://localhost:4200",
+        "https://localhost:3000",
+        "https://localhost:8080",
+        "https://localhost:8888",
+        "https://localhost:9000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,7 +72,9 @@ app.add_middleware(
 
 def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
     correct_username = secrets.compare_digest(credentials.username, settings.DOCS_USER)
-    correct_password = secrets.compare_digest(credentials.password, settings.DOCS_PASSWORD)
+    correct_password = secrets.compare_digest(
+        credentials.password, settings.DOCS_PASSWORD
+    )
     if not (correct_username and correct_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -72,6 +97,7 @@ async def get_redoc_documentation(username: str = Depends(get_current_username))
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi(username: str = Depends(get_current_username)):
     return get_openapi(title=app.title, version=app.version, routes=app.routes)
+
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)

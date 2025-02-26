@@ -2,6 +2,7 @@ import pytest
 
 # from fastapi.testclient import TestClient
 from httpx import AsyncClient
+
 # from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,11 +13,13 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_create_item(
-        client: AsyncClient, superuser_token_headers: dict, async_get_db: AsyncSession
+    client: AsyncClient, superuser_token_headers: dict, async_get_db: AsyncSession
 ) -> None:
     data = {"title": "Foo", "description": "Fighters"}
     response = await client.post(
-        f"{settings.API_V1_STR}/items/", headers=superuser_token_headers, json=data,
+        f"{settings.API_V1_STR}/items/",
+        headers=superuser_token_headers,
+        json=data,
     )
     assert response.status_code == 200
     content = response.json()
@@ -27,11 +30,12 @@ async def test_create_item(
 
 
 async def test_read_item(
-        client: AsyncClient, superuser_token_headers: dict, async_get_db: AsyncSession
+    client: AsyncClient, superuser_token_headers: dict, async_get_db: AsyncSession
 ) -> None:
     item = await create_random_item(async_get_db)
     response = await client.get(
-        f"{settings.API_V1_STR}/items/{item.id}", headers=superuser_token_headers,
+        f"{settings.API_V1_STR}/items/{item.id}",
+        headers=superuser_token_headers,
     )
     assert response.status_code == 200
     content = response.json()

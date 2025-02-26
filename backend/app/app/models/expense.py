@@ -1,4 +1,3 @@
-
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date, DateTime
@@ -14,6 +13,7 @@ if TYPE_CHECKING:
     from .place import Place  # noqa: F401
     from .category import Category  # noqa: F401
     from .subcategory import Subcategory  # noqa: F401
+
 
 class Expense(Base):
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)

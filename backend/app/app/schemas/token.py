@@ -17,6 +17,7 @@ class TokenPayload(BaseModel):
     # country: str
     # id: int
 
+
 class TokenPayloadUuid(BaseModel):
     azp: str
     exp: int

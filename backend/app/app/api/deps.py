@@ -24,6 +24,7 @@ cookie_scheme = APIKeyCookie(
     description="JWT token from Clerk",
 )
 
+
 class DateFilterType(str, Enum):
     date = "date"
     week = "week"
@@ -31,7 +32,6 @@ class DateFilterType(str, Enum):
     quarter = "quarter"
     year = "year"
     range = "range"
-
 
 
 def get_db() -> Generator:
@@ -48,21 +48,17 @@ async def async_get_db() -> AsyncGenerator:
 
 
 async def get_current_user(
-        db: AsyncSession = Depends(async_get_db), token: str = Depends(reusable_oauth2)
+    db: AsyncSession = Depends(async_get_db), token: str = Depends(reusable_oauth2)
 ) -> models.User:
     # TODO add a env var to switch between the devel and prod and change this
     for key in [security.PUBLIC_KEY, "foo"]:
         try:
             if key == "foo":
-                payload = jwt.decode(
-                    token, key, algorithms=["HS256"]
-                )
-                has_email = payload.get('user').get('email')
+                payload = jwt.decode(token, key, algorithms=["HS256"])
+                has_email = payload.get("user").get("email")
             else:
-                payload = jwt.decode(
-                    token, key, algorithms=[security.ALGORITHM]
-                )
-                has_email = payload.get('email')
+                payload = jwt.decode(token, key, algorithms=[security.ALGORITHM])
+                has_email = payload.get("email")
 
             if has_email:
                 token_data = schemas.TokenPayload(**payload)
@@ -79,7 +75,7 @@ async def get_current_user(
                 )
 
     if has_email:
-        user = await crud.user.get(db, id=token_data.user['id'])
+        user = await crud.user.get(db, id=token_data.user["id"])
     else:
         user = await crud.user.get_by_uuid(db, uuid=token_data.sub)
 
@@ -89,7 +85,7 @@ async def get_current_user(
 
 
 def get_current_active_user(
-        current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
 ) -> models.User:
     if not crud.user.is_active(current_user):
         raise HTTPException(status_code=400, detail="Inactive user")
@@ -97,7 +93,7 @@ def get_current_active_user(
 
 
 def get_current_active_superuser(
-        current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_current_user),
 ) -> models.User:
     if not crud.user.is_superuser(current_user):
         raise HTTPException(
