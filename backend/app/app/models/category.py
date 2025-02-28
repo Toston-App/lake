@@ -1,16 +1,16 @@
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Boolean, DateTime
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.db.base_class import Base
 
 if TYPE_CHECKING:
-    from .user import User  # noqa: F401
-    from .subcategory import Subcategory  # noqa: F401
     from .expense import Expense  # noqa: F401
     from .income import Income  # noqa: F401
+    from .subcategory import Subcategory  # noqa: F401
+    from .user import User  # noqa: F401
 
 
 class Category(Base):
@@ -23,9 +23,9 @@ class Category(Base):
     is_income: bool = Column(Boolean, index=True, nullable=False, default=False)
     owner_id = Column(Integer, ForeignKey("user.id"))
     owner: "User" = relationship("User", back_populates="categories")
-    subcategories: List["Subcategory"] = relationship(
+    subcategories: list["Subcategory"] = relationship(
         "Subcategory", backref="parent_category", lazy="selectin"
     )
-    expenses: List["Expense"] = relationship("Expense", back_populates="category")
+    expenses: list["Expense"] = relationship("Expense", back_populates="category")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

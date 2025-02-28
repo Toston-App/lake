@@ -1,16 +1,15 @@
 from datetime import date, datetime
-from typing import Optional
 
-from pydantic import BaseModel, validator, root_validator
+from pydantic import BaseModel, root_validator, validator
 
 
 # Shared properties
 class TransferBase(BaseModel):
-    description: Optional[str] = None
-    amount: Optional[float] = None
-    date: Optional[date]
-    from_acc: Optional[int] = None
-    to_acc: Optional[int] = None
+    description: str | None = None
+    amount: float | None = None
+    date: date | None
+    from_acc: int | None = None
+    to_acc: int | None = None
 
     # Fix the amount to 2 decimal places
     @root_validator
@@ -37,7 +36,7 @@ class TransferCreate(TransferBase):
 
 # Properties to receive on Transfer update
 class TransferUpdate(TransferBase):
-    updated_at: Optional[datetime] = None
+    updated_at: datetime | None = None
 
 
 # Properties shared by models stored in DB
@@ -51,7 +50,7 @@ class TransferInDBBase(TransferBase):
 
 # Properties to return to client
 class Transfer(TransferInDBBase):
-    date: Optional[date]
+    date: date | None
 
     class Config:
         orm_mode = True
@@ -59,8 +58,8 @@ class Transfer(TransferInDBBase):
 
 # Properties properties stored in DB
 class TransferInDB(TransferInDBBase):
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DeletionResponse(BaseModel):

@@ -1,23 +1,23 @@
 from datetime import datetime
-from typing import Optional
+
+from pydantic import BaseModel
 
 from app.models.imports import ImportService
-from pydantic import BaseModel
 
 
 # Shared properties
 class ImportBase(BaseModel):
-    service: Optional[ImportService] = None
-    file_content: Optional[str] = None
-    file_size: Optional[int] = None
-    total_transactions_imported: Optional[int] = None
-    expenses_imported: Optional[int] = None
-    incomes_imported: Optional[int] = None
-    accounts_created: Optional[int] = None
-    sites_created: Optional[int] = None
-    unmatched_categories: Optional[int] = None
-    total_rows_processed: Optional[int] = None
-    ended_at: Optional[datetime] = None
+    service: ImportService | None = None
+    file_content: str | None = None
+    file_size: int | None = None
+    total_transactions_imported: int | None = None
+    expenses_imported: int | None = None
+    incomes_imported: int | None = None
+    accounts_created: int | None = None
+    sites_created: int | None = None
+    unmatched_categories: int | None = None
+    total_rows_processed: int | None = None
+    ended_at: datetime | None = None
 
 
 # Properties to receive on Import creation
@@ -46,7 +46,7 @@ class Import(ImportInDBBase):
 
 # Properties properties stored in DB
 class ImportInDB(ImportInDBBase):
-    date: Optional[datetime] = None
+    date: datetime | None = None
 
 
 class DeletionResponse(BaseModel):

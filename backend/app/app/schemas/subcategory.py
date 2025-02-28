@@ -1,14 +1,13 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, validator
 
 
 # Shared properties
 class SubcategoryBase(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    icon: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
+    icon: str | None = None
     is_default: bool = False
 
     @validator("name")
@@ -46,8 +45,8 @@ class Subcategory(SubcategoryInDBBase):
 
 # Properties properties stored in DB
 class SubcategoryInDB(SubcategoryInDBBase):
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DeletionResponse(BaseModel):

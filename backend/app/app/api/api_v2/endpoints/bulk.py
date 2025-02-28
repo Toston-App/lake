@@ -1,22 +1,23 @@
-from typing import Any, List
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
-from app.api.api_v1.endpoints.incomes import delete_incomes_bulk, create_incomes_bulk
-from app.api.api_v1.endpoints.expenses import delete_expenses_bulk, create_expenses_bulk
 from app.api import deps
+from app.api.api_v1.endpoints.expenses import create_expenses_bulk, delete_expenses_bulk
+from app.api.api_v1.endpoints.incomes import create_incomes_bulk, delete_incomes_bulk
 
 router = APIRouter()
 
 
 async def process_bulk_deletion(
     db: AsyncSession,
-    ids: List[int],
+    ids: list[int],
     delete_function: callable,
     current_user: models.User,
     entity_type: str,
-) -> List[int]:
+) -> list[int]:
     """Helper function to process bulk deletions"""
     if not ids:
         return []
@@ -26,7 +27,7 @@ async def process_bulk_deletion(
         result = await delete_function(db=db, ids=ids_str, current_user=current_user)
 
         return result.deleted_ids
-    except Exception as e:
+    except Exception:
         return []
 
 

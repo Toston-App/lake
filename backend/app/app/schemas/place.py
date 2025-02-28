@@ -1,31 +1,30 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel
 
 
 # Shared properties
 class PlaceBase(BaseModel):
-    name: Optional[str] = None
-    is_online: Optional[bool] = None
+    name: str | None = None
+    is_online: bool | None = None
 
 
 # Properties to receive on place creation
 class PlaceCreate(PlaceBase):
     name: str
-    import_id: Optional[int] = None
+    import_id: int | None = None
 
 
 # Properties to receive on place update
 class PlaceUpdate(PlaceBase):
-    updated_at: Optional[datetime] = None
+    updated_at: datetime | None = None
 
 
 # Properties shared by models stored in DB
 class PlaceInDBBase(PlaceBase):
     id: int
     owner_id: int
-    import_id: Optional[int] = None
+    import_id: int | None = None
 
     class Config:
         orm_mode = True
@@ -38,8 +37,8 @@ class Place(PlaceInDBBase):
 
 # Properties properties stored in DB
 class PlaceInDB(PlaceInDBBase):
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DeletionResponse(BaseModel):

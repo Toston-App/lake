@@ -1,23 +1,24 @@
-from typing import Optional, List
+
 from pydantic import BaseModel
+
 from app import schemas
 
 
 class BulkDelete(BaseModel):
-    incomes: Optional[List[int]] = []
-    expenses: Optional[List[int]] = []
+    incomes: list[int] | None = []
+    expenses: list[int] | None = []
 
 
 class BulkDeletionsResponse(BaseModel):
-    incomes: List[int] = []
-    expenses: List[int] = []
+    incomes: list[int] = []
+    expenses: list[int] = []
 
 
 class BulkCreate(BaseModel):
-    incomes: Optional[List[schemas.IncomeCreate]] = []
-    expenses: Optional[List[schemas.ExpenseCreate]] = []
+    incomes: list[schemas.IncomeCreate] | None = []
+    expenses: list[schemas.ExpenseCreate] | None = []
 
 
 class BulkCreationsResponse(BaseModel):
-    incomes: List[schemas.Income] = []
-    expenses: List[schemas.Expense] = []
+    incomes: list[schemas.Income] = []
+    expenses: list[schemas.Expense] = []

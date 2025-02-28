@@ -1,18 +1,17 @@
 from datetime import date
-from typing import Optional
 
-from pydantic import BaseModel, validator, root_validator
+from pydantic import BaseModel, root_validator, validator
 
 
 # Shared properties
 class DataBase(BaseModel):
-    description: Optional[str] = None
-    amount: Optional[float] = None
-    date: Optional[date] = None
-    account_id: Optional[int] = None
-    category_id: Optional[int] = None
-    subcategory_id: Optional[int] = None
-    place_id: Optional[int] = None
+    description: str | None = None
+    amount: float | None = None
+    date: date | None = None
+    account_id: int | None = None
+    category_id: int | None = None
+    subcategory_id: int | None = None
+    place_id: int | None = None
 
     # Fix the amount to 2 decimal places
     @root_validator
@@ -33,7 +32,7 @@ class DataBase(BaseModel):
 # Properties to receive on Data creation
 class DataCreate(DataBase):
     amount: float
-    date: Optional[str] = None
+    date: str | None = None
 
 
 # Properties to receive on Data update
@@ -52,7 +51,7 @@ class DataInDBBase(DataBase):
 
 # Properties to return to client
 class Data(DataInDBBase):
-    date: Optional[date] = None
+    date: date | None = None
 
     class Config:
         orm_mode = True

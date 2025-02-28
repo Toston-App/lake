@@ -1,21 +1,20 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, EmailStr
 
 
 # Shared properties
 class UserBase(BaseModel):
-    uuid: Optional[str] = None
-    email: Optional[EmailStr] = None
-    is_active: Optional[bool] = True
+    uuid: str | None = None
+    email: EmailStr | None = None
+    is_active: bool | None = True
     is_superuser: bool = False
-    name: Optional[str] = None
+    name: str | None = None
     # Country code in Currency format - https://simplelocalize.io/data/locales/
-    country: Optional[str] = None
-    balance_total: Optional[float] = 0.0
-    balance_income: Optional[float] = 0.0
-    balance_outcome: Optional[float] = 0.0
+    country: str | None = None
+    balance_total: float | None = 0.0
+    balance_income: float | None = 0.0
+    balance_outcome: float | None = 0.0
 
 
 # Properties to receive via API on creation
@@ -30,13 +29,13 @@ class UserCreateUuid(BaseModel):
 
 # Properties to receive via API on update
 class UserUpdate(UserBase):
-    password: Optional[str] = None
+    password: str | None = None
 
 
 class UserInDBBase(UserBase):
-    id: Optional[int] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     class Config:
         orm_mode = True

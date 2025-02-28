@@ -1,22 +1,23 @@
-from typing import Dict, AsyncGenerator
 import asyncio
+from collections.abc import AsyncGenerator
+
 import pytest_asyncio
-from websockets.client import ClientConnection as Connect
+from httpx import AsyncClient
 
 # from fastapi.testclient import TestClient
 # from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
-from httpx import AsyncClient
+from websockets.client import ClientConnection as Connect
 
 from app.core.config import settings
+from app.db import base  # noqa: F401
+from app.db.init_db import init_db
 
 # from app.db.session import SessionLocal
 from app.db.session import async_session, engine_async
 from app.main import app
 from app.tests.utils.user import authentication_token_from_email
 from app.tests.utils.utils import get_superuser_token_headers
-from app.db.init_db import init_db
-from app.db import base  # noqa: F401
 
 
 class WsTestClient(Connect):
@@ -44,7 +45,7 @@ async def client(event_loop) -> AsyncGenerator:
 
 
 @pytest_asyncio.fixture
-async def superuser_token_headers(event_loop, client: AsyncClient) -> Dict[str, str]:
+async def superuser_token_headers(event_loop, client: AsyncClient) -> dict[str, str]:
     headers = await get_superuser_token_headers(client)
     return headers
 
@@ -52,7 +53,7 @@ async def superuser_token_headers(event_loop, client: AsyncClient) -> Dict[str, 
 @pytest_asyncio.fixture
 async def normal_user_token_headers(
     client: AsyncClient, async_get_db: AsyncSession
-) -> Dict[str, str]:
+) -> dict[str, str]:
     headers = await authentication_token_from_email(
         client=client, email=settings.EMAIL_TEST_USER, db=async_get_db
     )

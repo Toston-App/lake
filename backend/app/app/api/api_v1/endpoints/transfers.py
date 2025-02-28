@@ -1,6 +1,7 @@
 import calendar
-from datetime import date as Date, timedelta, datetime, timezone
-from typing import Any, List
+from datetime import date as Date
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +13,7 @@ from app.api.deps import DateFilterType
 router = APIRouter()
 
 
-@router.get("/getAll", response_model=List[schemas.Transfer])
+@router.get("/getAll", response_model=list[schemas.Transfer])
 async def read_transfers(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
@@ -32,7 +33,7 @@ async def read_transfers(
     return transfers
 
 
-@router.get("/{date_filter_type}/{date}", response_model=List[schemas.Transfer])
+@router.get("/{date_filter_type}/{date}", response_model=list[schemas.Transfer])
 async def read_transfers(
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
@@ -118,7 +119,7 @@ async def read_transfers(
         )
 
     if date_filter_type == DateFilterType.year:
-        if isinstance(date, Date) or not "x" in date or len(date.split("x")[0]) != 4:
+        if isinstance(date, Date) or "x" not in date or len(date.split("x")[0]) != 4:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYYx"
             )

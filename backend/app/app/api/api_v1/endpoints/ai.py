@@ -1,15 +1,15 @@
-from typing import Any
-
+import logging
 import os
 import tempfile
-import filetype
-import logging
-from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, status
+from typing import Any
 
-from app import crud, models, schemas
-from app.api import deps
+import filetype
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import models
 from app.ai.ocr import OCRHelper
+from app.api import deps
 from app.core.config import settings
 
 router = APIRouter()

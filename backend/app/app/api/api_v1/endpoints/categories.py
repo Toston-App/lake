@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("", response_model=List[schemas.Category])
+@router.get("", response_model=list[schemas.Category])
 async def read_categories(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
@@ -100,7 +100,7 @@ async def delete_category(
     category = await read_category(db=db, id=id, current_user=current_user)
 
     if category.is_default:
-        return schemas.DeletionResponse(message=f"This item can not being deleted")
+        return schemas.DeletionResponse(message="This item can not being deleted")
 
     category = await crud.category.remove(db=db, id=id)
 

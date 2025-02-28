@@ -1,4 +1,3 @@
-from typing import List
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +21,7 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
-    ) -> List[Category]:
+    ) -> list[Category]:
         result = await db.execute(
             select(self.model)
             .filter(Category.owner_id == owner_id)

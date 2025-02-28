@@ -1,6 +1,5 @@
 import re
 from datetime import datetime
-from typing import Optional, List
 
 from pydantic import BaseModel, validator
 
@@ -9,10 +8,10 @@ from .subcategory import Subcategory  # noqa: F401
 
 # Shared properties
 class CategoryBase(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    color: Optional[str] = None
-    icon: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
+    color: str | None = None
+    icon: str | None = None
     is_default: bool = False
     is_income: bool = False
 
@@ -47,7 +46,7 @@ class CategoryUpdate(CategoryBase):
 class CategoryInDBBase(CategoryBase):
     id: int
     owner_id: int
-    subcategories: List["Subcategory"] = []
+    subcategories: list["Subcategory"] = []
 
     class Config:
         orm_mode = True
@@ -60,8 +59,8 @@ class Category(CategoryInDBBase):
 
 # Properties properties stored in DB
 class CategoryInDB(CategoryInDBBase):
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DeletionResponse(BaseModel):

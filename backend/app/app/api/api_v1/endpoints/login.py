@@ -2,9 +2,9 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi.encoders import jsonable_encoder
 
 from app import crud, models, schemas
 from app.api import deps

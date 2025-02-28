@@ -1,18 +1,15 @@
+import logging
 import secrets
 
-from fastapi import Depends, FastAPI, Request, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
 from app.core.config import settings
-
-
-import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,10 +45,10 @@ app.add_middleware(
         "https://dev.cleverbill.ing",
         "http://dev.cleverbill.ing",
         "https://dev.cleverbill.ing/api/v1",
-        "https:\/\/*\.cleverbill\.ing",
-        "https:\/\/*\.cleverbill\.ing/",
-        "http:\/\/*\.cleverbill\.ing",
-        "http:\/\/*\.cleverbill\.ing/",
+        r"https:\/\/*\.cleverbill\.ing",
+        r"https:\/\/*\.cleverbill\.ing/",
+        r"http:\/\/*\.cleverbill\.ing",
+        r"http:\/\/*\.cleverbill\.ing/",
         "http://localhost:4321",
         "http://localhost",
         "http://localhost:4200",
