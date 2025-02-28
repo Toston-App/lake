@@ -16,9 +16,7 @@ PUBLIC_KEY = base64.b64decode(settings.SECRET_KEY).decode("utf-8")
 PRIVATE_KEY = "secret"
 
 
-def create_access_token(
-    subject: str | Any, expires_delta: timedelta = None
-) -> str:
+def create_access_token(subject: str | Any, expires_delta: timedelta = None) -> str:
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
