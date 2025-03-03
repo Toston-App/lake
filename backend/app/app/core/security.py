@@ -10,10 +10,11 @@ from app.core.config import settings
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-ALGORITHM = "RS256" # Original algorithm was `HS256`
+ALGORITHM = "RS256"  # Original algorithm was `HS256`
 PUBLIC_KEY = base64.b64decode(settings.SECRET_KEY).decode("utf-8")
 # TODO: I don't have the private key because I'm using Clerk auth and it olny provides the public key
 PRIVATE_KEY = "secret"
+
 
 def create_access_token(
     subject: Union[str, Any], expires_delta: timedelta = None
@@ -25,12 +26,14 @@ def create_access_token(
             minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
         )
     to_encode = {
-        "exp": expire, "user": {
-        "name": subject["name"],
-        "email": subject["email"],
-        "country": subject["country"],
-        "id": subject["id"],
-    }}
+        "exp": expire,
+        "user": {
+            "name": subject["name"],
+            "email": subject["email"],
+            "country": subject["country"],
+            "id": subject["id"],
+        },
+    }
 
     return jwt.encode(to_encode, "foo", algorithm="HS256")
 

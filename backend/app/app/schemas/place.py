@@ -41,5 +41,6 @@ class PlaceInDB(PlaceInDBBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
 class DeletionResponse(BaseModel):
     message: str

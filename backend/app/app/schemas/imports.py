@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Optional
 
-from app.models.imports import ImportService
 from pydantic import BaseModel
+
+from app.models.imports import ImportService
 
 
 # Shared properties
@@ -24,9 +25,11 @@ class ImportBase(BaseModel):
 class ImportCreate(ImportBase):
     pass
 
+
 # Properties to receive on Import update
 class ImportUpdate(ImportBase):
     pass
+
 
 # Properties shared by models stored in DB
 class ImportInDBBase(ImportBase):
@@ -45,6 +48,7 @@ class Import(ImportInDBBase):
 # Properties properties stored in DB
 class ImportInDB(ImportInDBBase):
     date: Optional[datetime] = None
+
 
 class DeletionResponse(BaseModel):
     message: str

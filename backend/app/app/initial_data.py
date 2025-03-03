@@ -1,7 +1,8 @@
-import logging
 import asyncio
+import logging
 
 from app.db.init_db import init_db
+
 # from app.db.session import SessionLocal
 from app.db.session import async_session
 

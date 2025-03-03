@@ -1,19 +1,16 @@
-
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date, DateTime
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-
-
 
 from app.db.base_class import Base
 
 if TYPE_CHECKING:
-    from .user import User  # noqa: F401
     from .account import Account  # noqa: F401
-    from .subcategory import Subcategory  # noqa: F401
     from .place import Place  # noqa: F401
+    from .subcategory import Subcategory  # noqa: F401
+    from .user import User  # noqa: F401
 
 
 class Income(Base):

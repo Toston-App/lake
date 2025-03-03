@@ -1,13 +1,13 @@
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Optional
 
-from pydantic import BaseModel, validator, root_validator
+from pydantic import BaseModel, root_validator, validator
 
 
 # Shared properties
 class ExpenseBase(BaseModel):
     description: Optional[str] = None
-    amount : Optional[float] = None
+    amount: Optional[float] = None
     date: Optional[date] = None
     account_id: Optional[int] = None
     category_id: Optional[int] = None
@@ -17,11 +17,10 @@ class ExpenseBase(BaseModel):
     # Fix the amount to 2 decimal places
     @root_validator
     def round_amount(cls, values):
-        amount = values.get('amount')
+        amount = values.get("amount")
         if amount is not None:
-            values['amount'] = round(amount, 2)
+            values["amount"] = round(amount, 2)
         return values
-
 
     # Validate that the amount is positive
     @validator("amount", pre=True, always=True)
@@ -30,10 +29,11 @@ class ExpenseBase(BaseModel):
             raise ValueError("Amount must be positive")
         return v
 
+
 # Properties to receive on Expense creation
 class ExpenseCreate(ExpenseBase):
     amount: float
-    date : Optional[str] = None
+    date: Optional[str] = None
     import_id: Optional[int] = None
 
 
@@ -41,6 +41,7 @@ class ExpenseCreate(ExpenseBase):
 class ExpenseUpdate(ExpenseBase):
     date: Optional[str] = None
     updated_at: Optional[datetime] = None
+
 
 # Properties shared by models stored in DB
 class ExpenseInDBBase(ExpenseBase):
@@ -65,9 +66,11 @@ class ExpenseInDB(ExpenseInDBBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
 class DeletionResponse(BaseModel):
     message: str
 
+
 class BulkDeletionResponse(BaseModel):
     message: str
-    deleted_ids: List[int]
+    deleted_ids: list[int]

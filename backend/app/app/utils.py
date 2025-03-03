@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import emails
 from emails.template import JinjaTemplate
@@ -11,11 +11,12 @@ from app.core.config import settings
 
 # TODO: Fix jwt encode and decode when using this. At the moment we're using Clerk auth, so we aren't using this code
 
+
 def send_email(
     email_to: str,
     subject_template: str = "",
     html_template: str = "",
-    environment: Dict[str, Any] = {},
+    environment: dict[str, Any] = {},
 ) -> None:
     assert settings.EMAILS_ENABLED, "no provided configuration for email variables"
     message = emails.Message(
