@@ -1,3 +1,4 @@
+from typing import Optional
 
 # from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +10,7 @@ from app.tests.utils.utils import random_lower_string
 
 
 async def create_random_item(
-    db: AsyncSession, *, owner_id: int | None = None
+    db: AsyncSession, *, owner_id: Optional[int] = None
 ) -> models.Item:
     if owner_id is None:
         user = await create_random_user(db)

@@ -1,13 +1,11 @@
-import asyncio
 import logging
-
+import asyncio
 from tenacity import after_log, before_log, retry, stop_after_attempt, wait_fixed
-
-from app.db import base  # noqa: F401
-from app.db.init_db import init_db
 
 # from app.db.session import SessionLocal
 from app.db.session import async_session, engine_async
+from app.db import base  # noqa: F401
+from app.db.init_db import init_db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

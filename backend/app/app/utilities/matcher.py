@@ -1,8 +1,9 @@
-
+from typing import List
+from app.models.category import Category
+from app.models.subcategory import Subcategory
+from app.synonyms import get_synonyms
 from fuzzywuzzy import fuzz
 
-from app.models.category import Category
-from app.synonyms import get_synonyms
 
 synonyms = get_synonyms()
 
@@ -16,7 +17,7 @@ def get_synonym(category):
     return synonyms.get(normalize(category), category)
 
 
-def find_cat_match(name: str, categories: list[Category], threshold=80):
+def find_cat_match(name: str, categories: List[Category], threshold=80):
     name_normalized = get_synonym(name)
     best_match = None
     best_score = 0
@@ -31,7 +32,7 @@ def find_cat_match(name: str, categories: list[Category], threshold=80):
 
 
 def find_subcat_match(
-    name: str, category_id: int, categories: list[Category], threshold=80
+    name: str, category_id: int, categories: List[Category], threshold=80
 ):
     name_normalized = get_synonym(name)
     best_match = None

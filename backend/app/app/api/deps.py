@@ -1,8 +1,8 @@
-from collections.abc import AsyncGenerator, Generator
+from typing import Generator, AsyncGenerator
 from enum import Enum
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, APIKeyCookie
 from jose import jwt
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models, schemas
 from app.core import security
 from app.core.config import settings
-from app.db.session import SessionLocal, async_session
+from app.db.session import SessionLocal
+from app.db.session import async_session
 
 # Use this to get the jwt like "Bearer" in the Authorization header
 reusable_oauth2 = OAuth2PasswordBearer(

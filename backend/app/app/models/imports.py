@@ -1,11 +1,11 @@
-from enum import Enum as PyEnum
-
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String
-from sqlalchemy import Enum as SQLAlchemyEnum
+from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
+from sqlalchemy import Enum as SQLAlchemyEnum
 
 from app.db.base_class import Base
+
+from enum import Enum as PyEnum
 
 
 class ImportService(str, PyEnum):

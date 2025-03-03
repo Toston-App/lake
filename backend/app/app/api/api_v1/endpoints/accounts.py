@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, List
 
-from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, Depends, Body, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
@@ -11,7 +11,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("", response_model=list[schemas.Account])
+@router.get("", response_model=List[schemas.Account])
 async def read_accounts(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,

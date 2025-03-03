@@ -1,9 +1,10 @@
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import timedelta, datetime, timezone
+from fastapi.responses import JSONResponse
+
+from typing import Any, List
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
 from pydantic.networks import EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,7 @@ from app.utils import send_new_account_email
 router = APIRouter()
 
 
-@router.get("", response_model=list[schemas.User])
+@router.get("", response_model=List[schemas.User])
 async def read_users(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,

@@ -1,3 +1,4 @@
+from typing import List
 
 from fastapi.encoders import jsonable_encoder
 
@@ -23,7 +24,7 @@ class CRUDItem(CRUDBase[Item, ItemCreate, ItemUpdate]):
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
-    ) -> list[Item]:
+    ) -> List[Item]:
         result = await db.execute(
             select(self.model)
             .filter(Item.owner_id == owner_id)

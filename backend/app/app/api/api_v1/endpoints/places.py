@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("", response_model=list[schemas.Place])
+@router.get("", response_model=List[schemas.Place])
 async def read_places(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,

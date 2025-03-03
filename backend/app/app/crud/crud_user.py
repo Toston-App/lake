@@ -1,17 +1,16 @@
-from typing import Any
-
-from fastapi.encoders import jsonable_encoder
+from typing import Any, Dict, Optional, Union
 
 # from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
+from fastapi.encoders import jsonable_encoder
 
-from app import crud, schemas
-from app.categories_and_sub import categories_and_sub
 from app.core.security import get_password_hash, verify_password
 from app.crud.base import CRUDBase
 from app.models.user import User
 from app.schemas.user import UserCreate, UserCreateUuid, UserUpdate
+from app import crud, schemas
+from app.categories_and_sub import categories_and_sub
 
 
 async def add_categories_to_db(db, owner_id):
@@ -43,11 +42,11 @@ async def add_categories_to_db(db, owner_id):
 
 
 class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
-    async def get_by_email(self, db: AsyncSession, *, email: str) -> User | None:
+    async def get_by_email(self, db: AsyncSession, *, email: str) -> Optional[User]:
         result = await db.execute(select(User).filter(User.email == email))
         return result.scalars().first()
 
-    async def get_by_uuid(self, db: AsyncSession, *, uuid: str) -> User | None:
+    async def get_by_uuid(self, db: AsyncSession, *, uuid: str) -> Optional[User]:
         result = await db.execute(select(User).filter(User.uuid == uuid))
         return result.scalars().first()
 
@@ -90,7 +89,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         db: AsyncSession,
         *,
         db_obj: User,
-        obj_in: UserUpdate | dict[str, Any],
+        obj_in: Union[UserUpdate, Dict[str, Any]],
     ) -> User:
         if isinstance(obj_in, dict):
             update_data = obj_in
@@ -104,7 +103,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
 
     async def authenticate(
         self, db: AsyncSession, *, email: str, password: str
-    ) -> User | None:
+    ) -> Optional[User]:
         user = await self.get_by_email(db, email=email)
         if not user:
             return None

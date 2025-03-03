@@ -1,3 +1,4 @@
+from typing import Dict
 
 # from fastapi.testclient import TestClient
 from httpx import AsyncClient
@@ -14,7 +15,7 @@ from app.tests.utils.utils import random_email, random_lower_string
 
 async def user_authentication_headers(
     *, client: AsyncClient, email: str, password: str
-) -> dict[str, str]:
+) -> Dict[str, str]:
     data = {"username": email, "password": password}
 
     r = await client.post(f"{settings.API_V1_STR}/login/access-token", data=data)
@@ -36,7 +37,7 @@ async def create_random_user(db: AsyncSession) -> User:
 
 async def authentication_token_from_email(
     *, client: AsyncClient, email: str, db: AsyncSession
-) -> dict[str, str]:
+) -> Dict[str, str]:
     """
     Return a valid token for the user with given email.
 

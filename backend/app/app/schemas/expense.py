@@ -1,17 +1,18 @@
 from datetime import date, datetime
+from typing import Optional, List
 
-from pydantic import BaseModel, root_validator, validator
+from pydantic import BaseModel, validator, root_validator
 
 
 # Shared properties
 class ExpenseBase(BaseModel):
-    description: str | None = None
-    amount: float | None = None
-    date: date | None = None
-    account_id: int | None = None
-    category_id: int | None = None
-    subcategory_id: int | None = None
-    place_id: int | None = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    date: Optional[date] = None
+    account_id: Optional[int] = None
+    category_id: Optional[int] = None
+    subcategory_id: Optional[int] = None
+    place_id: Optional[int] = None
 
     # Fix the amount to 2 decimal places
     @root_validator
@@ -32,21 +33,21 @@ class ExpenseBase(BaseModel):
 # Properties to receive on Expense creation
 class ExpenseCreate(ExpenseBase):
     amount: float
-    date: str | None = None
-    import_id: int | None = None
+    date: Optional[str] = None
+    import_id: Optional[int] = None
 
 
 # Properties to receive on Expense update
 class ExpenseUpdate(ExpenseBase):
-    date: str | None = None
-    updated_at: datetime | None = None
+    date: Optional[str] = None
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB
 class ExpenseInDBBase(ExpenseBase):
     id: int
     owner_id: int
-    import_id: int | None = None
+    import_id: Optional[int] = None
 
     class Config:
         orm_mode = True
@@ -54,7 +55,7 @@ class ExpenseInDBBase(ExpenseBase):
 
 # Properties to return to client
 class Expense(ExpenseInDBBase):
-    date: date | None
+    date: Optional[date]
 
     class Config:
         orm_mode = True
@@ -62,8 +63,8 @@ class Expense(ExpenseInDBBase):
 
 # Properties properties stored in DB
 class ExpenseInDB(ExpenseInDBBase):
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 class DeletionResponse(BaseModel):
@@ -72,4 +73,4 @@ class DeletionResponse(BaseModel):
 
 class BulkDeletionResponse(BaseModel):
     message: str
-    deleted_ids: list[int]
+    deleted_ids: List[int]

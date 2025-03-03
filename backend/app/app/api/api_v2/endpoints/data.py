@@ -1,30 +1,29 @@
-import asyncio
 import calendar
-from datetime import date as Date
-from datetime import datetime, timedelta
-from typing import Any
-
+from datetime import date as Date, timedelta, datetime
 from dateutil.relativedelta import relativedelta
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Any, List
+
 from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+import asyncio
 
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
 from app.process_data.process import (
-    account_charts,
-    account_diff,
-    accounts_total,
-    categories_charts,
     get_df,
     transaction_charts,
+    categories_charts,
+    accounts_total,
+    account_diff,
+    account_charts,
 )
 
 router = APIRouter()
 
 
-@router.get("/getAll", response_model=list[schemas.Data])
+@router.get("/getAll", response_model=List[schemas.Data])
 async def read_all_expenses(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
@@ -177,7 +176,7 @@ async def get_all_data(
         )
 
     if date_filter_type == DateFilterType.year:
-        if isinstance(date, Date) or "x" not in date or len(date.split("x")[0]) != 4:
+        if isinstance(date, Date) or not "x" in date or len(date.split("x")[0]) != 4:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYYx"
             )

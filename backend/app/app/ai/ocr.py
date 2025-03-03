@@ -1,15 +1,16 @@
 import base64
 import json
-from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Optional, Dict, Any
+from datetime import datetime
+from pydantic import BaseModel
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.encoders import jsonable_encoder
 from openai import AsyncOpenAI, RateLimitError
-from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud
+
+from app import crud, models, schemas
 from app.utilities.matcher import find_cat_match, find_subcat_match
 
 
@@ -22,11 +23,11 @@ class TransactionType(str, Enum):
 class Transaction(BaseModel):
     type: TransactionType
     amount: float
-    date: datetime | None
-    category: str | None
-    subcategory: str | None
-    place: str | None
-    description: str | None
+    date: Optional[datetime]
+    category: Optional[str]
+    subcategory: Optional[str]
+    place: Optional[str]
+    description: Optional[str]
 
 
 class OCRHelper:
@@ -89,7 +90,7 @@ class OCRHelper:
         db: AsyncSession,
         owner_id: int,
         response_text: str,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """Parse OpenAI response and match categories with synonyms"""
         try:
             user_categories = jsonable_encoder(

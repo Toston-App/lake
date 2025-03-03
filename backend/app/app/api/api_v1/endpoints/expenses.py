@@ -1,8 +1,7 @@
 import calendar
-from datetime import date as Date
-from datetime import datetime, timedelta, timezone
+from datetime import date as Date, timedelta, datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +12,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("/getAll", response_model=list[schemas.Expense])
+@router.get("/getAll", response_model=List[schemas.Expense])
 async def read_expenses(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
@@ -42,7 +41,7 @@ class DateFilterType(str, Enum):
     range = "range"
 
 
-@router.get("/{date_filter_type}/{date}", response_model=list[schemas.Expense])
+@router.get("/{date_filter_type}/{date}", response_model=List[schemas.Expense])
 async def read_expenses(
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
@@ -128,7 +127,7 @@ async def read_expenses(
         )
 
     if date_filter_type == DateFilterType.year:
-        if isinstance(date, Date) or "x" not in date or len(date.split("x")[0]) != 4:
+        if isinstance(date, Date) or not "x" in date or len(date.split("x")[0]) != 4:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYYx"
             )
@@ -183,11 +182,11 @@ async def create_expense(
     return expense
 
 
-@router.post("/bulk", response_model=list[schemas.Expense])
+@router.post("/bulk", response_model=List[schemas.Expense])
 async def create_expenses_bulk(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
-    expenses_in: list[schemas.ExpenseCreate],
+    expenses_in: List[schemas.ExpenseCreate],
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """

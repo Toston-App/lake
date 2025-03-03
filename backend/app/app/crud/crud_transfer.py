@@ -1,14 +1,15 @@
+from typing import List
 from datetime import datetime
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import Date, and_, asc, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
+from sqlalchemy import and_, cast, Date, asc
 
-from app import crud
 from app.crud.base import CRUDBase
 from app.models.transfer import Transfer
 from app.schemas.transfer import TransferCreate, TransferUpdate
+from app import crud
 
 
 class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
@@ -53,7 +54,7 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
-    ) -> list[Transfer]:
+    ) -> List[Transfer]:
         result = await db.execute(
             select(self.model)
             .filter(Transfer.owner_id == owner_id)
@@ -69,7 +70,7 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
         owner_id: int,
         start_date: Date = None,
         end_date: str = None,
-    ) -> list[Transfer]:
+    ) -> List[Transfer]:
         query = select(self.model)
 
         query = query.where(

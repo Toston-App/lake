@@ -1,21 +1,21 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.db.base_class import Base
 
 if TYPE_CHECKING:
-    from .account import Account  # noqa: F401
-    from .category import Category  # noqa: F401
-    from .expense import Expense  # noqa: F401
-    from .imports import Import  # noqa: F401
-    from .income import Income  # noqa: F401
     from .item import Item  # noqa: F401
     from .place import Place  # noqa: F401
-    from .subcategory import Subcategory  # noqa: F401
+    from .expense import Expense  # noqa: F401
+    from .income import Income  # noqa: F401
     from .transfer import Transfer  # noqa: F401
+    from .account import Account  # noqa: F401
+    from .category import Category  # noqa: F401
+    from .subcategory import Subcategory  # noqa: F401
+    from .imports import Import  # noqa: F401
 
 
 class User(Base):
@@ -33,30 +33,30 @@ class User(Base):
     balance_outcome: float = Column(Float, default=0.0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    items: list["Item"] = relationship(
+    items: List["Item"] = relationship(
         "Item", back_populates="owner", cascade="all, delete-orphan"
     )
-    places: list["Place"] = relationship(
+    places: List["Place"] = relationship(
         "Place", back_populates="owner", cascade="all, delete-orphan"
     )
-    expenses: list["Expense"] = relationship(
+    expenses: List["Expense"] = relationship(
         "Expense", back_populates="owner", cascade="all, delete-orphan"
     )
-    incomes: list["Income"] = relationship(
+    incomes: List["Income"] = relationship(
         "Income", back_populates="owner", cascade="all, delete-orphan"
     )
-    transfers: list["Transfer"] = relationship(
+    transfers: List["Transfer"] = relationship(
         "Transfer", back_populates="owner", cascade="all, delete-orphan"
     )
-    accounts: list["Account"] = relationship(
+    accounts: List["Account"] = relationship(
         "Account", back_populates="owner", cascade="all, delete-orphan"
     )
-    categories: list["Category"] = relationship(
+    categories: List["Category"] = relationship(
         "Category", back_populates="owner", cascade="all, delete-orphan"
     )
-    subcategories: list["Subcategory"] = relationship(
+    subcategories: List["Subcategory"] = relationship(
         "Subcategory", back_populates="owner", cascade="all, delete-orphan"
     )
-    imports: list["Import"] = relationship(
+    imports: List["Import"] = relationship(
         "Import", back_populates="owner", cascade="all, delete-orphan"
     )

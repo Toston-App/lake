@@ -1,10 +1,9 @@
-import logging
+from sqlalchemy import create_engine
+from sqlalchemy import event
 import time
-
-from sqlalchemy import create_engine, event
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+import logging
 from sqlalchemy.orm import sessionmaker
-
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.core.config import settings
 
 engine = create_engine(str(settings.SQLALCHEMY_DATABASE_URI), pool_pre_ping=True)

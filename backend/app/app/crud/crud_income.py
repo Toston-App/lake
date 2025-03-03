@@ -1,14 +1,15 @@
+from typing import List
 from datetime import datetime
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import Date, and_, asc, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
+from sqlalchemy import and_, cast, Date, asc
 
-from app import crud
 from app.crud.base import CRUDBase
 from app.models.income import Income
 from app.schemas.income import IncomeCreate, IncomeUpdate
+from app import crud
 
 
 class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
@@ -64,15 +65,15 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
 
     # refactor this to only update balance once and not for each income
     async def create_multi_with_owner(
-        self, db: AsyncSession, *, obj_list: list[IncomeCreate], owner_id: int
-    ) -> list[Income]:
+        self, db: AsyncSession, *, obj_list: List[IncomeCreate], owner_id: int
+    ) -> List[Income]:
         created_incomes = []
         for obj_in in obj_list:
             income = await self.create_with_owner(db, obj_in=obj_in, owner_id=owner_id)
             created_incomes.append(income)
         return created_incomes
 
-    async def remove_multi(self, db: AsyncSession, *, ids: list[int]) -> list[Income]:
+    async def remove_multi(self, db: AsyncSession, *, ids: List[int]) -> List[Income]:
         removed_incomes = []
         for id in ids:
             income = await self.remove(db, id=id)
@@ -82,7 +83,7 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
-    ) -> list[Income]:
+    ) -> List[Income]:
         result = await db.execute(
             select(self.model)
             .filter(Income.owner_id == owner_id)
@@ -98,7 +99,7 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         owner_id: int,
         start_date: Date = None,
         end_date: str = None,
-    ) -> list[Income]:
+    ) -> List[Income]:
         query = select(self.model)
 
         query = query.where(

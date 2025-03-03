@@ -1,15 +1,16 @@
 # TODO: refactor bulk to only update balance once and not for each expense
+from typing import List
 from datetime import datetime
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import Date, and_, asc, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
+from sqlalchemy import and_, cast, Date, asc
 
-from app import crud
 from app.crud.base import CRUDBase
 from app.models.expense import Expense
 from app.schemas.expense import ExpenseCreate, ExpenseUpdate
+from app import crud
 
 
 class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
@@ -70,15 +71,15 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
         return db_obj
 
     async def create_multi_with_owner(
-        self, db: AsyncSession, *, obj_list: list[ExpenseCreate], owner_id: int
-    ) -> list[Expense]:
+        self, db: AsyncSession, *, obj_list: List[ExpenseCreate], owner_id: int
+    ) -> List[Expense]:
         created_expenses = []
         for obj_in in obj_list:
             expense = await self.create_with_owner(db, obj_in=obj_in, owner_id=owner_id)
             created_expenses.append(expense)
         return created_expenses
 
-    async def remove_multi(self, db: AsyncSession, *, ids: list[int]) -> list[Expense]:
+    async def remove_multi(self, db: AsyncSession, *, ids: List[int]) -> List[Expense]:
         removed_expenses = []
         for id in ids:
             expense = await self.remove(db, id=id)
@@ -88,7 +89,7 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
-    ) -> list[Expense]:
+    ) -> List[Expense]:
         result = await db.execute(
             select(self.model)
             .filter(Expense.owner_id == owner_id)
@@ -104,7 +105,7 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
         owner_id: int,
         start_date: Date = None,
         end_date: str = None,
-    ) -> list[Expense]:
+    ) -> List[Expense]:
         query = select(self.model)
 
         query = query.where(

@@ -1,3 +1,4 @@
+from typing import List
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +22,7 @@ class CRUDPlace(CRUDBase[Place, PlaceCreate, PlaceUpdate]):
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
-    ) -> list[Place]:
+    ) -> List[Place]:
         result = await db.execute(
             select(self.model)
             .filter(Place.owner_id == owner_id)

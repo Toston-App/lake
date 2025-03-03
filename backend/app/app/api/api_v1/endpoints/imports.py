@@ -1,16 +1,16 @@
 from datetime import datetime
-from typing import Any
-
+from typing import Any, List, Dict, Tuple
 import pandas as pd
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from app.synonyms import get_synonyms
+from app.models.imports import ImportService
 from fastapi.encoders import jsonable_encoder
-from fuzzywuzzy import fuzz
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
+from fuzzywuzzy import fuzz
 
 from app import crud, models, schemas
 from app.api import deps
-from app.models.imports import ImportService
-from app.synonyms import get_synonyms
 
 router = APIRouter()
 synonyms = get_synonyms()
@@ -49,7 +49,7 @@ def find_best_match(new_category, user_categories, threshold=80):
 
 
 async def create_accounts(
-    db: AsyncSession, owner_id: int, accounts: list[str], import_id: str
+    db: AsyncSession, owner_id: int, accounts: List[str], import_id: str
 ) -> dict:
     accounts_with_id = {}
     for account in accounts:
@@ -73,7 +73,7 @@ async def create_accounts(
 
 
 async def create_sites(
-    db: AsyncSession, owner_id: int, sites: list[str], import_id: str
+    db: AsyncSession, owner_id: int, sites: List[str], import_id: str
 ) -> dict:
     sites_with_id = {}
     for site in sites:
@@ -97,7 +97,7 @@ async def create_sites(
 
 async def process_csv(
     csv_file: UploadFile,
-    column_mapping: dict[str, str],
+    column_mapping: Dict[str, str],
 ) -> pd.DataFrame:
     """
     Process the CSV file and return a standardized DataFrame.
@@ -154,7 +154,7 @@ async def import_transactions(
     sites_with_id: dict,
     categories_with_id: dict,
     import_id: str,
-) -> tuple[int, int, int, int]:
+) -> Tuple[int, int, int, int]:
     """
     Import transactions from the standardized DataFrame.
     Returns a tuple of (total_imported, expenses_imported, incomes_imported, unmatched_categories)
@@ -227,9 +227,9 @@ async def process_import(
     db: AsyncSession,
     current_user: models.User,
     csv_file: UploadFile,
-    column_mapping: dict[str, str],
+    column_mapping: Dict[str, str],
     service: ImportService,
-) -> dict[str, Any]:
+) -> Dict[str, Any]:
     """
     Process the import and return detailed results.
     """

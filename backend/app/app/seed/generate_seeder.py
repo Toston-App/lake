@@ -1,7 +1,6 @@
 # Using faker, generate fake data for the database on a JSON file.
 
 import json
-
 from faker import Faker
 
 fake = Faker()

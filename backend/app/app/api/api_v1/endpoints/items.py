@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +9,7 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("/", response_model=list[schemas.Item])
+@router.get("/", response_model=List[schemas.Item])
 async def read_items(
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,

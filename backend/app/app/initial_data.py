@@ -1,5 +1,5 @@
-import asyncio
 import logging
+import asyncio
 
 from app.db.init_db import init_db
 
