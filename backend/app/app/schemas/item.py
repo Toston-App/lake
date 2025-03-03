@@ -38,6 +38,5 @@ class Item(ItemInDBBase):
 class ItemInDB(ItemInDBBase):
     pass
 
-
 class DeletionResponse(BaseModel):
     message: str

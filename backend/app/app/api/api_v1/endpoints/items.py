@@ -11,10 +11,10 @@ router = APIRouter()
 
 @router.get("/", response_model=List[schemas.Item])
 async def read_items(
-    db: AsyncSession = Depends(deps.async_get_db),
-    skip: int = 0,
-    limit: int = 100,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        db: AsyncSession = Depends(deps.async_get_db),
+        skip: int = 0,
+        limit: int = 100,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Retrieve items.
@@ -30,26 +30,24 @@ async def read_items(
 
 @router.post("/", response_model=schemas.Item)
 async def create_item(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    item_in: schemas.ItemCreate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        item_in: schemas.ItemCreate,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Create new item.
     """
-    item = await crud.item.create_with_owner(
-        db=db, obj_in=item_in, owner_id=current_user.id
-    )
+    item = await crud.item.create_with_owner(db=db, obj_in=item_in, owner_id=current_user.id)
     return item
 
 
 @router.get("/{id}", response_model=schemas.Item)
 async def read_item(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get item by ID.
@@ -64,11 +62,11 @@ async def read_item(
 
 @router.put("/{id}", response_model=schemas.Item)
 async def update_item(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    item_in: schemas.ItemUpdate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        item_in: schemas.ItemUpdate,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Update an item.
@@ -80,10 +78,10 @@ async def update_item(
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_item(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Delete an item.

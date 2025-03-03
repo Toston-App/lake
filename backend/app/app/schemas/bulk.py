@@ -12,7 +12,6 @@ class BulkDeletionsResponse(BaseModel):
     incomes: List[int] = []
     expenses: List[int] = []
 
-
 class BulkCreate(BaseModel):
     incomes: Optional[List[schemas.IncomeCreate]] = []
     expenses: Optional[List[schemas.ExpenseCreate]] = []

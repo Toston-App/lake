@@ -13,10 +13,10 @@ router = APIRouter()
 
 @router.get("", response_model=List[schemas.Account])
 async def read_accounts(
-    db: AsyncSession = Depends(deps.async_get_db),
-    skip: int = 0,
-    limit: int = 100,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        db: AsyncSession = Depends(deps.async_get_db),
+        skip: int = 0,
+        limit: int = 100,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Retrieve accounts.
@@ -30,13 +30,12 @@ async def read_accounts(
 
     return accounts
 
-
 @router.post("", response_model=schemas.Account)
 async def create_account(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    account_in: schemas.AccountCreate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        account_in: schemas.AccountCreate,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Create new account.
@@ -49,10 +48,10 @@ async def create_account(
 
 @router.get("/{id}", response_model=schemas.Account)
 async def read_account(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get account by ID.
@@ -60,22 +59,20 @@ async def read_account(
     account = await crud.account.get(db=db, id=id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if not crud.user.is_superuser(current_user) and (
-        account.owner_id != current_user.id
-    ):
+    if not crud.user.is_superuser(current_user) and (account.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
     return account
 
 
 @router.put("/{id}", response_model=schemas.Account)
 async def update_account(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    # account_in: schemas.AccountUpdate,
-    name: str = Body(None),
-    initial_balance: float = Body(None),
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        # account_in: schemas.AccountUpdate,
+        name: str = Body(None),
+        initial_balance: float = Body(None),
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Update an account.
@@ -95,13 +92,12 @@ async def update_account(
     account = await crud.account.update(db=db, db_obj=account, obj_in=account_in)
     return account
 
-
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_account(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Delete an account.

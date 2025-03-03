@@ -11,7 +11,6 @@ from app.core.config import settings
 
 # TODO: Fix jwt encode and decode when using this. At the moment we're using Clerk auth, so we aren't using this code
 
-
 def send_email(
     email_to: str,
     subject_template: str = "",

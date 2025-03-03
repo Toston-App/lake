@@ -6,7 +6,6 @@ from pydantic import BaseModel, validator
 
 from .subcategory import Subcategory  # noqa: F401
 
-
 # Shared properties
 class CategoryBase(BaseModel):
     name: Optional[str] = None
@@ -16,19 +15,17 @@ class CategoryBase(BaseModel):
     is_default: bool = False
     is_income: bool = False
 
-    @validator("name", "color")
+    @validator('name', 'color')
     def validate_non_empty_string(cls, value):
-        if isinstance(value, str) and value.strip() == "":
+        if isinstance(value, str) and value.strip() == '':
             raise ValueError("Field cannot be an empty string")
         return value
 
-    @validator("color")
+    @validator('color')
     def validate_hex_color(cls, value):
-        hex_color_pattern = r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
+        hex_color_pattern = r'^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$'
         if not re.match(hex_color_pattern, value):
-            raise ValueError(
-                "Color must be a valid hexadecimal color code (e.g., #RRGGBB)"
-            )
+            raise ValueError("Color must be a valid hexadecimal color code (e.g., #RRGGBB)")
         return value
 
 
@@ -62,7 +59,6 @@ class Category(CategoryInDBBase):
 class CategoryInDB(CategoryInDBBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
 
 class DeletionResponse(BaseModel):
     message: str

@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from .expense import Expense  # noqa: F401
     from .income import Income  # noqa: F401
 
-
 class Category(Base):
     id: int = Column(Integer, primary_key=True, index=True)
     name: str = Column(String, index=True, nullable=False)
@@ -23,9 +22,7 @@ class Category(Base):
     is_income: bool = Column(Boolean, index=True, nullable=False, default=False)
     owner_id = Column(Integer, ForeignKey("user.id"))
     owner: "User" = relationship("User", back_populates="categories")
-    subcategories: List["Subcategory"] = relationship(
-        "Subcategory", backref="parent_category", lazy="selectin"
-    )
+    subcategories: List["Subcategory"] = relationship("Subcategory", backref="parent_category", lazy="selectin")
     expenses: List["Expense"] = relationship("Expense", back_populates="category")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

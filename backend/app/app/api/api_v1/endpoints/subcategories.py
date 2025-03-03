@@ -12,10 +12,10 @@ router = APIRouter()
 
 @router.get("", response_model=List[schemas.Subcategory])
 async def read_subcategories(
-    db: AsyncSession = Depends(deps.async_get_db),
-    skip: int = 0,
-    limit: int = 100,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        db: AsyncSession = Depends(deps.async_get_db),
+        skip: int = 0,
+        limit: int = 100,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Retrieve subcategories.
@@ -29,13 +29,12 @@ async def read_subcategories(
 
     return categories
 
-
 @router.post("", response_model=schemas.Subcategory)
 async def create_subcategory(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    subcategory_in: schemas.SubcategoryCreate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        subcategory_in: schemas.SubcategoryCreate,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Create new subcategory.
@@ -48,10 +47,10 @@ async def create_subcategory(
 
 @router.get("/{id}", response_model=schemas.Subcategory)
 async def read_subcategory(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get subcategory by ID.
@@ -59,20 +58,18 @@ async def read_subcategory(
     subcategory = await crud.subcategory.get(db=db, id=id)
     if not subcategory:
         raise HTTPException(status_code=404, detail="Subcategory not found")
-    if not crud.user.is_superuser(current_user) and (
-        subcategory.owner_id != current_user.id
-    ):
+    if not crud.user.is_superuser(current_user) and (subcategory.owner_id != current_user.id):
         raise HTTPException(status_code=400, detail="Not enough permissions")
     return subcategory
 
 
 @router.put("/{id}", response_model=schemas.Subcategory)
 async def update_subcategory(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    category_in: schemas.SubcategoryUpdate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        category_in: schemas.SubcategoryUpdate,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Update an subcategory.
@@ -81,22 +78,20 @@ async def update_subcategory(
 
     # TODO: Check there are changes
     if subcategory.is_default:
-        return schemas.DeletionResponse(message=f"This item can not being deleted")
+            return schemas.DeletionResponse(message=f"This item can not being deleted")
 
     category_in.updated_at = datetime.now(timezone.utc)
-    subcategory = await crud.subcategory.update(
-        db=db, db_obj=subcategory, obj_in=category_in
-    )
+    subcategory = await crud.subcategory.update(db=db, db_obj=subcategory, obj_in=category_in)
 
     return subcategory
 
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_subcategory(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Delete an subcategory.

@@ -5,14 +5,13 @@ Revises: e9ed0db12277
 Create Date: 2023-09-02 16:54:53.081032
 
 """
-
 from alembic import op
 import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "acdfd62f770e"
-down_revision = "e9ed0db12277"
+revision = 'acdfd62f770e'
+down_revision = 'e9ed0db12277'
 branch_labels = None
 depends_on = None
 

@@ -12,10 +12,10 @@ router = APIRouter()
 
 @router.get("", response_model=List[schemas.Place])
 async def read_places(
-    db: AsyncSession = Depends(deps.async_get_db),
-    skip: int = 0,
-    limit: int = 100,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        db: AsyncSession = Depends(deps.async_get_db),
+        skip: int = 0,
+        limit: int = 100,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Retrieve places.
@@ -31,26 +31,24 @@ async def read_places(
 
 @router.post("", response_model=schemas.Place)
 async def create_place(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    place_in: schemas.PlaceCreate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        place_in: schemas.PlaceCreate,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Create new place.
     """
-    place = await crud.place.create_with_owner(
-        db=db, obj_in=place_in, owner_id=current_user.id
-    )
+    place = await crud.place.create_with_owner(db=db, obj_in=place_in, owner_id=current_user.id)
     return place
 
 
 @router.get("/{id}", response_model=schemas.Place)
 async def read_place(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get place by ID.
@@ -65,11 +63,11 @@ async def read_place(
 
 @router.put("/{id}", response_model=schemas.Place)
 async def update_place(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    place_in: schemas.PlaceUpdate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        place_in: schemas.PlaceUpdate,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Update an place.
@@ -83,10 +81,10 @@ async def update_place(
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_place(
-    *,
-    db: AsyncSession = Depends(deps.async_get_db),
-    id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+        *,
+        db: AsyncSession = Depends(deps.async_get_db),
+        id: int,
+        current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Delete an place.

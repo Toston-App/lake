@@ -5,14 +5,13 @@ Revises: 18fdd60ecac9
 Create Date: 2023-08-31 03:18:11.627698
 
 """
-
 from alembic import op
 import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "9c38a2c792d4"
-down_revision = "18fdd60ecac9"
+revision = '9c38a2c792d4'
+down_revision = '18fdd60ecac9'
 branch_labels = None
 depends_on = None
 
