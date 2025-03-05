@@ -6,6 +6,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.middleware.cors import CORSMiddleware
+from secure import Secure
 
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
@@ -23,6 +24,14 @@ app = FastAPI(
 )
 
 security = HTTPBasic()
+secure_headers = Secure.with_default_headers()
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response = await call_next(request)
+    await secure_headers.set_headers_async(response)
+    return response
 
 
 @app.middleware("http")
