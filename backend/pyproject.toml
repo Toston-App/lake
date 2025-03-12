@@ -31,6 +31,7 @@ dependencies = [
     "openai>=1.64.0",
     "filetype>=1.2.0",
     "secure>=1.0.1",
+    "phonenumbers>=9.0.0",
 ]
 name = "app"
 version = "0.1.0"

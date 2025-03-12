@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import phonenumbers
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
@@ -70,6 +71,7 @@ async def update_user_me(
     """
     current_user_data = jsonable_encoder(current_user)
     user_in = schemas.UserUpdate(**current_user_data)
+
     if password is not None:
         user_in.password = password
     if name is not None:
@@ -87,16 +89,22 @@ async def update_user_me(
                 detail="Phone number already registered to another user",
             )
 
-        # Format phone number to ensure it's in international format
-        # This assumes the phone number is already in international format (e.g., +1234567890)
-        # TODO: use phonenumbers library to validate and format phone number
-        if not phone.startswith('+'):
+        try:
+            phone_num = phonenumbers.parse(phone, None)
+            is_valid = phonenumbers.is_valid_number(phone_num)
+
+            if(is_valid == False):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid phone number",
+                )
+
+            user_in.phone  = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+        except phonenumbers.phonenumberutil.NumberParseException:
             raise HTTPException(
                 status_code=400,
-                detail="Phone number must be in international format (e.g., +1234567890)",
+                detail="Invalid phone number",
             )
-        # TODO: encrypt this one
-        user_in.phone = phone
 
     user_in.updated_at = datetime.now(timezone.utc)
     user = await crud.user.update(db, db_obj=current_user, obj_in=user_in)

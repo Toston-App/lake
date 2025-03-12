@@ -55,6 +55,7 @@ dependencies = [
     { name = "openai" },
     { name = "pandas" },
     { name = "passlib", extra = ["bcrypt"] },
+    { name = "phonenumbers" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
     { name = "pytest" },
@@ -95,6 +96,7 @@ requires-dist = [
     { name = "openai", specifier = ">=1.64.0" },
     { name = "pandas", specifier = ">=2.1.0,<3.0.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4,<2.0.0" },
+    { name = "phonenumbers", specifier = ">=9.0.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.3,<3.0.0" },
     { name = "pydantic", specifier = ">=1.10.2,<2.0.0" },
     { name = "pytest", specifier = ">=7.1.3,<8.0.0" },
@@ -1144,6 +1146,15 @@ wheels = [
 [package.optional-dependencies]
 bcrypt = [
     { name = "bcrypt" },
+]
+
+[[package]]
+name = "phonenumbers"
+version = "9.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/88/96/58ab3aa4f8695c85f5dce60c15bb3b113856f420d4f0575f6b6e92c1acb5/phonenumbers-9.0.0.tar.gz", hash = "sha256:094a6f728e3c2b1906df4494a480743a3c797320f721f2b53f1400fd4d8ed5f5", size = 2296775 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/82/943ce12a9db8932be3a1baff7cbc93524262942f2c41678242f410c8f420/phonenumbers-9.0.0-py2.py3-none-any.whl", hash = "sha256:f566eddf6219d9af9b4aad454ba411a1df565d13b875a490fd33d1d202c1148d", size = 2582416 },
 ]
 
 [[package]]
