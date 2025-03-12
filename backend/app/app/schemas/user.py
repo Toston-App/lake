@@ -31,7 +31,7 @@ class UserCreateUuid(BaseModel):
 
 # Properties to receive via API on update
 class UserUpdate(UserBase):
-    password: Optional[str] = None
+    updated_at: Optional[datetime] = None
 
 
 class UserInDBBase(UserBase):

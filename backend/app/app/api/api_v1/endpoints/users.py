@@ -12,6 +12,7 @@ from app import crud, models, schemas
 from app.api import deps
 from app.core import security
 from app.core.config import settings
+from app.utilities.encryption import encrypt_data
 from app.utils import send_new_account_email
 
 router = APIRouter()
@@ -99,7 +100,8 @@ async def update_user_me(
                     detail="Invalid phone number",
                 )
 
-            user_in.phone  = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+            formatted_phone  = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+            user_in.phone = encrypt_data(formatted_phone)
         except phonenumbers.phonenumberutil.NumberParseException:
             raise HTTPException(
                 status_code=400,
