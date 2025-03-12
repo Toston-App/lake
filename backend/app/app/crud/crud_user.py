@@ -51,6 +51,10 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         result = await db.execute(select(User).filter(User.uuid == uuid))
         return result.scalars().first()
 
+    async def get_by_phone(self, db: AsyncSession, *, phone: str) -> Optional[User]:
+        result = await db.execute(select(User).filter(User.phone == phone))
+        return result.scalars().first()
+
     async def create(
         self, db: AsyncSession, *, obj_in: UserCreate | UserCreateUuid
     ) -> User:

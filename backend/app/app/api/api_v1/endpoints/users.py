@@ -61,6 +61,8 @@ async def update_user_me(
     password: str = Body(None),
     name: str = Body(None),
     email: EmailStr = Body(None),
+    country: str = Body(None),
+    phone: str = Body(None),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -74,6 +76,27 @@ async def update_user_me(
         user_in.name = name
     if email is not None:
         user_in.email = email
+    if country is not None:
+        user_in.country = country
+    if phone is not None:
+        # Check if phone is already registered to another user
+        existing_user = await crud.user.get_by_phone(db, phone=phone)
+        if existing_user and existing_user.id != current_user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number already registered to another user",
+            )
+
+        # Format phone number to ensure it's in international format
+        # This assumes the phone number is already in international format (e.g., +1234567890)
+        # TODO: use phonenumbers library to validate and format phone number
+        if not phone.startswith('+'):
+            raise HTTPException(
+                status_code=400,
+                detail="Phone number must be in international format (e.g., +1234567890)",
+            )
+        # TODO: encrypt this one
+        user_in.phone = phone
 
     user_in.updated_at = datetime.now(timezone.utc)
     user = await crud.user.update(db, db_obj=current_user, obj_in=user_in)

@@ -23,6 +23,7 @@ class User(Base):
     name: str = Column(String, index=True, nullable=True)
     email: str = Column(String, unique=True, index=True, nullable=True)
     uuid: str = Column(String, unique=True, index=True, nullable=True)
+    phone: str = Column(String, unique=True, index=True, nullable=True)
     # Country code in Currency format - https://simplelocalize.io/data/locales/
     country: str = Column(String, index=True, nullable=False)
     hashed_password: str = Column(String, nullable=True)
