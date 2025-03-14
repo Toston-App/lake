@@ -5,6 +5,61 @@ import httpx
 from app.core.config import settings
 
 
+def format_currency(
+    amount: float,
+    currency_symbol: str = "$",
+    decimal_places: int = 2,
+    thousands_sep: str = ",",
+    decimal_point: str = ".",
+    symbol_position: str = "prefix",
+    add_space: bool = False
+) -> str:
+    """
+    Format a number as a currency string with customizable formatting
+
+    Args:
+        amount: The amount to format
+        currency_symbol: The currency symbol (default: $)
+        decimal_places: Number of decimal places (default: 2)
+        thousands_sep: Character to use as thousands separator (default: ,)
+        decimal_point: Character to use as decimal point (default: .)
+        symbol_position: Whether the currency symbol should be a 'prefix' or 'suffix' (default: prefix)
+        add_space: Whether to add a space between the number and symbol (default: False)
+
+    Returns:
+        Formatted currency string
+
+    Examples:
+        >>> format_currency(1234.56)
+        '$1,234.56'
+        >>> format_currency(1234.56, currency_symbol="€", symbol_position="suffix")
+        '1,234.56€'
+        >>> format_currency(1234.56, thousands_sep=".", decimal_point=",")
+        '$1.234,56'
+        >>> format_currency(-1234.56)
+        '-$1,234.56'
+    """
+    # Format with Python's built-in formatting
+    formatted = f"{abs(amount):,.{decimal_places}f}"
+
+    # Replace the default separators with the specified ones if different
+    if thousands_sep != "," or decimal_point != ".":
+        formatted = formatted.replace(",", "TEMP").replace(".", decimal_point).replace("TEMP", thousands_sep)
+
+    # Add the currency symbol in the correct position
+    space = " " if add_space else ""
+    if symbol_position.lower() == "suffix":
+        result = f"{formatted}{space}{currency_symbol}"
+    else:  # default to prefix
+        result = f"{currency_symbol}{space}{formatted}"
+
+    # Add negative sign if needed
+    if amount < 0:
+        result = f"-{result}"
+
+    return result
+
+
 async def send_whatsapp_message(
     phone_number: str,
     message_type: str,
