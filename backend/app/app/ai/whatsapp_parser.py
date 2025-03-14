@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from app.ai.ocr import TransactionType
 
-# Setup logging
 logging.basicConfig(
     filename="whatsapp_requests.log",
     level=logging.INFO,

@@ -43,6 +43,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
+    { name = "cryptography" },
     { name = "email-validator" },
     { name = "emails" },
     { name = "faker" },
@@ -84,6 +85,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.8.1,<2.0.0" },
     { name = "asyncpg", specifier = ">=0.27.0,<1.0.0" },
+    { name = "cryptography", specifier = ">=44.0.1" },
     { name = "email-validator", specifier = ">=1.2.1,<2.0.0" },
     { name = "emails", specifier = ">=0.6,<1.0" },
     { name = "faker", specifier = ">=19.3.1,<20.0.0" },
