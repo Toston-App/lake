@@ -8,6 +8,12 @@ Wallet is an efficient financial tracking application designed to help you effec
 - Expense Categorization: Categorize your expenses into various categories and subcategories for better tracking and analysis.
 - Spending Reports: Generate comprehensive reports on your weekly, monthly, and yearly expenses, providing valuable insights into your financial patterns.
 
+## WhatsApp Integration
+
+The application now supports transaction recording via WhatsApp messages. Users can send expense, income, and transfer details directly through WhatsApp, which will be automatically processed and recorded in their account.
+
+For detailed instructions on setting up and using the WhatsApp integration, see [WhatsApp Integration Documentation](./WHATSAPP_INTEGRATION.md).
+
 ## Requirements
 
 * [Docker](https://www.docker.com/).
