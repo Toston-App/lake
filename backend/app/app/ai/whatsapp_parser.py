@@ -93,25 +93,84 @@ class WhatsAppParser:
         """
         Parse WhatsApp message to extract transaction information
         """
+        if not message or not message.strip():
+            logging.warning("Empty message received for parsing")
+            return {}
+
         try:
             if self.client:
                 ai_result = await self.analyze_with_ai(message, categories, places, accounts)
-                return self.convert_ai_result_to_transaction(ai_result)
+                if not ai_result:
+                    logging.warning(f"AI analysis produced empty result for message: {message}")
+                    return {}
+
+                transaction = self.convert_ai_result_to_transaction(ai_result)
+
+                # Validate the transaction has minimal required data
+                if not self.validate_transaction(transaction):
+                    logging.warning(f"Parsed transaction failed validation: {transaction}")
+                    return {}
+
+                return transaction
+            else:
+                logging.error("No OpenAI client available for message parsing")
+                return {}
         except Exception as ai_error:
             logging.warning(f"AI analysis failed: {str(ai_error)}")
             return {}
 
+    def validate_transaction(self, transaction: dict) -> bool:
+        """Validate that a transaction has the minimum required fields"""
+        # A valid transaction must have at least an amount and a type
+        if "amount" not in transaction or not transaction["amount"]:
+            return False
+
+        if "type" not in transaction or not transaction["type"]:
+            return False
+
+        if transaction["amount"] <= 0:
+            return False
+
+        return True
+
     def convert_ai_result_to_transaction(self, ai_result: dict) -> dict:
         """Convert AI analysis result to transaction format"""
+        # Generate a unique transaction ID if none provided
+        tx_id = ai_result.get("id", f"tx-{secrets.token_urlsafe(4)}")
+
+        # Extract account ID if present
+        account = ai_result.get("account", {})
+        account_id = account.get("id") if isinstance(account, dict) else None
+        account_name = account.get("name") if isinstance(account, dict) else None
+
+        # Extract category and subcategory IDs if present
+        category = ai_result.get("category", {})
+        category_id = category.get("id") if isinstance(category, dict) else None
+        category_name = category.get("name") if isinstance(category, dict) else None
+
+        subcategory = ai_result.get("subcategory", {})
+        subcategory_id = subcategory.get("id") if isinstance(subcategory, dict) else None
+        subcategory_name = subcategory.get("name") if isinstance(subcategory, dict) else None
+
+        # Extract place ID if present
+        place = ai_result.get("place", {})
+        place_id = place.get("id") if isinstance(place, dict) else None
+        place_name = place.get("name") if isinstance(place, dict) else None
+
+        # Build the transaction object
         transaction = {
+            "id": tx_id,
             "type": ai_result.get("type", TransactionType.EXPENSE),
             "amount": float(ai_result.get("amount", 0)),
-            "category": ai_result.get("category"),
-            "subcategory": ai_result.get("subcategory"),
-            "place": ai_result.get("place"),
+            "category": category_name,
+            "category_id": category_id,
+            "subcategory": subcategory_name,
+            "subcategory_id": subcategory_id,
+            "place": place_name,
+            "place_id": place_id,
             "description": ai_result.get("description"),
-            "account": ai_result.get("account"),
-            "id": f"{ai_result.get('id', 'trans')}-{secrets.token_urlsafe(4)}"
+            "account": account_name,
+            "account_id": account_id,
         }
 
         # Handle date conversion
