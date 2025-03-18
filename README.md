@@ -39,8 +39,6 @@ Alternative automatic documentation with ReDoc (from the OpenAPI backend): http:
 
 PGAdmin, PostgreSQL web administration: http://localhost:5050
 
-Flower, administration of Celery tasks: http://localhost:5555
-
 Traefik UI, to see how the routes are being handled by the proxy: http://localhost:8090
 
 **Note**: The first time you start your stack, it might take a minute for it to be ready. While the backend waits for the database to be ready and configures everything. You can check the logs to monitor it.
@@ -668,8 +666,6 @@ Automatic Alternative Docs (ReDoc): https://wallet.com/redoc
 
 PGAdmin: https://pgadmin.wallet.com
 
-Flower: https://flower.wallet.com
-
 ### Staging URLs
 
 Staging URLs, from the branch `master`.
@@ -684,8 +680,6 @@ Automatic Alternative Docs (ReDoc): https://stag.wallet.com/redoc
 
 PGAdmin: https://pgadmin.stag.wallet.com
 
-Flower: https://flower.stag.wallet.com
-
 ### Development URLs
 
 Development URLs, for local development.
@@ -699,8 +693,6 @@ Automatic Interactive Docs (Swagger UI): https://localhost/docs
 Automatic Alternative Docs (ReDoc): https://localhost/redoc
 
 PGAdmin: http://localhost:5050
-
-Flower: http://localhost:5555
 
 Traefik UI: http://localhost:8090
 
@@ -718,8 +710,6 @@ Automatic Alternative Docs (ReDoc): https://local.dockertoolbox.tiangolo.com/red
 
 PGAdmin: http://local.dockertoolbox.tiangolo.com:5050
 
-Flower: http://local.dockertoolbox.tiangolo.com:5555
-
 Traefik UI: http://local.dockertoolbox.tiangolo.com:8090
 
 ### Development with a custom IP URLs
@@ -736,8 +726,6 @@ Automatic Alternative Docs (ReDoc): https://dev.wallet.com/redoc
 
 PGAdmin: http://dev.wallet.com:5050
 
-Flower: http://dev.wallet.com:5555
-
 Traefik UI: http://dev.wallet.com:8090
 
 ### Development in localhost with a custom domain URLs
@@ -753,8 +741,6 @@ Automatic Interactive Docs (Swagger UI): https://localhost.tiangolo.com/docs
 Automatic Alternative Docs (ReDoc): https://localhost.tiangolo.com/redoc
 
 PGAdmin: http://localhost.tiangolo.com:5050
-
-Flower: http://localhost.tiangolo.com:5555
 
 Traefik UI: http://localhost.tiangolo.com:8090
 

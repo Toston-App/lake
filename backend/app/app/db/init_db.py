@@ -1,9 +1,8 @@
-#from sqlalchemy.orm import Session
+# from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud, schemas
+from app import crud
 from app.core.config import settings
-from app.seed.seeder import db_seeder
 
 # make sure all SQL Alchemy models are imported (app.db.base) before initializing DB
 # otherwise, SQL Alchemy might fail to initialize relationships properly

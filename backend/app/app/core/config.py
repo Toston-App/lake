@@ -1,5 +1,5 @@
 import secrets
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional
 
 from pydantic import AnyHttpUrl, BaseSettings, EmailStr, HttpUrl, PostgresDsn, validator
 
@@ -11,25 +11,17 @@ class AsyncPostgresDsn(PostgresDsn):
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     API_V2_STR: str = "/api/v2"
+    # used for jwt
     SECRET_KEY: str = secrets.token_urlsafe(32)
+    # used for encryption with Fernet
+    ENCRYPTION_KEY: str
+
     # 60 minutes * 24 hours * 8 days = 8 days
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     SERVER_NAME: str
     SERVER_HOST: AnyHttpUrl
-    # BACKEND_CORS_ORIGINS is a JSON-formatted list of origins
-    # e.g: '["http://localhost", "http://localhost:4200", "http://localhost:3000", \
-    # "http://localhost:8080", "http://local.dockertoolbox.tiangolo.com"]'
-    BACKEND_CORS_ORIGINS: List[AnyHttpUrl] = []
     TEST_MODE: bool = False
     PROFILE_QUERY_MODE: bool = False
-
-    @validator("BACKEND_CORS_ORIGINS", pre=True)
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> Union[List[str], str]:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
-        raise ValueError(v)
 
     PROJECT_NAME: str
     SENTRY_DSN: Optional[HttpUrl] = None
@@ -48,14 +40,14 @@ class Settings(BaseSettings):
     SQLALCHEMY_DATABASE_URI_ASYNC: Optional[AsyncPostgresDsn] = None
 
     @validator("POSTGRES_DB", pre=True)
-    def assemble_db_name(cls, v: Optional[str], values: Dict[str, Any]) -> Any:
+    def assemble_db_name(cls, v: Optional[str], values: dict[str, Any]) -> Any:
         if values.get("TEST_MODE"):
             return "postgres"
         if isinstance(v, str):
             return v
 
     @validator("SQLALCHEMY_DATABASE_URI", pre=True)
-    def assemble_db_connection(cls, v: Optional[str], values: Dict[str, Any]) -> Any:
+    def assemble_db_connection(cls, v: Optional[str], values: dict[str, Any]) -> Any:
         if isinstance(v, str):
             return v
         return PostgresDsn.build(
@@ -67,7 +59,9 @@ class Settings(BaseSettings):
         )
 
     @validator("SQLALCHEMY_DATABASE_URI_ASYNC", pre=True)
-    def assemble_async_db_connection(cls, v: Optional[str], values: Dict[str, Any]) -> Any:
+    def assemble_async_db_connection(
+        cls, v: Optional[str], values: dict[str, Any]
+    ) -> Any:
         if isinstance(v, str):
             return v
         return AsyncPostgresDsn.build(
@@ -87,7 +81,7 @@ class Settings(BaseSettings):
     EMAILS_FROM_NAME: Optional[str] = None
 
     @validator("EMAILS_FROM_NAME")
-    def get_project_name(cls, v: Optional[str], values: Dict[str, Any]) -> str:
+    def get_project_name(cls, v: Optional[str], values: dict[str, Any]) -> str:
         if not v:
             return values["PROJECT_NAME"]
         return v
@@ -97,7 +91,7 @@ class Settings(BaseSettings):
     EMAILS_ENABLED: bool = False
 
     @validator("EMAILS_ENABLED", pre=True)
-    def get_emails_enabled(cls, v: bool, values: Dict[str, Any]) -> bool:
+    def get_emails_enabled(cls, v: bool, values: dict[str, Any]) -> bool:
         return bool(
             values.get("SMTP_HOST")
             and values.get("SMTP_PORT")
@@ -110,6 +104,14 @@ class Settings(BaseSettings):
     USERS_OPEN_REGISTRATION: bool = False
 
     SEED_DATABASE: bool = False
+
+    SERVER_NAME: str = "localhost"
+    SERVER_HOST: str = "http://localhost"
+
+    DOCS_USER: str = "user"
+    DOCS_PASSWORD: str = "password"
+
+    OPENAI_API_KEY: str
 
     class Config:
         case_sensitive = True

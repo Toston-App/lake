@@ -20,11 +20,9 @@ default_context:
   traefik_constraint_tag: 'wallet.com'
   traefik_constraint_tag_staging: 'stag.wallet.com'
   traefik_public_constraint_tag: 'traefik-public'
-  flower_auth: 'admin:root'
   sentry_dsn: ''
   docker_image_prefix: ''
   docker_image_backend: 'backend'
-  docker_image_celeryworker: 'celeryworker'
   docker_image_frontend: 'frontend'
   _copy_without_render: [frontend/src/**/*.html, frontend/src/**/*.vue, frontend/node_modules/*, backend/app/app/email-templates/**]
   _template: ./

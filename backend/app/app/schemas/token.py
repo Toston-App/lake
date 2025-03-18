@@ -1,5 +1,3 @@
-from typing import Optional
-
 from pydantic import BaseModel
 
 
@@ -16,6 +14,7 @@ class TokenPayload(BaseModel):
     # email: str
     # country: str
     # id: int
+
 
 class TokenPayloadUuid(BaseModel):
     azp: str

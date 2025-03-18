@@ -1,18 +1,18 @@
-
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, ForeignKey, Integer, String, Float, Date
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
-
+from sqlalchemy.sql import func
 
 from app.db.base_class import Base
 
 if TYPE_CHECKING:
-    from .user import User  # noqa: F401
     from .account import Account  # noqa: F401
-    from .place import Place  # noqa: F401
     from .category import Category  # noqa: F401
+    from .place import Place  # noqa: F401
     from .subcategory import Subcategory  # noqa: F401
+    from .user import User  # noqa: F401
+
 
 class Expense(Base):
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
@@ -29,3 +29,6 @@ class Expense(Base):
     subcategory: "Subcategory" = relationship("Subcategory", back_populates="expenses")
     place_id: int = Column(Integer, ForeignKey("place.id"))
     place: "Place" = relationship("Place", back_populates="expenses")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    import_id: int = Column(Integer, ForeignKey("import.id"))

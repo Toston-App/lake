@@ -1,7 +1,8 @@
-
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, validator
+
 
 # Shared properties
 class SubcategoryBase(BaseModel):
@@ -10,11 +11,12 @@ class SubcategoryBase(BaseModel):
     icon: Optional[str] = None
     is_default: bool = False
 
-    @validator('name')
+    @validator("name")
     def validate_non_empty_string(cls, value):
-        if isinstance(value, str) and value.strip() == '':
+        if isinstance(value, str) and value.strip() == "":
             raise ValueError("Field cannot be an empty string")
         return value
+
 
 # Properties to receive on subcategory creation
 class SubcategoryCreate(SubcategoryBase):
@@ -44,7 +46,9 @@ class Subcategory(SubcategoryInDBBase):
 
 # Properties properties stored in DB
 class SubcategoryInDB(SubcategoryInDBBase):
-    pass
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
 
 class DeletionResponse(BaseModel):
     message: str

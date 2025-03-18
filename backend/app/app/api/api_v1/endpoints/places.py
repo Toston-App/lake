@@ -1,4 +1,5 @@
-from typing import Any, List
+from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,12 +10,12 @@ from app.api import deps
 router = APIRouter()
 
 
-@router.get("/", response_model=List[schemas.Place])
+@router.get("", response_model=list[schemas.Place])
 async def read_places(
-        db: AsyncSession = Depends(deps.async_get_db),
-        skip: int = 0,
-        limit: int = 100,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    db: AsyncSession = Depends(deps.async_get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Retrieve places.
@@ -28,26 +29,28 @@ async def read_places(
     return places
 
 
-@router.post("/", response_model=schemas.Place)
+@router.post("", response_model=schemas.Place)
 async def create_place(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        place_in: schemas.PlaceCreate,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    place_in: schemas.PlaceCreate,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Create new place.
     """
-    place = await crud.place.create_with_owner(db=db, obj_in=place_in, owner_id=current_user.id)
+    place = await crud.place.create_with_owner(
+        db=db, obj_in=place_in, owner_id=current_user.id
+    )
     return place
 
 
 @router.get("/{id}", response_model=schemas.Place)
 async def read_place(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        id: int,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get place by ID.
@@ -62,26 +65,28 @@ async def read_place(
 
 @router.put("/{id}", response_model=schemas.Place)
 async def update_place(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        id: int,
-        place_in: schemas.PlaceUpdate,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    id: int,
+    place_in: schemas.PlaceUpdate,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Update an place.
     """
     place = await read_place(db=db, id=id, current_user=current_user)
+
+    place_in.updated_at = datetime.now(timezone.utc)
     place = await crud.place.update(db=db, db_obj=place, obj_in=place_in)
     return place
 
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_place(
-        *,
-        db: AsyncSession = Depends(deps.async_get_db),
-        id: int,
-        current_user: models.User = Depends(deps.get_current_active_user),
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    id: int,
+    current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Delete an place.
