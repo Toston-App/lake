@@ -1,16 +1,12 @@
 import base64
 import json
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Optional
 
-from fastapi.encoders import jsonable_encoder
 from openai import AsyncOpenAI, RateLimitError
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-
-from app import crud
-from app.utilities.matcher import find_cat_match, find_subcat_match
 
 
 class TransactionType(str, Enum):
@@ -39,21 +35,23 @@ class OCRHelper:
             return base64.b64encode(image_file.read()).decode("utf-8")
 
     async def analyze_image(
-        self, image_path: str, model: str = "gpt-4o-mini", json: bool = True
+        self, image_path: str, categories, places, model: str = "gpt-4o-mini", json: bool = True
     ) -> str:
         """Analyze image using OpenAI Vision API"""
         base64_image = self.encode_image(image_path)
 
-        prompt = """You are a bot in a finance app and your responsibility is to help with automatic transaction details.
-        Please analyze the attached image and give me all the transactions on it. The rules are:
+        prompt = f"""You are an assistant in a personal finance app. Parse the following image about a financial transaction and extract the relevant information.
+
+        Rules:
         - Aim for all the transactions on the image.
-        - The amount must be included as a number, converted to MXN if needed.
-        - The date must be in the format of YYYY-MM-DD. If the date is not available, you can leave it empty. If is a supermarket ticket, date is generally at the bottom of the ticket.
-        - The place must be the name of the place where the transaction happened.
-        - The description must be a short text describing the transaction but keep the name of the item bought in sentence case. If is possible, try to include the quantity and the price of the item.
-        - Category (categorize as "Compras","Alimentos y bebidas","Seguros","Vivienda","Vehículos","Transporte","Vida y entretenimiento","Salud y deporte","Suscripciones y servicios","Gastos financieros","Inversiones","Ingresos" or empty if not applicable. Only use one category each time).
-        - Subcategory match each item to its subcategory based on general knowledge.
-        - Type (categorize as 'expense', 'income', or 'transfer').
+        - type: Categorize as 'expense' (default), 'income', or 'transfer'
+        - amount: Extract the numerical amount as a float
+        - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({date.today()})
+        - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
+        - subcategory: Match to an appropriate subcategory based on the category. Respond with the id and name of the subcategory or null if not applicable.
+        - description: Brief description in Spanish of what the transaction was for.
+        - place: Match the transaction location to the most appropriate place in base the description, using the provided list: {places}. Return the id and name ONLY if there's a clear match in the provided list, otherwise return null.
+
         You must respond in valid JSON with the key "transactions" and the value is list of the transactions. Don't wrap the response in a markdown code."""
 
         try:
@@ -92,9 +90,6 @@ class OCRHelper:
     ) -> dict[str, Any]:
         """Parse OpenAI response and match categories with synonyms"""
         try:
-            user_categories = jsonable_encoder(
-                await crud.category.get_multi_by_owner(db=db, owner_id=owner_id)
-            )
             transactions = json.loads(response_text)["transactions"]
             count = 0
 
@@ -102,27 +97,6 @@ class OCRHelper:
                 # add id
                 transaction["id"] = count
                 count += 1
-
-                if "category" in transaction:
-                    cat_match = find_cat_match(transaction["category"], user_categories)
-                    transaction["category_id"] = cat_match["id"] if cat_match else None
-
-                if "subcategory" in transaction:
-                    subcat_match = find_subcat_match(
-                        transaction["subcategory"],
-                        transaction["category"],
-                        user_categories,
-                    )
-
-                    if subcat_match is None and transaction["category_id"]:
-                        for cat in user_categories:
-                            if cat["id"] == transaction["category_id"]:
-                                subcat_match = cat["subcategories"][0]
-                                break
-
-                    transaction["subcategory_id"] = (
-                        subcat_match["id"] if subcat_match else None
-                    )
 
                 # Ensure amount is float
                 if "amount" in transaction:
@@ -138,6 +112,31 @@ class OCRHelper:
                         ).date()
                     except:
                         transaction["date"] = None
+
+                # Extract category and subcategory IDs if present
+                category = transaction.get("category", {})
+                category_id = category.get("id") if isinstance(category, dict) else None
+                category_name = category.get("name") if isinstance(category, dict) else None
+
+                subcategory = transaction.get("subcategory", {})
+                subcategory_id = subcategory.get("id") if isinstance(subcategory, dict) else None
+                subcategory_name = subcategory.get("name") if isinstance(subcategory, dict) else None
+
+                if category_id and category_name:
+                    transaction["category_id"] = category_id
+                    transaction["category_name"] = category_name
+
+                if subcategory_id and subcategory_name:
+                    transaction["subcategory_id"] = subcategory_id
+                    transaction["subcategory_name"] = subcategory_name
+
+                place = transaction.get("place", {})
+                place_id = place.get("id") if isinstance(place, dict) else None
+                place_name = place.get("name") if isinstance(place, dict) else None
+
+                if place_id and place_name:
+                    transaction["place_id"] = place_id
+                    transaction["place_name"] = place_name
 
             return transactions
         except json.JSONDecodeError as e:

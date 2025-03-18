@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import tempfile
@@ -7,10 +8,12 @@ import filetype
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import models
+from app import crud, models
 from app.ai.ocr import OCRHelper
 from app.api import deps
 from app.core.config import settings
+from app.utilities.simplifier import categories as simplify_categories
+from app.utilities.simplifier import places as simplify_places
 
 router = APIRouter()
 ocr = OCRHelper(settings.OPENAI_API_KEY)
@@ -81,7 +84,12 @@ async def ocr_image(
             temp_file.flush()
 
             try:
-                transaction = await ocr.analyze_image(temp_file.name)
+                places_task =  crud.place.get_multi_by_owner(db=db, owner_id=current_user.id)
+                categories_task =  crud.category.get_multi_by_owner(db=db, owner_id=current_user.id)
+
+                (places, categories) = await asyncio.gather(places_task, categories_task)
+
+                transaction = await ocr.analyze_image(temp_file.name, simplify_categories(categories), simplify_places(places))
 
                 if transaction == "Insufficient API credits":
                     logging.info(
