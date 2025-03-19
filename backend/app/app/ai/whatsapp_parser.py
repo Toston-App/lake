@@ -1,5 +1,4 @@
 import json
-import logging
 import secrets
 from datetime import date, datetime
 from typing import Any, Optional
@@ -8,14 +7,9 @@ from openai import AsyncOpenAI, RateLimitError
 from pydantic import BaseModel
 
 from app.ai.ocr import TransactionType
+from app.utilities.logger import setup_logger
 
-logging.basicConfig(
-    filename="whatsapp_requests.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-
+logger = setup_logger("whatsapp_requests", "whatsapp_requests.log")
 
 class WhatsAppMessage(BaseModel):
     """Model for WhatsApp message data"""
@@ -80,7 +74,7 @@ class WhatsAppParser:
                 raise ValueError("Insufficient OpenAI API credits")
             raise ValueError("OpenAI rate limit exceeded")
         except Exception as e:
-            logging.error(f"Error analyzing message with OpenAI: {str(e)}")
+            logger.error(f"Error analyzing message with OpenAI: {str(e)}")
             raise ValueError(f"Error analyzing message with OpenAI: {str(e)}")
 
     async def parse_message(
@@ -94,29 +88,29 @@ class WhatsAppParser:
         Parse WhatsApp message to extract transaction information
         """
         if not message or not message.strip():
-            logging.warning("Empty message received for parsing")
+            logger.warning("Empty message received for parsing")
             return {}
 
         try:
             if self.client:
                 ai_result = await self.analyze_with_ai(message, categories, places, accounts)
                 if not ai_result:
-                    logging.warning(f"AI analysis produced empty result for message: {message}")
+                    logger.warning(f"AI analysis produced empty result for message: {message}")
                     return {}
 
                 transaction = self.convert_ai_result_to_transaction(ai_result)
 
                 # Validate the transaction has minimal required data
                 if not self.validate_transaction(transaction):
-                    logging.warning(f"Parsed transaction failed validation: {transaction}")
+                    logger.warning(f"Parsed transaction failed validation: {transaction}")
                     return {}
 
                 return transaction
             else:
-                logging.error("No OpenAI client available for message parsing")
+                logger.error("No OpenAI client available for message parsing")
                 return {}
         except Exception as ai_error:
-            logging.warning(f"AI analysis failed: {str(ai_error)}")
+            logger.warning(f"AI analysis failed: {str(ai_error)}")
             return {}
 
     def validate_transaction(self, transaction: dict) -> bool:
