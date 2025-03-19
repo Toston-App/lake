@@ -33,6 +33,7 @@ dependencies = [
     "secure>=1.0.1",
     "phonenumbers>=9.0.0",
     "cryptography>=44.0.1",
+    "redis>=5.2.1",
 ]
 name = "app"
 version = "0.1.0"
