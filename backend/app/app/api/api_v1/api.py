@@ -14,6 +14,7 @@ from app.api.api_v1.endpoints import (
     transfers,
     users,
     utils,
+    whatsapp,
 )
 
 api_router = APIRouter()
@@ -32,3 +33,4 @@ api_router.include_router(
 )
 api_router.include_router(imports.router, prefix="/import", tags=["imports"])
 api_router.include_router(ai.router, prefix="/ai", tags=["ai"])
+api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])

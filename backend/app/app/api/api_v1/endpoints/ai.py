@@ -1,4 +1,4 @@
-import logging
+import asyncio
 import os
 import tempfile
 from typing import Any
@@ -7,20 +7,17 @@ import filetype
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import models
+from app import crud, models
 from app.ai.ocr import OCRHelper
 from app.api import deps
 from app.core.config import settings
+from app.utilities.logger import setup_logger
+from app.utilities.simplifier import categories as simplify_categories
+from app.utilities.simplifier import places as simplify_places
 
 router = APIRouter()
+logger = setup_logger("ocr_requests", "ocr_requests.log")
 ocr = OCRHelper(settings.OPENAI_API_KEY)
-
-logging.basicConfig(
-    filename="ocr_requests.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 
 
 # TODO: Validate size: https://github.com/fastapi/fastapi/issues/362
@@ -67,7 +64,7 @@ async def ocr_image(
     image: UploadFile = File(...),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    logging.info(
+    logger.info(
         f"OCR request received - User ID: {current_user.id} - File: {image.filename}"
     )
 
@@ -81,10 +78,15 @@ async def ocr_image(
             temp_file.flush()
 
             try:
-                transaction = await ocr.analyze_image(temp_file.name)
+                places_task =  crud.place.get_multi_by_owner(db=db, owner_id=current_user.id)
+                categories_task =  crud.category.get_multi_by_owner(db=db, owner_id=current_user.id)
+
+                (places, categories) = await asyncio.gather(places_task, categories_task)
+
+                transaction = await ocr.analyze_image(temp_file.name, simplify_categories(categories), simplify_places(places))
 
                 if transaction == "Insufficient API credits":
-                    logging.info(
+                    logger.info(
                         f"OCR request failed - User ID: {current_user.id} - File: {image.filename} - Error: Insufficient API credits"
                     )
                     raise HTTPException(
@@ -95,7 +97,7 @@ async def ocr_image(
                 parsed_transaction = await ocr.parse_response(
                     db=db, owner_id=current_user.id, response_text=transaction
                 )
-                logging.info(
+                logger.info(
                     f"OCR request completed - User ID: {current_user.id} - File: {image.filename}"
                 )
                 return parsed_transaction
@@ -107,7 +109,7 @@ async def ocr_image(
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(
+        logger.error(
             f"OCR request failed - User ID: {current_user.id} - File: {image.filename} - Error: {str(e)}"
         )
         raise HTTPException(

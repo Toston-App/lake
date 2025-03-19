@@ -113,6 +113,23 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str
 
+    # WhatsApp Integration Settings
+    WHATSAPP_ENABLED: bool = False
+    WHATSAPP_ACCESS_TOKEN: str
+    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
+    WHATSAPP_VERIFY_TOKEN: Optional[str] = None
+    WHATSAPP_API_VERSION: str = "v22.0"
+
+    REDIS_URL: str
+
+    @validator("WHATSAPP_ENABLED", pre=True)
+    def get_whatsapp_enabled(cls, v: bool, values: dict[str, Any]) -> bool:
+        return bool(
+            values.get("WHATSAPP_ACCESS_TOKEN")
+            and values.get("WHATSAPP_PHONE_NUMBER_ID")
+            and bool(values.get("WHATSAPP_VERIFY_TOKEN"))
+        )
+
     class Config:
         case_sensitive = True
 

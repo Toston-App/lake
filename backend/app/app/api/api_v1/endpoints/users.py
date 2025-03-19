@@ -12,7 +12,7 @@ from app import crud, models, schemas
 from app.api import deps
 from app.core import security
 from app.core.config import settings
-from app.utilities.encryption import encrypt_data
+from app.utilities.encryption import hash_sha256
 from app.utils import send_new_account_email
 
 router = APIRouter()
@@ -100,8 +100,13 @@ async def update_user_me(
                     detail="Invalid phone number",
                 )
 
-            formatted_phone  = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
-            user_in.phone = encrypt_data(formatted_phone)
+            formatted_phone  = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.E164)
+
+            # Ensure Mexican mobile numbers start with +521 (add '1' if missing), this to match whatsapp phone format
+            if phone_num.country_code == 52 and not formatted_phone.startswith("+521"):
+                formatted_phone = "+521" + formatted_phone[3:]
+
+            user_in.phone = hash_sha256(formatted_phone)
         except phonenumbers.phonenumberutil.NumberParseException:
             raise HTTPException(
                 status_code=400,
