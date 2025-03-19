@@ -12,6 +12,7 @@ class IncomeBase(BaseModel):
     account_id: Optional[int] = None
     subcategory_id: Optional[int] = None
     place_id: Optional[int] = None
+    made_from: Optional[str] = "Web"
 
     # Fix the amount to 2 decimal places
     @root_validator
@@ -28,6 +29,11 @@ class IncomeBase(BaseModel):
             raise ValueError("Amount must be positive")
         return v
 
+    @validator("made_from")
+    def validate_made_from(cls, v):
+        if v not in ["Web", "WhatsApp", "OCR"]:
+            raise ValueError("made_from must be one of: Web, WhatsApp, OCR")
+        return v
 
 # Properties to receive on Income creation
 class IncomeCreate(IncomeBase):

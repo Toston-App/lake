@@ -260,7 +260,8 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     subcategory_id=transaction_data.get("subcategory_id"),
                                                     place_id=transaction_data.get("place_id"),
                                                     account_id=transaction_data.get("account_id"),
-                                                    description=transaction_data.get("description") or "Added via WhatsApp"
+                                                    description=transaction_data.get("description") or "Added via WhatsApp",
+                                                    made_from="WhatsApp"
                                                 )
 
                                                 await crud.expense.create_with_owner(
@@ -280,7 +281,8 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     subcategory_id=transaction_data.get("subcategory_id"),
                                                     place_id=transaction_data.get("place_id"),
                                                     account_id=transaction_data.get("account_id"),
-                                                    description=transaction_data.get("description") or "Added via WhatsApp"
+                                                    description=transaction_data.get("description") or "Added via WhatsApp",
+                                                    made_from="WhatsApp"
                                                 )
 
                                                 await crud.income.create_with_owner(
