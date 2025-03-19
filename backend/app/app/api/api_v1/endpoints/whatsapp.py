@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
@@ -11,6 +10,8 @@ from app.ai.whatsapp_parser import WhatsAppParser
 from app.api import deps
 from app.core.config import settings
 from app.utilities.encryption import hash_sha256
+from app.utilities.logger import setup_logger
+from app.utilities.redis import delete_transaction, get_transaction, store_transaction
 from app.utilities.simplifier import accounts as simplify_accounts
 from app.utilities.simplifier import categories as simplify_categories
 from app.utilities.simplifier import places as simplify_places
@@ -23,17 +24,8 @@ from app.utilities.whatsapp import (
 
 router = APIRouter()
 whatsapp_parser = WhatsAppParser(settings.OPENAI_API_KEY)
+logger = setup_logger("whatsapp_requests", "whatsapp_requests.log")
 
-# Dictionary to store transaction data temporarily
-# TODO: Change this to a redis db or a unlogged table in postgres
-transaction_cache: dict[str, dict[str, Any]] = {}
-
-logging.basicConfig(
-    filename="whatsapp_api.log",
-    level=logging.INFO,
-    format="%(asctime)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 
 class WhatsAppCallback(BaseModel):
     """Model for WhatsApp message callback webhook"""
@@ -52,17 +44,17 @@ async def verify_webhook(
 
     WhatsApp API will call this endpoint to verify the webhook is properly configured
     """
-    logging.info(f"Webhook verification request received: {hub_mode}, {hub_verify_token}")
+    logger.info(f"Webhook verification request received: {hub_mode}, {hub_verify_token}")
 
     # Check if webhook token matches our configuration
     if hub_verify_token != settings.WHATSAPP_VERIFY_TOKEN:
-        logging.error(f"Invalid verification token: {hub_verify_token}")
+        logger.error(f"Invalid verification token: {hub_verify_token}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid verification token",
         )
 
-    logging.info(f"Webhook verification successful, returning challenge: {hub_challenge}")
+    logger.info(f"Webhook verification successful, returning challenge: {hub_challenge}")
     return hub_challenge
 
 
@@ -95,7 +87,7 @@ async def process_webhook(
                                 user = await crud.user.get_by_phone(db, phone=phone_number)
 
                                 if not user:
-                                    logging.warning(f"No user found for phone number: {phone_number}")
+                                    logger.warning(f"No user found for phone number: {phone_number}")
                                     await send_text_message(
                                         send_to,
                                         """👋 ¡Hola! Aún no tienes vinculado tu número de telefono.
@@ -118,7 +110,7 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                 # Handle text messages
                                 if "text" in message_obj and "body" in message_obj["text"]:
                                     message_text = message_obj["text"]["body"]
-                                    logging.info(f"Text message received from {phone_number}: {message_text}")
+                                    logger.info(f"Text message received from {phone_number}: {message_text}")
 
                                     # Send "processing" reaction
                                     await send_reaction(
@@ -153,7 +145,7 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
 
                                         # Check if parsing returned empty data
                                         if not transaction_data or "amount" not in transaction_data or transaction_data["amount"] <= 0:
-                                            logging.warning(f"Failed to parse message: {message_text}")
+                                            logger.warning(f"Failed to parse message: {message_text}")
                                             await send_text_message(
                                                 send_to,
                                                 """❌ No pude entender tu mensaje. Por favor, intenta ser más específico.
@@ -168,10 +160,20 @@ Por ejemplo:
 
                                         # Cache transaction data for later confirmation
                                         transaction_id = transaction_data["id"]
-                                        transaction_cache[transaction_id] = {
-                                            "data": transaction_data,
-                                            "user_id": user.id
-                                        }
+
+                                        store_success = store_transaction(
+                                            transaction_id=transaction_id,
+                                            transaction_data=transaction_data,
+                                            user_id=user.id
+                                        )
+
+                                        if not store_success:
+                                            logger.error(f"Failed to store transaction {transaction_id}. Check redis logs")
+                                            await send_text_message(
+                                                send_to,
+                                                "❌ Ocurrió un error al procesar tu mensaje. Por favor, intenta de nuevo."
+                                            )
+                                            continue
 
                                         # Send confirmation message with buttons
                                         if transaction_data["type"] == "expense":
@@ -209,14 +211,14 @@ Por ejemplo:
                                                 ]
                                             )
                                         elif transaction_data["type"] == "transfer":
-                                            logging.info("Transfer transaction detected")
+                                            logger.info("Transfer transaction detected")
                                             await send_text_message(
                                                 send_to,
                                                 "Lo siento, aún no se pueden hacer transferencias por WhatsApp, pero estamos trabajando en ello 🚀"
                                             )
 
                                     except ValueError as e:
-                                        logging.error(f"Error parsing message: {str(e)}")
+                                        logger.error(f"Error parsing message: {str(e)}")
                                         await send_text_message(
                                             send_to,
                                             f"""❌ Ocurrió un error al procesar tu mensaje: {str(e)}
@@ -233,67 +235,71 @@ Por favor, intenta de nuevo con un formato más claro."""
                                         # Extract transaction ID from button ID
                                         transaction_id = button_id.replace("confirm_", "")
 
-                                        if transaction_id in transaction_cache:
-                                            cached_data = transaction_cache[transaction_id]
-                                            transaction_data = cached_data["data"]
-                                            user_id = cached_data["user_id"]
+                                        # Check if transaction exists in cache
+                                        cached_data = get_transaction(transaction_id)
 
-                                            # Create transaction based on type
-                                            try:
-                                                if transaction_data["type"] == "expense":
-                                                    # Create expense
-                                                    expense_in = schemas.ExpenseCreate(
-                                                        amount=transaction_data["amount"],
-                                                        date=str(transaction_data["date"]),
-                                                        category_id=transaction_data.get("category_id"),
-                                                        subcategory_id=transaction_data.get("subcategory_id"),
-                                                        place_id=transaction_data.get("place_id"),
-                                                        account_id=transaction_data.get("account_id"),
-                                                        description=transaction_data.get("description") or "Added via WhatsApp"
-                                                    )
-
-                                                    await crud.expense.create_with_owner(
-                                                        db=db, obj_in=expense_in, owner_id=user_id
-                                                    )
-
-                                                    await send_text_message(
-                                                        send_to,
-                                                        "✅ ¡Gasto registrado con éxito!"
-                                                    )
-
-                                                elif transaction_data["type"] == "income":
-                                                    # Create income
-                                                    income_in = schemas.IncomeCreate(
-                                                        amount=transaction_data["amount"],
-                                                        date=str(transaction_data["date"]),
-                                                        subcategory_id=transaction_data.get("subcategory_id"),
-                                                        place_id=transaction_data.get("place_id"),
-                                                        account_id=transaction_data.get("account_id"),
-                                                        description=transaction_data.get("description") or "Added via WhatsApp"
-                                                    )
-
-                                                    await crud.income.create_with_owner(
-                                                        db=db, obj_in=income_in, owner_id=user_id
-                                                    )
-
-                                                    await send_text_message(
-                                                        send_to,
-                                                        "✅ ¡Ingreso registrado con éxito!"
-                                                    )
-
-                                                # Remove from cache after processing
-                                                del transaction_cache[transaction_id]
-
-                                            except Exception as create_error:
-                                                logging.error(f"Error creating transaction: {str(create_error)}")
-                                                await send_text_message(
-                                                    send_to,
-                                                    f"❌ Error al crear la transacción: {str(create_error)}"
-                                                )
-                                        else:
+                                        if not cached_data:
                                             await send_text_message(
                                                 send_to,
                                                 "❌ No se encontró la transacción a confirmar. Puede que haya expirado."
+                                            )
+
+                                            continue
+
+                                        transaction_data = cached_data["data"]
+                                        user_id = int(cached_data["user_id"])
+
+                                        # Create transaction based on type
+                                        try:
+                                            if transaction_data["type"] == "expense":
+                                                # Create expense
+                                                expense_in = schemas.ExpenseCreate(
+                                                    amount=transaction_data["amount"],
+                                                    date=transaction_data["date"],
+                                                    category_id=transaction_data.get("category_id"),
+                                                    subcategory_id=transaction_data.get("subcategory_id"),
+                                                    place_id=transaction_data.get("place_id"),
+                                                    account_id=transaction_data.get("account_id"),
+                                                    description=transaction_data.get("description") or "Added via WhatsApp"
+                                                )
+
+                                                await crud.expense.create_with_owner(
+                                                    db=db, obj_in=expense_in, owner_id=user_id
+                                                )
+
+                                                await send_text_message(
+                                                    send_to,
+                                                    "✅ ¡Gasto registrado con éxito!"
+                                                )
+
+                                            elif transaction_data["type"] == "income":
+                                                # Create income
+                                                income_in = schemas.IncomeCreate(
+                                                    amount=transaction_data["amount"],
+                                                    date=transaction_data["date"],
+                                                    subcategory_id=transaction_data.get("subcategory_id"),
+                                                    place_id=transaction_data.get("place_id"),
+                                                    account_id=transaction_data.get("account_id"),
+                                                    description=transaction_data.get("description") or "Added via WhatsApp"
+                                                )
+
+                                                await crud.income.create_with_owner(
+                                                    db=db, obj_in=income_in, owner_id=user_id
+                                                )
+
+                                                await send_text_message(
+                                                    send_to,
+                                                    "✅ ¡Ingreso registrado con éxito!"
+                                                )
+
+                                            # Remove from cache after processing
+                                            delete_transaction(transaction_id)
+
+                                        except Exception as create_error:
+                                            logger.error(f"Error creating transaction: {str(create_error)}")
+                                            await send_text_message(
+                                                send_to,
+                                                f"❌ Error al crear la transacción: {str(create_error)}"
                                             )
 
                                     elif button_id.startswith("cancel_"):
@@ -301,8 +307,7 @@ Por favor, intenta de nuevo con un formato más claro."""
                                         transaction_id = button_id.replace("cancel_", "")
 
                                         # Remove from cache if exists
-                                        if transaction_id in transaction_cache:
-                                            del transaction_cache[transaction_id]
+                                        delete_transaction(transaction_id)
 
                                         await send_text_message(
                                             send_to,
@@ -312,6 +317,6 @@ Por favor, intenta de nuevo con un formato más claro."""
         return {"status": "success"}
 
     except Exception as e:
-        logging.error(f"Error processing webhook: {str(e)}")
+        logger.error(f"Error processing webhook: {str(e)}")
         return {"status": "error", "message": str(e)}
 
