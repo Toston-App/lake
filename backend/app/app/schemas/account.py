@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from app.models.account import AccountType
+
 
 # Shared properties
 class AccountBase(BaseModel):
@@ -13,6 +15,7 @@ class AccountBase(BaseModel):
     total_incomes: Optional[float] = None
     total_transfers_in: Optional[float] = None
     total_transfers_out: Optional[float] = None
+    type: AccountType = AccountType.MISCELLANEOUS
 
 
 # Properties to receive on Account creation
