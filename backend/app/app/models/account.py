@@ -67,6 +67,7 @@ class Account(Base):
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
     name: str = Column(String, index=True, nullable=False)
     type: AccountType = Column(Enum(AccountType), index=True, nullable=False, default=AccountType.MISCELLANEOUS)
+    color: str = Column(String, nullable=False, default="#168FFF")
     initial_balance: float = Column(Float, index=True, default=0.0)
     current_balance: float = Column(Float, index=True, default=0.0)
     total_expenses: float = Column(Float, index=True, default=0.0)

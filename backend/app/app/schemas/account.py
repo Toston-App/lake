@@ -16,6 +16,7 @@ class AccountBase(BaseModel):
     total_transfers_in: Optional[float] = None
     total_transfers_out: Optional[float] = None
     type: AccountType = AccountType.MISCELLANEOUS
+    color: Optional[str] = "#168FFF"
 
 
 # Properties to receive on Account creation
