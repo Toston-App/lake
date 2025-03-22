@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional
+import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 from app.models.account import AccountType
 
@@ -17,6 +18,14 @@ class AccountBase(BaseModel):
     total_transfers_out: Optional[float] = None
     type: AccountType = AccountType.MISCELLANEOUS
     color: Optional[str] = "#168FFF"
+
+    @validator('color')
+    def validate_color(cls, v):
+        if v is None:
+            return v
+        if not re.match(r'^#(?:[0-9a-fA-F]{3}){1,2}$', v):
+            raise ValueError('Invalid color format. Must be a valid hex color like "#168FFF"')
+        return v
 
 
 # Properties to receive on Account creation
