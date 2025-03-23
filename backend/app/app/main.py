@@ -5,8 +5,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from Secweb import SecWeb
 from starlette.middleware.cors import CORSMiddleware
-from secure import Secure
 
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
@@ -23,21 +23,39 @@ app = FastAPI(
     openapi_url=None,
 )
 
+SecWeb(app=app, Option={'csp': {
+    "default-src": ["'self'"],
+    "img-src": [
+        "'self'",
+        "data:",
+    ],
+    "connect-src": ["'self'"],
+    "script-src": ["'self'"],
+    "style-src": ["'self'", "'unsafe-inline'"],
+    "script-src-elem": [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+    ],
+    "style-src-elem": [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+    ],
+    "base-uri": ["'self'"],
+    "font-src": ["'self'", "https:", "data:"],
+    "frame-ancestors": ["'self'"],
+    "object-src": ["'none'"],
+    "script-src-attr": ["'none'"],
+    "require-trusted-types-for": ["'script'"],
+}
+})
+
 security = HTTPBasic()
-secure_headers = Secure.with_default_headers()
-
-
-@app.middleware("http")
-async def add_security_headers(request, call_next):
-    response = await call_next(request)
-    await secure_headers.set_headers_async(response)
-    return response
-
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.info(f"Request: {request.method} {request.url}")
-    logger.info(f"Headers: {request.headers}")
+    logger.info(f"Request: {request.method} {request.url} from {request.headers.get('host')}")
     response = await call_next(request)
     logger.info(f"Response status: {response.status_code}")
     return response
