@@ -30,10 +30,10 @@ dependencies = [
     "fuzzywuzzy>=0.18.0,<1.0.0",
     "openai>=1.64.0",
     "filetype>=1.2.0",
-    "secure>=1.0.1",
     "phonenumbers>=9.0.0",
     "cryptography>=44.0.1",
     "redis>=5.2.1",
+    "secweb>=1.18.1",
 ]
 name = "app"
 version = "0.1.0"
