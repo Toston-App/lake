@@ -55,6 +55,9 @@ services:
     environment:
       - PG_USERNAME=${PG_USERNAME}
       - PG_HASHED_PASSWORD=${PG_HASHED_PASSWORD}
+      - 'PGADMIN_CONFIG_X_CONTENT_TYPE_OPTIONS=${PGADMIN_CONFIG_X_CONTENT_TYPE_OPTIONS}
+      - 'PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=${PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION}'
+      - 'PGADMIN_CONFIG_X_XSS_PROTECTION=${PGADMIN_CONFIG_X_XSS_PROTECTION}'
     # labels:
       # Basic auth for pgadmin using the environment variables PG_USERNAME and PG_HASHED_PASSWORD
       # - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME}:${PG_HASHED_PASSWORD}
