@@ -15,6 +15,7 @@ class CategoryBase(BaseModel):
     icon: Optional[str] = None
     is_default: bool = False
     is_income: bool = False
+    total: float = 0.0
 
     @validator("name", "color")
     def validate_non_empty_string(cls, value):

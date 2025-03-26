@@ -10,6 +10,7 @@ class SubcategoryBase(BaseModel):
     description: Optional[str] = None
     icon: Optional[str] = None
     is_default: bool = False
+    total: Optional[float] = None
 
     @validator("name")
     def validate_non_empty_string(cls, value):
