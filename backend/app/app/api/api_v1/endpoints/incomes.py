@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
@@ -227,6 +228,7 @@ async def update_income(
     # Store original values for later comparison
     original_amount = income.amount
     original_account_id = income.account_id
+    original_subcategory_id = income.subcategory_id
 
     if income_in.place_id:
         place = await crud.place.get(db=db, id=income_in.place_id)
@@ -251,6 +253,58 @@ async def update_income(
 
     income_in.updated_at = datetime.now(timezone.utc)
     updated_income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
+
+    # Update subcategory and category totals if amount or subcategory_id has changed
+    if updated_income.amount != original_amount or updated_income.subcategory_id != original_subcategory_id:
+        # Update original subcategory total and its category if it exists
+        if original_subcategory_id:
+            original_subcategory = await crud.subcategory.get(db=db, id=original_subcategory_id)
+            if original_subcategory:
+                # Update original subcategory total
+                await db.execute(
+                    updateDb(original_subcategory.__class__)
+                    .where(original_subcategory.__class__.id == original_subcategory.id)
+                    .values(total=original_subcategory.total - original_amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+                # Update original category total if it exists
+                if original_subcategory.category_id:
+                    original_category = await crud.category.get(db=db, id=original_subcategory.category_id)
+                    if original_category:
+                        await db.execute(
+                            updateDb(original_category.__class__)
+                            .where(original_category.__class__.id == original_category.id)
+                            .execution_options(synchronize_session="fetch")
+                            .values(total=original_category.total - original_amount)
+                        )
+                        await db.commit()
+
+        # Update new subcategory total and its category if it exists
+        if updated_income.subcategory_id:
+            new_subcategory = await crud.subcategory.get(db=db, id=updated_income.subcategory_id)
+            if new_subcategory:
+                # Update new subcategory total
+                await db.execute(
+                    updateDb(new_subcategory.__class__)
+                    .where(new_subcategory.__class__.id == new_subcategory.id)
+                    .values(total=new_subcategory.total + updated_income.amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+                # Update new category total if it exists
+                if new_subcategory.category_id:
+                    new_category = await crud.category.get(db=db, id=new_subcategory.category_id)
+                    if new_category:
+                        await db.execute(
+                            updateDb(new_category.__class__)
+                            .where(new_category.__class__.id == new_category.id)
+                            .values(total=new_category.total + updated_income.amount)
+                            .execution_options(synchronize_session="fetch")
+                        )
+                        await db.commit()
 
     if (
         updated_income.amount != original_amount
@@ -311,10 +365,37 @@ async def delete_income(
             db=db, id=income.account_id, column="total_incomes", amount=-income.amount
         )
 
+    # Update subcategory total and its category if they exist
+    if income.subcategory_id:
+        subcategory = await crud.subcategory.get(db=db, id=income.subcategory_id)
+
+        if subcategory:
+            # Update subcategory total
+            await db.execute(
+                updateDb(subcategory.__class__)
+                .where(subcategory.__class__.id == subcategory.id)
+                .values(total=subcategory.total - income.amount)
+                .execution_options(synchronize_session="fetch")
+            )
+            await db.commit()
+
+            # Update category total if it exists
+            if subcategory.category_id:
+                category = await crud.category.get(db=db, id=subcategory.category_id)
+
+                if category:
+                    await db.execute(
+                        updateDb(category.__class__)
+                        .where(category.__class__.id == category.id)
+                        .values(total=category.total - income.amount)
+                        .execution_options(synchronize_session="fetch")
+                    )
+                    await db.commit()
+
+
     return schemas.DeletionResponse(message=f"Item {id} deleted")
-    return income
 
-
+# TODO: make a helper to delete and reutilize it in the bulk delete
 @router.delete("/bulk/{ids}", response_model=schemas.BulkDeletionResponse)
 async def delete_incomes_bulk(
     *,
@@ -349,6 +430,32 @@ async def delete_incomes_bulk(
 
     if not valid_incomes:
         raise HTTPException(status_code=404, detail="No valid incomes found")
+
+    # Update subcategory and category totals before deleting
+    for income in valid_incomes:
+        if income.subcategory_id:
+            subcategory = await crud.subcategory.get(db=db, id=income.subcategory_id)
+            if subcategory:
+                # Update subcategory total
+                await db.execute(
+                    updateDb(subcategory.__class__)
+                    .where(subcategory.__class__.id == subcategory.id)
+                    .value(total=subcategory.total - income.amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+                # Update category total if it exists
+                if subcategory.category_id:
+                    category = await crud.category.get(db=db, id=subcategory.category_id)
+                    if category:
+                        await db.execute(
+                            updateDb(category.__class__)
+                            .where(category.__class__.id == category.id)
+                            .value(total=category.total - income.amount)
+                            .execution_options(synchronize_session="fetch")
+                        )
+                        await db.commit()
 
     # Only attempt to remove existing incomes
     valid_ids = [income.id for income in valid_incomes]
