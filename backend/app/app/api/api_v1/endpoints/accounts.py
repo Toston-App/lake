@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
+from app.models.account import AccountType
 
 router = APIRouter()
 
@@ -75,6 +76,8 @@ async def update_account(
     # account_in: schemas.AccountUpdate,
     name: str = Body(None),
     initial_balance: float = Body(None),
+    color: str = Body(None),
+    type: AccountType = Body(None),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -90,6 +93,10 @@ async def update_account(
     if initial_balance is not None:
         account_in.initial_balance = initial_balance
         account_in.current_balance += initial_balance - account.initial_balance
+    if color is not None:
+        account_in.color = color
+    if type is not None:
+        account_in.type = type
 
     account_in.updated_at = datetime.now(timezone.utc)
     account = await crud.account.update(db=db, db_obj=account, obj_in=account_in)
