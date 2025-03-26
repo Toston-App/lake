@@ -3,6 +3,7 @@ from datetime import datetime
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import Date, and_, asc, cast
+from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
 
@@ -41,16 +42,33 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
         if obj_in_data["category_id"]:
             category = await crud.category.get(db=db, id=obj_in_data["category_id"])
 
-            if not category:
+            if not category or category.owner_id != owner_id:
                 obj_in_data["category_id"] = None
+            else:
+                await db.execute(
+                    updateDb(category.__class__)
+                    .where(category.__class__.id == category.id)
+                    .values(total=category.total + obj_in_data["amount"])
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
 
         if obj_in_data["subcategory_id"]:
             subcategory = await crud.subcategory.get(
                 db=db, id=obj_in_data["subcategory_id"]
             )
 
-            if not subcategory:
+            if not subcategory or subcategory.category_id != obj_in_data["category_id"] or subcategory.owner_id != owner_id:
                 obj_in_data["subcategory_id"] = None
+            else:
+                # Update subcategory total
+                await db.execute(
+                    updateDb(subcategory.__class__)
+                    .where(subcategory.__class__.id == subcategory.id)
+                    .values(total=subcategory.total + obj_in_data["amount"])
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
 
         if obj_in_data["place_id"]:
             place = await crud.place.get(db=db, id=obj_in_data["place_id"])
