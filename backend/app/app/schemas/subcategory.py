@@ -27,7 +27,7 @@ class SubcategoryCreate(SubcategoryBase):
 
 # Properties to receive on subcategory update
 class SubcategoryUpdate(SubcategoryBase):
-    pass
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB

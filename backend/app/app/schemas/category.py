@@ -41,7 +41,7 @@ class CategoryCreate(CategoryBase):
 
 # Properties to receive on category update
 class CategoryUpdate(CategoryBase):
-    pass
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB
