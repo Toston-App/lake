@@ -47,8 +47,8 @@ class OCRHelper:
         - type: Categorize as 'expense' (default), 'income', or 'transfer'
         - amount: Extract the numerical amount as a float
         - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({date.today()})
-        - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
-        - subcategory: Match to an appropriate subcategory based on the category. Respond with the id and name of the subcategory or null if not applicable.
+        - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable. If type is income, search for `is_income: True` in the category list I provided.
+        - subcategory: Match to an appropriate subcategory based on the category you matched. ALWAYS respond with the id and name of the subcategory or null if you didn't find a category match. For income transactions, search for `is_income: True` in the categories list I provided.
         - description: Brief description in Spanish of what the transaction was for.
         - place: Match the transaction location to the most appropriate place in base the description, using the provided list: {places}. Return the id and name ONLY if there's a clear match in the provided list, otherwise return null.
 
