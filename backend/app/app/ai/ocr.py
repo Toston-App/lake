@@ -103,9 +103,9 @@ class OCRHelper:
 
                 # Ensure amount is float
                 if "amount" in transaction:
-                    transaction["amount"] = float(
+                    transaction["amount"] = abs(float(
                         str(transaction["amount"]).replace(",", "")
-                    )
+                    ))
 
                 # Parse date string to datetime
                 if "date" in transaction and transaction["date"]:
