@@ -147,7 +147,7 @@ categories_and_sub = [
     },
     {
         "name": "Inversiones",
-        "icon": "activity",
+        "icon": "barChart3",
         "color": "#3498DB",
         "sub_categories": [
             {"name": "Inversiones", "icon": "activity"},
