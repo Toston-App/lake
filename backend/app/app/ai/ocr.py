@@ -99,7 +99,7 @@ class OCRHelper:
                 count += 1
 
                 # add made_from ocr
-                transaction["made_from"] = "OCR";
+                transaction["made_from"] = "OCR"
 
                 # Ensure amount is float
                 if "amount" in transaction:
