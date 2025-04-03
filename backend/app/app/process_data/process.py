@@ -19,7 +19,7 @@ def get_percentage(past, actual):
     return round(((actual - past) / abs(past)) * 100, 2)
 
 
-def get_df(expenses, incomes, accounts, places, categories):
+def get_df(expenses, incomes, transfers, accounts, places, categories):
     def get_account_id(row):
         return row["account_id"]
 
@@ -46,6 +46,7 @@ def get_df(expenses, incomes, accounts, places, categories):
 
     incomes_df = pd.DataFrame(incomes)
     expenses_df = pd.DataFrame(expenses)
+    transfers_df = pd.DataFrame(transfers)
     accounts_df = pd.DataFrame(accounts)
     places_df = pd.DataFrame(places)
     categories_df = pd.DataFrame(categories)
@@ -101,9 +102,20 @@ def get_df(expenses, incomes, accounts, places, categories):
             inplace=True,
         )
 
+    if not transfers_df.empty:
+        transfers_df["type"] = "transfer"
+        transfers_df.set_index("id", inplace=True)
+        transfers_df.rename(columns={"from_acc": "from_account_id", "to_acc": "to_account_id"}, inplace=True)
+
+        transfers_df.drop(
+            columns=["description", "owner_id"],
+            inplace=True,
+        )
+
     return {
         "expenses": expenses_df,
         "incomes": incomes_df,
+        "transfers": transfers_df,
         "accounts": accounts_df,
         "places": places_df,
         "categories": categories_df,
@@ -440,12 +452,25 @@ def account_diff(past, actual):
     return result
 
 
-def account_charts(incomes_df, expenses_df):
-    if incomes_df.empty and expenses_df.empty:
+def account_charts(incomes_df, expenses_df, transfers_df):
+    if incomes_df.empty and expenses_df.empty and transfers_df.empty:
         return {}
 
-    # Combine incomes and expenses into a single DataFrame
-    transactions = pd.concat([incomes_df, expenses_df])
+    if not transfers_df.empty:
+        # Create from_account entries (negative amount)
+        from_transfers = transfers_df.copy()
+        from_transfers['account'] = from_transfers['from_account_id']
+        from_transfers['amount'] = -from_transfers['amount']  # Negative for outgoing
+
+        # Create to_account entries (positive amount)
+        to_transfers = transfers_df.copy()
+        to_transfers['account'] = to_transfers['to_account_id']
+        # Amount is already positive for incoming
+
+        # Combine incomes and expenses into a single DataFrame
+        transactions = pd.concat([incomes_df, expenses_df, from_transfers, to_transfers], ignore_index=True)
+    else:
+        transactions = pd.concat([incomes_df, expenses_df], ignore_index=True)
 
     # Sort the transactions by date
     transactions = transactions.sort_values("date")
@@ -455,9 +480,7 @@ def account_charts(incomes_df, expenses_df):
 
     # Aggregate transactions by date for each account
     for account_id, account_transactions in transactions.groupby("account"):
-        if (
-            account_id is not None
-        ):  # Ensure we're not processing transactions with no account
+        if account_id is not None:  # Ensure we're not processing transactions with no account
             daily_balance = 0
             for date, day_transactions in account_transactions.groupby("date"):
                 daily_balance += day_transactions["amount"].sum()
