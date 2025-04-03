@@ -104,6 +104,9 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
             hashed_password = get_password_hash(update_data["password"])
             del update_data["password"]
             update_data["hashed_password"] = hashed_password
+
+        # avoid user update own id
+        update_data["id"] = db_obj.id
         return await super().update(db, db_obj=db_obj, obj_in=update_data)
 
     async def authenticate(
@@ -122,11 +125,11 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
     def is_superuser(self, user: User) -> bool:
         return user.is_superuser
 
+    # owner_id is not needed here, because we always pase it as user_id. User cannot pass custom user id
     async def update_balance(
         self, db: AsyncSession, *, user_id: int, is_Expense: bool, amount: float
     ) -> User:
         user = await crud.user.get(db, id=user_id)
-
         user_data = jsonable_encoder(user)
         user_in = UserUpdate(**user_data)
 

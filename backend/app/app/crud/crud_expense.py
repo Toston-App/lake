@@ -31,6 +31,7 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
         if obj_in_data["account_id"]:
             update = await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=owner_id,
                 id=obj_in_data["account_id"],
                 column="total_expenses",
                 amount=obj_in_data["amount"],

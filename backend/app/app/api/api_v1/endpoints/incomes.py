@@ -314,6 +314,7 @@ async def update_income(
         if original_account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=original_account_id,
                 column="total_incomes",
                 amount=-original_amount,
@@ -323,6 +324,7 @@ async def update_income(
         if updated_income.account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=updated_income.account_id,
                 column="total_incomes",
                 amount=updated_income.amount,
@@ -362,7 +364,11 @@ async def delete_income(
     if income.account_id:
         # amount is negative because it's an income, and we want to subtract instead of add
         await crud.account.update_by_id_and_field(
-            db=db, id=income.account_id, column="total_incomes", amount=-income.amount
+            db=db,
+            owner_id=current_user.id,
+            id=income.account_id,
+            column="total_incomes",
+            amount=-income.amount
         )
 
     # Update subcategory total and its category if they exist
@@ -469,6 +475,7 @@ async def delete_incomes_bulk(
         if income.account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=income.account_id,
                 column="total_incomes",
                 amount=-income.amount,

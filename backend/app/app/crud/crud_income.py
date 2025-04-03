@@ -30,6 +30,7 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         if obj_in_data["account_id"]:
             update = await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=owner_id,
                 id=obj_in_data["account_id"],
                 column="total_incomes",
                 amount=obj_in_data["amount"],

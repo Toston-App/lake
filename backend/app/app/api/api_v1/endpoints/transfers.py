@@ -258,13 +258,17 @@ async def delete_transfer(
     # TODO: Do it in a single query or concurrently with asyncio
     await crud.account.update_by_id_and_field(
         db=db,
+        owner_id=current_user.id,
         id=transfer.from_acc,
         column="total_transfers_out",
         amount=-transfer.amount,
     )
     await crud.account.update_by_id_and_field(
-        db=db, id=transfer.to_acc, column="total_transfers_in", amount=-transfer.amount
+        db=db,
+        owner_id=current_user.id,
+        id=transfer.to_acc,
+        column="total_transfers_in",
+        amount=-transfer.amount
     )
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
-    return transfer

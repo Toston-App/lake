@@ -335,6 +335,7 @@ async def update_expense(
         if original_account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=original_account_id,
                 column="total_expenses",
                 amount=-original_amount,
@@ -344,6 +345,7 @@ async def update_expense(
         if updated_expense.account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=updated_expense.account_id,
                 column="total_expenses",
                 amount=updated_expense.amount,
@@ -412,6 +414,7 @@ async def delete_expense(
         # amount is negative because it's an expense, and we want to subtract instead of add
         await crud.account.update_by_id_and_field(
             db=db,
+            owner_id=current_user.id,
             id=expense.account_id,
             column="total_expenses",
             amount=-expense.amount,
@@ -496,6 +499,7 @@ async def delete_expenses_bulk(
         if expense.account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=expense.account_id,
                 column="total_expenses",
                 amount=-expense.amount,
