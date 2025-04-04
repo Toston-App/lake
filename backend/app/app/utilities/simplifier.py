@@ -26,6 +26,7 @@ def categories(categories):
         return {
             "id": extract_field(category, "id"),
             "name": extract_field(category, "name"),
+            "is_income": extract_field(category, "is_income"),
             "subcategories": subcategories
         }
 

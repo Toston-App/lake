@@ -208,13 +208,13 @@ async def read_user_by_id(
     """
     Get a specific user by id.
     """
-    user = await crud.user.get(db, id=user_id)
-    if user == current_user:
-        return user
     if not crud.user.is_superuser(current_user):
         raise HTTPException(
             status_code=400, detail="The user doesn't have enough privileges"
         )
+
+    user = await crud.user.get(db, id=user_id)
+
     return user
 
 
@@ -230,11 +230,19 @@ async def update_user(
     Update a user.
     """
     user = await crud.user.get(db, id=user_id)
+
+    if user.id != current_user.id and not crud.user.is_superuser(current_user):
+        raise HTTPException(
+            status_code=400,
+            detail="The user doesn't have enough privileges",
+        )
+
     if not user:
         raise HTTPException(
             status_code=404,
             detail="The user with this username does not exist in the system",
         )
+
     user = await crud.user.update(db, db_obj=user, obj_in=user_in)
     return user
 
@@ -250,10 +258,24 @@ async def delete_user(
     Delete a user.
     """
     user = await crud.user.get(db, id=id)
+
+    if user.id != current_user.id and not crud.user.is_superuser(current_user):
+        raise HTTPException(
+            status_code=400,
+            detail="The user doesn't have enough privileges",
+        )
+
+    if user == current_user:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot delete your own account",
+        )
+
     if not user:
         raise HTTPException(
             status_code=404,
             detail="The user with this username does not exist in the system",
         )
+
     user = await crud.user.remove(db=db, id=id)
     return user

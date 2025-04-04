@@ -27,6 +27,7 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
 
         update_from = await crud.account.update_by_id_and_field(
             db=db,
+            owner_id=owner_id,
             id=obj_in_data["from_acc"],
             column="total_transfers_out",
             amount=obj_in_data["amount"],
@@ -37,6 +38,7 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
 
         update_to = await crud.account.update_by_id_and_field(
             db=db,
+            owner_id=owner_id,
             id=obj_in_data["to_acc"],
             column="total_transfers_in",
             amount=obj_in_data["amount"],

@@ -71,7 +71,7 @@ async def all_querys(
         start_date=start_date - reldelta,
         end_date=end_date - reldelta,
     )
-    # transfers_task = crud.transfer.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date, end_date=end_date)
+    transfers_task = crud.transfer.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date, end_date=end_date)
 
     accounts_task = crud.account.get_multi_by_owner(db=db, owner_id=owner_id)
     places_task = crud.place.get_multi_by_owner(db=db, owner_id=owner_id)
@@ -83,7 +83,7 @@ async def all_querys(
         incomes_past_task,
         expenses_actual_task,
         expenses_past_task,
-        # transfers_task,
+        transfers_task,
         accounts_task,
         places_task,
         categories_task,
@@ -218,6 +218,7 @@ async def get_all_data(
         incomes_past,
         expenses_actual,
         expenses_past,
+        transfers,
         accounts,
         places,
         categories,
@@ -246,6 +247,7 @@ async def get_all_data(
     dfs = get_df(
         expenses=jsonable_encoder(expenses_actual),
         incomes=jsonable_encoder(incomes_actual),
+        transfers=jsonable_encoder(transfers),
         accounts=jsonable_encoder(accounts),
         places=jsonable_encoder(places),
         categories=jsonable_encoder(categories),
@@ -254,6 +256,7 @@ async def get_all_data(
     past_dfs = get_df(
         expenses=jsonable_encoder(expenses_past),
         incomes=jsonable_encoder(incomes_past),
+        transfers=jsonable_encoder(transfers),
         accounts=jsonable_encoder(accounts),
         places=jsonable_encoder(places),
         categories=jsonable_encoder(categories),
@@ -277,7 +280,7 @@ async def get_all_data(
         past=past_accounts_total, actual=actual_accounts_total
     )
     account_chart = account_charts(
-        incomes_df=dfs["incomes"], expenses_df=dfs["expenses"]
+        incomes_df=dfs["incomes"], expenses_df=dfs["expenses"], transfers_df=dfs["transfers"]
     )
 
     return {

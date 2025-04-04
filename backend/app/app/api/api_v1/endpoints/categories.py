@@ -99,10 +99,9 @@ async def delete_category(
     """
     category = await read_category(db=db, id=id, current_user=current_user)
 
-    if category.is_default:
-        return schemas.DeletionResponse(message="This item can not being deleted")
+    if category.is_income:
+        raise HTTPException(status_code=400, detail="This item cannot be deleted")
 
     category = await crud.category.remove(db=db, id=id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
-    return category

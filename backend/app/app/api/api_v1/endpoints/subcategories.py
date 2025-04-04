@@ -79,10 +79,6 @@ async def update_subcategory(
     """
     subcategory = await read_subcategory(db=db, id=id, current_user=current_user)
 
-    # TODO: Check there are changes
-    if subcategory.is_default:
-        return schemas.DeletionResponse(message="This item can not being deleted")
-
     category_in.updated_at = datetime.now(timezone.utc)
     subcategory = await crud.subcategory.update(
         db=db, db_obj=subcategory, obj_in=category_in

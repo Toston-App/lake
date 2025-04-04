@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
@@ -236,6 +237,8 @@ async def update_expense(
     # Store original values for later comparison
     original_amount = expense.amount
     original_account_id = expense.account_id
+    original_category_id = expense.category_id
+    original_subcategory_id = expense.subcategory_id
 
     if expense_in.place_id:
         place = await crud.place.get(db=db, id=expense_in.place_id)
@@ -270,6 +273,60 @@ async def update_expense(
         db=db, db_obj=expense, obj_in=expense_in
     )
 
+    # Update category and subcategory totals if amount, category_id or subcategory_id has changed
+    if updated_expense.amount != original_amount or updated_expense.category_id != original_category_id or updated_expense.subcategory_id != original_subcategory_id:
+        # Update original category total if it exists
+        if original_category_id:
+            original_category = await crud.category.get(db=db, id=original_category_id)
+
+            if original_category:
+                await db.execute(
+                    updateDb(original_category.__class__)
+                    .where(original_category.__class__.id == original_category.id)
+                    .values(total=original_category.total - original_amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+        # Update new category total if it exists
+        if updated_expense.category_id:
+            new_category = await crud.category.get(db=db, id=updated_expense.category_id)
+
+            if new_category:
+                await db.execute(
+                    updateDb(new_category.__class__)
+                    .where(new_category.__class__.id == new_category.id)
+                    .values(total=new_category.total + updated_expense.amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+        # Update original subcategory total if it exists
+        if original_subcategory_id:
+            original_subcategory = await crud.subcategory.get(db=db, id=original_subcategory_id)
+
+            if original_subcategory:
+                await db.execute(
+                    updateDb(original_subcategory.__class__)
+                    .where(original_subcategory.__class__.id == original_subcategory.id)
+                    .values(total=original_subcategory.total - original_amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+        # Update new subcategory total if it exists
+        if updated_expense.subcategory_id:
+            new_subcategory = await crud.subcategory.get(db=db, id=updated_expense.subcategory_id)
+
+            if new_subcategory:
+                await db.execute(
+                    updateDb(new_subcategory.__class__)
+                    .where(new_subcategory.__class__.id == new_subcategory.id)
+                    .values(total=new_subcategory.total + updated_expense.amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
     if (
         updated_expense.amount != original_amount
         or updated_expense.account_id != original_account_id
@@ -278,6 +335,7 @@ async def update_expense(
         if original_account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=original_account_id,
                 column="total_expenses",
                 amount=-original_amount,
@@ -287,6 +345,7 @@ async def update_expense(
         if updated_expense.account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=updated_expense.account_id,
                 column="total_expenses",
                 amount=updated_expense.amount,
@@ -316,6 +375,34 @@ async def delete_expense(
     Delete an expense.
     """
     expense = await read_expense(db=db, id=id, current_user=current_user)
+
+    # TODO: move this to crud and reutilize it in bulk deletion
+    # Update category total if it exists
+    if expense.category_id:
+        category = await crud.category.get(db=db, id=expense.category_id)
+
+        if category:
+            await db.execute(
+                updateDb(category.__class__)
+                .where(category.__class__.id == category.id)
+                .values(total=category.total - expense.amount)
+                .execution_options(synchronize_session="fetch")
+            )
+            await db.commit()
+
+    # Update subcategory total if it exists
+    if expense.subcategory_id:
+        subcategory = await crud.subcategory.get(db=db, id=expense.subcategory_id)
+
+        if subcategory:
+            await db.execute(
+                updateDb(subcategory.__class__)
+                .where(subcategory.__class__.id == subcategory.id)
+                .values(total=subcategory.total - expense.amount)
+                .execution_options(synchronize_session="fetch")
+            )
+            await db.commit()
+
     expense = await crud.expense.remove(db=db, id=id)
 
     # Remove the expense from the user's balance
@@ -327,13 +414,13 @@ async def delete_expense(
         # amount is negative because it's an expense, and we want to subtract instead of add
         await crud.account.update_by_id_and_field(
             db=db,
+            owner_id=current_user.id,
             id=expense.account_id,
             column="total_expenses",
             amount=-expense.amount,
         )
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
-    return expense
 
 
 @router.delete("/bulk/{ids}", response_model=schemas.BulkDeletionResponse)
@@ -356,6 +443,7 @@ async def delete_expenses_bulk(
 
     # Verify permissions for all expenses
     valid_ids = []
+    expenses_to_delete = []
     for id in id_list:
         expense = await crud.expense.get(db=db, id=id)
         if not expense:
@@ -367,10 +455,40 @@ async def delete_expenses_bulk(
                 status_code=400, detail=f"Not enough permissions for expense {id}"
             )
         valid_ids.append(expense.id)
+        expenses_to_delete.append(expense)
 
     if not valid_ids:
         raise HTTPException(status_code=404, detail="No valid expenses found")
 
+    # Update category and subcategory totals before deleting
+    for expense in expenses_to_delete:
+        # Update category total if it exists
+        if expense.category_id:
+            category = await crud.category.get(db=db, id=expense.category_id)
+
+            if category:
+                await db.execute(
+                    updateDb(category.__class__)
+                    .where(category.__class__.id == category.id)
+                    .values(total=category.total - expense.amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+        # Update subcategory total if it exists
+        if expense.subcategory_id:
+            subcategory = await crud.subcategory.get(db=db, id=expense.subcategory_id)
+
+            if subcategory:
+                await db.execute(
+                    updateDb(subcategory.__class__)
+                    .where(subcategory.__class__.id == subcategory.id)
+                    .values(total=subcategory.total - expense.amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+    # Now delete the expenses
     removed_expenses = await crud.expense.remove_multi(db=db, ids=valid_ids)
 
     # Update balances
@@ -381,6 +499,7 @@ async def delete_expenses_bulk(
         if expense.account_id:
             await crud.account.update_by_id_and_field(
                 db=db,
+                owner_id=current_user.id,
                 id=expense.account_id,
                 column="total_expenses",
                 amount=-expense.amount,
