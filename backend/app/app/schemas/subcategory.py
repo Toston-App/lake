@@ -10,6 +10,7 @@ class SubcategoryBase(BaseModel):
     description: Optional[str] = None
     icon: Optional[str] = None
     is_default: bool = False
+    total: float = 0.0
 
     @validator("name")
     def validate_non_empty_string(cls, value):
@@ -26,7 +27,7 @@ class SubcategoryCreate(SubcategoryBase):
 
 # Properties to receive on subcategory update
 class SubcategoryUpdate(SubcategoryBase):
-    pass
+    updated_at: Optional[datetime] = None
 
 
 # Properties shared by models stored in DB

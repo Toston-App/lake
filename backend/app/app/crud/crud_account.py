@@ -33,15 +33,15 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
         )
         return result.scalars().all()
 
-    async def get_by_id(self, db: AsyncSession, *, id: int) -> Account:
-        result = await db.execute(select(self.model).filter(Account.id == id))
+    async def get_by_id(self, db: AsyncSession, *, owner_id: int, id: int) -> Account:
+        result = await db.execute(select(self.model).filter(Account.id == id, Account.owner_id == owner_id))
         return result.scalars().first()
 
     # TODO: Make and enum for columns
     async def update_by_id_and_field(
-        self, db: AsyncSession, *, id: int, column: str, amount: float
+        self, db: AsyncSession, *, owner_id: int, id: int, column: str, amount: float
     ):
-        account = await self.get_by_id(db=db, id=id)
+        account = await self.get_by_id(db=db, owner_id=owner_id, id=id)
 
         if not account:
             return None

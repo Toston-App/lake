@@ -147,10 +147,10 @@ categories_and_sub = [
     },
     {
         "name": "Inversiones",
-        "icon": "activity",
+        "icon": "barChart3",
         "color": "#3498DB",
         "sub_categories": [
-            {"name": "Inversiones", "icon": "activity"},
+            {"name": "Inversiones", "icon": "barChart3"},
             {"name": "Ahorros", "icon": "piggyBank"},
             {"name": "Bienes raíces", "icon": "home"},
             {"name": "Coleccionables", "icon": "diamond"},
