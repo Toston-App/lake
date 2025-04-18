@@ -217,10 +217,13 @@ async def update_transfer(
     original_amount = existing_transfer.amount
 
     # Update the transfer
-    transfer_in.updated_at = datetime.now(timezone.utc)
-    updated_transfer = await crud.transfer.update(
-        db=db, db_obj=existing_transfer, obj_in=transfer_in
-    )
+    try:
+        transfer_in.updated_at = datetime.now(timezone.utc)
+        updated_transfer = await crud.transfer.update(
+            db=db, db_obj=existing_transfer, obj_in=transfer_in
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error updating transfer.")
 
     # Handle source account change
     if transfer_in.from_acc is not None and original_from_acc != transfer_in.from_acc:
