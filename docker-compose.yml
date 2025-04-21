@@ -76,6 +76,18 @@ services:
       context: ./backend
       dockerfile: backend.dockerfile
 
+  waha:
+    restart: always
+    image: devlikeapro/waha:latest
+    networks:
+      - app-network
+    ports:
+      - '3000:3000/tcp'
+    depends_on:
+      - backend
+    env_file:
+      - .env
+
 volumes:
   postgres_data:
   pgadmin-data:
