@@ -32,8 +32,8 @@ dependencies = [
     "filetype>=1.2.0",
     "phonenumbers>=9.0.0",
     "cryptography>=44.0.1",
-    "redis>=5.2.1",
     "secweb>=1.18.1",
+    "upstash-redis>=1.4.0",
 ]
 name = "app"
 version = "0.1.0"

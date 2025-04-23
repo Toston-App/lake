@@ -1,14 +1,13 @@
 import datetime
 import json
 
-import redis
+from upstash_redis.asyncio import Redis
 
 from app.core.config import settings
 from app.utilities.logger import setup_logger
 
 logging = setup_logger("redis", "redis.log")
-r = redis.Redis.from_url(settings.REDIS_URL)
-
+r = Redis(url=settings.REDIS_URL, token=settings.REDIS_TOKEN)
 
 class DateEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -17,26 +16,26 @@ class DateEncoder(json.JSONEncoder):
         return super().default(obj)
 
 # 30 minutes expiration time by default
-def store_transaction(transaction_id:str, transaction_data, user_id, expire_time=1800):
+async def store_transaction(transaction_id:str, transaction_data, user_id, expire_time=1800):
     """Store transaction data in Redis with expiration time"""
     try:
         # Store the data as hash
-        r.hmset(transaction_id, {
+        await r.hmset(transaction_id, {
             "data": json.dumps(transaction_data, cls=DateEncoder),
             "user_id": user_id
         })
 
-        r.expire(transaction_id, expire_time)
+        await r.expire(transaction_id, expire_time)
 
         return True
-    except redis.RedisError as e:
+    except Redis.RedisError as e:
         logging.error(f"Redis error storing transaction {transaction_id}: {str(e)}")
         return False
 
-def get_transaction(transaction_id: str):
+async def get_transaction(transaction_id: str):
     """Retrieve transaction data from Redis with proper decoding"""
     try:
-        cached_data = r.hgetall(transaction_id)
+        cached_data = await r.hgetall(transaction_id)
         if not cached_data:
             return None
 
@@ -48,16 +47,16 @@ def get_transaction(transaction_id: str):
             decoded_data["data"] = json.loads(decoded_data["data"])
 
         return decoded_data
-    except (redis.RedisError, json.JSONDecodeError) as e:
+    except (Redis.RedisError, json.JSONDecodeError) as e:
         logging.error(f"Error retrieving transaction {transaction_id}: {str(e)}")
         return None
 
-def delete_transaction(transaction_id: str):
+async def delete_transaction(transaction_id: str):
     """Delete transaction data from Redis"""
     try:
-        r.delete(transaction_id)
+        await r.delete(transaction_id)
 
         return True
-    except redis.RedisError as e:
+    except Redis.RedisError as e:
         logging.error(f"Error deleting transaction {transaction_id}: {str(e)}")
         return False
