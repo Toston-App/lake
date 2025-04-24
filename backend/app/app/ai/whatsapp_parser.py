@@ -153,7 +153,7 @@ class WhatsAppParser:
 
         # Build the transaction object
         transaction = {
-            "id": tx_id,
+            "id": f"{tx_id}-{secrets.token_urlsafe(2)}",
             "type": ai_result.get("type", TransactionType.EXPENSE),
             "amount": float(ai_result.get("amount", 0)),
             "category": category_name,
