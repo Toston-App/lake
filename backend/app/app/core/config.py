@@ -120,9 +120,10 @@ class Settings(BaseSettings):
     WHATSAPP_VERIFY_TOKEN: Optional[str] = None
     WHATSAPP_API_VERSION: str = "v22.0"
 
+    # WAHA
     WAHA_SESSION: str
     WAHA_URL: str
-    WAHA_API_KEY: str
+    WHATSAPP_API_KEY: str
 
     REDIS_URL: str
     REDIS_TOKEN: str

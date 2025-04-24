@@ -7,9 +7,12 @@ from app.core.config import settings
 
 WAHA_URL = settings.WAHA_URL
 SESSION = settings.WAHA_SESSION
-API_KEY = settings.WAHA_API_KEY
+API_KEY = settings.WHATSAPP_API_KEY
 
-HEADERS = {"api_key": API_KEY}
+HEADERS = {
+  'Content-type': 'application/json',
+  'X-Api-Key': API_KEY,
+}
 
 async def send_message(
     chat_id: str, text: str
