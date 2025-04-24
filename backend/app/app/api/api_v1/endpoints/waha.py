@@ -1,63 +1,50 @@
+import asyncio
 import random
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud
+from app import crud, schemas
+from app.ai.whatsapp_parser import WhatsAppParser
 from app.api import deps
+from app.core.config import settings
 from app.utilities.encryption import hash_sha256
-from app.utilities.waha import react_to_message, send_message, send_seen, typing
-
-# we need a cloudflare tunnel from 9000 and 3000
-WAHA_URL = "https://springer-along-peers-stockholm.trycloudflare.com"
-SESSION = "default"
-# TODO: CHANGE THIS (and use env vars)
-API_KEY = "admin"
-
-HEADERS = {"api_key": API_KEY}
+from app.utilities.logger import setup_logger
+from app.utilities.redis import delete_transaction, get_transaction, store_transaction
+from app.utilities.simplifier import accounts as simplify_accounts
+from app.utilities.simplifier import categories as simplify_categories
+from app.utilities.simplifier import places as simplify_places
+from app.utilities.waha import (
+    react_to_message,
+    send_message,
+    send_poll,
+    send_seen,
+    start_typing,
+    stop_typing,
+    typing,
+)
+from app.utilities.whatsapp import format_currency
 
 router = APIRouter()
-
+whatsapp_parser = WhatsAppParser(settings.OPENAI_API_KEY)
+logger = setup_logger("waha_requests", "waha_requests.log")
 
 @router.post("/webhook")
 async def handle_whatsapp_message(request: Request, db: AsyncSession = Depends(deps.async_get_db)):
     data = await request.json()
 
-    # TODO: add poll
-    if data["event"] != "message":
-        # We can't process other event yet
+    if data["event"] != "message" and data["event"] != "poll.vote":
         return f"Unknown event {data['event']}"
 
     payload = data["payload"]
-    print("🚀 ~ payload:", payload)
-    text = payload.get("body")
-
-    if not text:
-        # We can't process non-text messages yet
-        print("No text in message")
-        print(payload)
-        return "OK"
-
-    # Number in format 1231231231@c.us or @g.us for group
-    chat_id = payload["from"]
-    print("🚀 ~ chat_id:", chat_id)
-    # Message ID - false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-    message_id = payload['id']
-
-    # IMPORTANT - Always send seen before sending new message
-    seen = await send_seen(chat_id=chat_id, message_id=message_id, participant=None)
-    print("🚀 ~ seen response:", seen)
-    await typing(chat_id=chat_id, seconds=random.random() * 3)
-
+    chat_id = payload["from"] if data["event"] == "message" else payload["vote"]["from"]
     phone_number = hash_sha256(f"+{chat_id.split('@')[0]}")
-    print("🚀 ~ phone_number:", phone_number)
-    # Find user by phone number
     user = await crud.user.get_by_phone(db, phone=phone_number)
-    print("🚀 ~ user:", user)
 
     if user is None:
-        print("User not found")
-
+        logger.warning(f"User not found for phone: {phone_number}")
+        await send_seen(chat_id=chat_id, message_id=message_id, participant=None)
+        await typing(chat_id=chat_id, seconds=random.random() * 3)
         await send_message(
             chat_id=chat_id,
             text="""👋 ¡Hola! Aún no tienes vinculado tu número de telefono.
@@ -67,44 +54,260 @@ Vinculalo de la siguiente forma:
 
 2️⃣ Registra tu número de WhatsApp
 
-3️⃣ ¡Listo! Ahora puedes enviar tus gastos y ganancias por este chat 🚀
+3️⃣ ¡Listo! Ahora puedes enviar tus gastos e ingresos por este chat 🚀
 
 ✍️ Envía un mensajes intentando ser lo más claro posible, por ejemplo:
 "Gasté 200 pesos en restaurante ayer con mi cuenta bbva"
 
-Ten en cuenta que si no eres de México, es probable que no podamos procesar tu número, mandanos un correo a cleverbilling@proton.me para ayudarte 📧
+Ten en cuenta que si no eres de México, es probable que no podamos procesar tu número, mandanos un correo a support@cleverbill.ing para ayudarte 📧
 """
-)
+        )
         return {"status": "ok"}
 
-    await react_to_message(message_id=message_id, emoji="⏳")
-    await send_message(chat_id=chat_id, text="⏳ Procesando tu mensaje...")
+    if data.get("event") == "message":
+        text = payload.get("body")
 
-    # Send poll with "Confirm" and "Cancel"
-    # await httpx.post(
-    #     f"{WAHA_URL}/api/sendPoll",
-    #     json={
-    #         "session": SESSION,
-    #         "chatId": chat_id,
-    #         "name": "Do you confirm?",
-    #         "options": ["Confirm", "Cancel"]
-    #     },
-    #     headers=HEADERS
-    # )
+        if not text:
+            # We can't process non-text messages yet
+            logger.warning(f"Received non-text message: {payload}")
+            return "OK"
 
-    # elif data.get("event") == "poll_vote":
-    #     poll = data["payload"]
-    #     print("🚀 ~ poll:", poll)
-    #     chat_id = poll["chatId"]
-    #     print("🚀 ~ chat_id:", chat_id)
-    #     vote = poll["selectedOption"]
-    #     print("🚀 ~ vote:", vote)
+        # Number in format 1231231231@c.us or @g.us for group
+        chat_id = payload["from"]
+        # Message ID - false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        message_id = payload['id']
 
-        # # Respond based on the user's choice
-        # await httpx.post(
-        #     f"{WAHA_URL}/api/sendText",
-        #     json={"session": SESSION, "chatId": chat_id, "text": f"You chose: {vote}"},
-        #     headers=HEADERS
-        # )
+        # IMPORTANT - Always send seen before sending new message
+        await send_seen(chat_id=chat_id, message_id=message_id, participant=None)
+        await react_to_message(message_id=message_id, emoji="⏳")
+        await start_typing(chat_id=chat_id)
+
+        categories_task = crud.category.get_multi_by_owner(db=db, owner_id=user.id)
+        places_task = crud.place.get_multi_by_owner(db=db, owner_id=user.id)
+        accounts_task = crud.account.get_multi_by_owner(db=db, owner_id=user.id)
+
+        # Fetch user data in parallel
+        (
+            accounts,
+            places,
+            categories,
+        ) = await asyncio.gather(
+            accounts_task,
+            places_task,
+            categories_task,
+        )
+
+        # Parse message to extract transaction data
+        try:
+            transaction_data = await whatsapp_parser.parse_message(
+                message=text,
+                categories=simplify_categories(categories),
+                places=simplify_places(places),
+                accounts=simplify_accounts(accounts),
+            )
+
+            # Check if parsing returned empty data
+            if not transaction_data or "amount" not in transaction_data or transaction_data["amount"] <= 0:
+                logger.warning(f"Failed to parse message: {text}")
+                await stop_typing(chat_id=chat_id)
+                await react_to_message(message_id=message_id, emoji="😵‍💫")
+                await send_message(
+                    chat_id=chat_id,
+                    text="""❌ No pude entender tu mensaje. Por favor, intenta ser más específico.
+
+    Por ejemplo:
+    • "Gasté 200 pesos en restaurante ayer"
+    • "Ingreso de 1500 por venta"
+    • "350 pesos en gasolina con tarjeta bbva"
+    """)
+                return {"status": "ok"}
+
+            # Save message id to react later
+            transaction_data["message_to_react"] = message_id
+            # Cache transaction data for later confirmation
+            transaction_id = transaction_data["id"]
+
+            store_success = await store_transaction(
+                transaction_id=transaction_id,
+                transaction_data=transaction_data,
+                user_id=user.id
+            )
+
+            if not store_success:
+                logger.error(f"Failed to store transaction {transaction_id}. Check redis logs")
+                await stop_typing(chat_id=chat_id)
+                await react_to_message(message_id=message_id, emoji="❌")
+                await send_message(
+                    chat_id=chat_id,
+                    text="❌ Ocurrió un error al procesar tu mensaje. Por favor, intenta de nuevo."
+                )
+                return {"status": "ok"}
+
+            # Send confirmation message with buttons
+            if transaction_data["type"] == "expense":
+                await stop_typing(chat_id=chat_id)
+                await send_poll(
+                    chat_id=chat_id,
+                    text=f"""Confirma los datos de tu *gasto* _({transaction_id})_:
+
+    💸 *Monto:* {format_currency(transaction_data['amount'])}
+    📅 *Fecha:* {transaction_data['date']}
+    🏷️ *Categoría:* {transaction_data['category'] or 'No especificada'} - {transaction_data['subcategory'] or 'No especificada'}
+    📍 *Lugar:* {transaction_data['place'] or 'No especificado'}
+    📝 *Descripción:* {transaction_data['description'] or 'No especificada'}
+    💳 *Cuenta:* {transaction_data['account'] or 'No especificada'}
+                    """,
+                    options=[
+                        f"✅ Confirmar ({transaction_id})",
+                        f"❌ Cancelar ({transaction_id})",
+                    ]
+                )
+            elif transaction_data["type"] == "income":
+                await stop_typing(chat_id=chat_id)
+                await send_poll(
+                    chat_id=chat_id,
+                    text=f"""Confirma los datos de tu *ingreso* _({transaction_id})_:
+
+    💰 *Monto:* {format_currency(transaction_data['amount'])}
+    📅 *Fecha:* {transaction_data['date']}
+    🏷️ *Categoría:* {transaction_data['category'] or 'No especificada'} - {transaction_data['subcategory'] or 'No especificada'}
+    📍 *Lugar:* {transaction_data['place'] or 'No especificado'}
+    📝 *Descripción:* {transaction_data['description'] or 'No especificada'}
+    💳 *Cuenta:* {transaction_data['account'] or 'No especificada'}
+                    """,
+                    options=[
+                        f"✅ Confirmar ({transaction_id})",
+                        f"❌ Cancelar ({transaction_id})",
+                    ]
+                )
+            elif transaction_data["type"] == "transfer":
+                logger.info("Transfer transaction detected")
+                await stop_typing(chat_id=chat_id)
+                await react_to_message(message_id=message_id, emoji="😥")
+                await send_message(
+                    chat_id=chat_id,
+                    text="Lo siento, aún no se pueden hacer transferencias por WhatsApp, pero estamos trabajando en ello 🚀"
+                )
+
+        except ValueError as e:
+            logger.error(f"Error parsing message: {str(e)}")
+            await stop_typing(chat_id=chat_id)
+            await react_to_message(message_id=message_id, emoji="❌")
+            await send_message(
+                chat_id=chat_id,
+                text=f"""❌ Ocurrió un error al procesar tu mensaje: {str(e)}
+
+    Por favor, intenta de nuevo con un formato más claro.""")
+
+    if data.get("event") == "poll.vote":
+        poll = data["payload"]["vote"]
+        vote = poll["selectedOptions"]
+
+        if not vote:
+            return {"status": "ok"}
+
+        vote = vote[0]
+
+        await start_typing(chat_id=chat_id)
+
+        if vote.startswith("✅ Confirmar"):
+            transaction_id = vote.replace("✅ Confirmar (", "").replace(")", "")
+
+            # Check if transaction exists in cache
+            cached_data = await get_transaction(transaction_id)
+
+            if not cached_data:
+                await stop_typing(chat_id=chat_id)
+                await send_message(
+                    chat_id=chat_id,
+                    text="❌ No se encontró la transacción a confirmar. Puede que haya expirado."
+                )
+
+                return {"status": "ok"}
+
+            transaction_data = cached_data["data"]
+            user_id = int(cached_data["user_id"])
+
+            # Create transaction based on type
+            try:
+                if transaction_data["type"] == "expense":
+                    # Create expense
+                    expense_in = schemas.ExpenseCreate(
+                        amount=transaction_data["amount"],
+                        date=transaction_data["date"],
+                        category_id=transaction_data.get("category_id"),
+                        subcategory_id=transaction_data.get("subcategory_id"),
+                        place_id=transaction_data.get("place_id"),
+                        account_id=transaction_data.get("account_id"),
+                        description=transaction_data.get("description") or "Added via WhatsApp",
+                        made_from="WhatsApp"
+                    )
+
+                    await crud.expense.create_with_owner(
+                        db=db, obj_in=expense_in, owner_id=user_id
+                    )
+
+                    await stop_typing(chat_id=chat_id)
+                    await react_to_message(message_id=transaction_data["message_to_react"], emoji="✅")
+                    await send_message(
+                        chat_id=chat_id,
+                        text=f"✅ ¡Gasto registrado con éxito! _({transaction_data['id']})_"
+                    )
+
+                elif transaction_data["type"] == "income":
+                    # Create income
+                    income_in = schemas.IncomeCreate(
+                        amount=transaction_data["amount"],
+                        date=transaction_data["date"],
+                        subcategory_id=transaction_data.get("subcategory_id"),
+                        place_id=transaction_data.get("place_id"),
+                        account_id=transaction_data.get("account_id"),
+                        description=transaction_data.get("description") or "Added via WhatsApp",
+                        made_from="WhatsApp"
+                    )
+
+                    await crud.income.create_with_owner(
+                        db=db, obj_in=income_in, owner_id=user_id
+                    )
+
+                    await stop_typing(chat_id=chat_id)
+                    await react_to_message(message_id=transaction_data["message_to_react"], emoji="✅")
+                    await send_message(
+                        chat_id=chat_id,
+                        text=f"✅ ¡Ingreso registrado con éxito! _({transaction_data['id']})_"
+                    )
+
+                # Remove from cache after processing
+                await delete_transaction(transaction_id)
+
+            except Exception as create_error:
+                logger.error(f"Error creating transaction: {str(create_error)}")
+                await stop_typing(chat_id=chat_id)
+                await send_message(
+                    chat_id=chat_id,
+                    text="❌ Error al crear la transacción. Por favor, intenta de nuevo."
+                )
+                # moved to the end just in case we don't have access to transaction_data
+                await react_to_message(message_id=transaction_data.get("message_to_react"), emoji="❌")
+
+
+        if vote.startswith("❌ Cancelar"):
+            # Extract transaction ID from button ID
+            transaction_id = vote.replace("❌ Cancelar (", "").replace(")", "")
+            cached_data = await get_transaction(transaction_id)
+
+            if not cached_data:
+                await stop_typing(chat_id=chat_id)
+                return {"status": "ok"}
+
+            # Remove from cache if exists
+            await delete_transaction(transaction_id)
+
+            await stop_typing(chat_id=chat_id)
+            await react_to_message(message_id=cached_data["data"]["message_to_react"], emoji="❌")
+            await send_message(
+                chat_id=chat_id,
+                text="❌ Transacción cancelada. No se ha registrado nada."
+            )
 
     return {"status": "ok"}

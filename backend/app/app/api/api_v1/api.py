@@ -14,8 +14,8 @@ from app.api.api_v1.endpoints import (
     transfers,
     users,
     utils,
+    waha,
     whatsapp,
-    waha
 )
 
 api_router = APIRouter()
