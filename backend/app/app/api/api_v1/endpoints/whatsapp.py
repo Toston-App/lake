@@ -97,12 +97,12 @@ Vinculalo de la siguiente forma:
 
 2️⃣ Registra tu número de WhatsApp
 
-3️⃣ ¡Listo! Ahora puedes enviar tus gastos y ganancias por este chat 🚀
+3️⃣ ¡Listo! Ahora puedes enviar tus gastos e ingresos por este chat 🚀
 
 ✍️ Envía un mensajes intentando ser lo más claro posible, por ejemplo:
 "Gasté 200 pesos en restaurante ayer con mi cuenta bbva"
 
-Ten en cuenta que si no eres de México, es probable que no podamos procesar tu número, mandanos un correo a cleverbilling@proton.me para ayudarte 📧
+Ten en cuenta que si no eres de México, es probable que no podamos procesar tu número, mandanos un correo a support@cleverbill.ing para ayudarte 📧
                                         """
                                     )
                                     continue
@@ -161,7 +161,7 @@ Por ejemplo:
                                         # Cache transaction data for later confirmation
                                         transaction_id = transaction_data["id"]
 
-                                        store_success = store_transaction(
+                                        store_success = await store_transaction(
                                             transaction_id=transaction_id,
                                             transaction_data=transaction_data,
                                             user_id=user.id
@@ -236,7 +236,7 @@ Por favor, intenta de nuevo con un formato más claro."""
                                         transaction_id = button_id.replace("confirm_", "")
 
                                         # Check if transaction exists in cache
-                                        cached_data = get_transaction(transaction_id)
+                                        cached_data = await get_transaction(transaction_id)
 
                                         if not cached_data:
                                             await send_text_message(
@@ -295,7 +295,7 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                 )
 
                                             # Remove from cache after processing
-                                            delete_transaction(transaction_id)
+                                            await delete_transaction(transaction_id)
 
                                         except Exception as create_error:
                                             logger.error(f"Error creating transaction: {str(create_error)}")
@@ -309,7 +309,7 @@ Por favor, intenta de nuevo con un formato más claro."""
                                         transaction_id = button_id.replace("cancel_", "")
 
                                         # Remove from cache if exists
-                                        delete_transaction(transaction_id)
+                                        await delete_transaction(transaction_id)
 
                                         await send_text_message(
                                             send_to,
