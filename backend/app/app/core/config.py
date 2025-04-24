@@ -120,7 +120,12 @@ class Settings(BaseSettings):
     WHATSAPP_VERIFY_TOKEN: Optional[str] = None
     WHATSAPP_API_VERSION: str = "v22.0"
 
+    WAHA_SESSION: str
+    WAHA_URL: str
+    WAHA_API_KEY: str
+
     REDIS_URL: str
+    REDIS_TOKEN: str
 
     @validator("WHATSAPP_ENABLED", pre=True)
     def get_whatsapp_enabled(cls, v: bool, values: dict[str, Any]) -> bool:

@@ -3,10 +3,11 @@ from typing import Any, Optional
 
 import httpx
 
-WAHA_URL = "https://durable-capital-tracy-tops.trycloudflare.com"
-SESSION = "default"
-# TODO: CHANGE THIS (and use env vars)
-API_KEY = "admin"
+from app.core.config import settings
+
+WAHA_URL = settings.WAHA_URL
+SESSION = settings.WAHA_SESSION
+API_KEY = settings.WAHA_API_KEY
 
 HEADERS = {"api_key": API_KEY}
 
@@ -35,6 +36,39 @@ async def send_message(
         )
 
         return res.json()
+
+async def send_poll(
+    chat_id: str,
+    reply_to: Optional[str] = None,
+    text: str = "",
+    options: list[str] = ["Confirm", "Cancel"],
+    multiple_answers: bool = False):
+    """
+    Send a poll to a WhatsApp chat
+    Args:
+        chat_id: Recipient's phone number
+        reply_to: ID of the message to reply to
+        text: Content of the poll
+        options: List of options for the poll
+        multiple_answers: Allow multiple answers
+    """
+
+    async with httpx.AsyncClient() as client:
+        res = await client.post(
+            f"{WAHA_URL}/api/sendPoll",
+            headers=HEADERS,
+            json={
+                "session": SESSION,
+                "chatId": chat_id,
+                "replyTo": reply_to,
+                "poll": {
+                    "name": text,
+                    "options": options,
+                    "multipleAnswers": multiple_answers,
+                }
+            }
+        )
+        return res.status_code
 
 async def react_to_message(
     message_id: str,
