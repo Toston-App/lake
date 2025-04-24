@@ -236,6 +236,7 @@ async def get_all_data(
             },
             "incomes": [],
             "expenses": [],
+            "transfers": jsonable_encoder(transfers),
             "charts": {
                 "transactions": [],
                 "categories": [],
@@ -294,6 +295,7 @@ async def get_all_data(
         },
         "incomes": jsonable_encoder(incomes_actual),
         "expenses": jsonable_encoder(expenses_actual),
+        "transfers": jsonable_encoder(transfers),
         "charts": {
             "transactions": transaction_chart,
             "categories": categories_chart,
