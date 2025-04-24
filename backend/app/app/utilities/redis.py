@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.utilities.logger import setup_logger
 
 logging = setup_logger("redis", "redis.log")
-r = Redis(url=settings.REDIS_URL, token=settings.REDIS_TOKEN)
+r = Redis(url=settings.REDIS_URL, token=settings.REDIS_TOKEN, allow_telemetry=False)
 
 class DateEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -28,7 +28,7 @@ async def store_transaction(transaction_id:str, transaction_data, user_id, expir
         await r.expire(transaction_id, expire_time)
 
         return True
-    except Redis.RedisError as e:
+    except Exception as e:
         logging.error(f"Redis error storing transaction {transaction_id}: {str(e)}")
         return False
 
@@ -39,15 +39,12 @@ async def get_transaction(transaction_id: str):
         if not cached_data:
             return None
 
-        # Decode binary data to strings
-        decoded_data = {k.decode('utf-8'): v.decode('utf-8') for k, v in cached_data.items()}
-
         # Parse JSON string back to dict
-        if "data" in decoded_data:
-            decoded_data["data"] = json.loads(decoded_data["data"])
+        if "data" in cached_data:
+            cached_data["data"] = json.loads(cached_data["data"])
 
-        return decoded_data
-    except (Redis.RedisError, json.JSONDecodeError) as e:
+        return cached_data
+    except (Exception, json.JSONDecodeError) as e:
         logging.error(f"Error retrieving transaction {transaction_id}: {str(e)}")
         return None
 
@@ -57,6 +54,6 @@ async def delete_transaction(transaction_id: str):
         await r.delete(transaction_id)
 
         return True
-    except Redis.RedisError as e:
+    except Exception as e:
         logging.error(f"Error deleting transaction {transaction_id}: {str(e)}")
         return False
