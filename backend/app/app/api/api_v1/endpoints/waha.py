@@ -31,7 +31,9 @@ logger = setup_logger("waha_requests", "waha_requests.log")
 
 @router.post("/webhook")
 async def handle_whatsapp_message(request: Request, db: AsyncSession = Depends(deps.async_get_db)):
+    print("🚀 ~ x-webhook-request-id:", request.headers.get('x-webhook-request-id'))
     data = await request.json()
+    print("🚀 ~ data:", data)
 
     if data["event"] != "message" and data["event"] != "poll.vote":
         return f"Unknown event {data['event']}"
