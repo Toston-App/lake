@@ -82,11 +82,24 @@ services:
     networks:
       - app-network
     ports:
-      - '3000:3000/tcp'
+      - "127.0.0.1:3000:3000/tcp"
     depends_on:
       - backend
     env_file:
       - .env
+
+  # used to expose the waha service to the internet
+  cloudflaretunnel:
+    image: cloudflare/cloudflared:latest
+    networks:
+      - app-network
+    restart: always
+    depends_on:
+      - waha
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
+
 
 volumes:
   postgres_data:
