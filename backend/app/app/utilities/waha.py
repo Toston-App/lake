@@ -16,7 +16,7 @@ HEADERS = {
 
 async def send_message(
     chat_id: str, text: str
-) -> dict[str, Any]:
+):
     """
     General function to send WhatsApp messages
 
@@ -38,7 +38,8 @@ async def send_message(
             }
         )
 
-        return res.json()
+        print("🚀 ~ res:", res)
+        return res.status_code
 
 async def send_poll(
     chat_id: str,
@@ -71,12 +72,13 @@ async def send_poll(
                 }
             }
         )
+        print("🚀 ~ res:", res)
         return res.status_code
 
 async def react_to_message(
     message_id: str,
     emoji: str
-) -> dict[str, Any]:
+):
     """
     React to a specific message with an emoji
 
@@ -98,7 +100,8 @@ async def react_to_message(
                 "reaction": emoji,
             }
         )
-        return res.json()
+        print("🚀 ~ res:", res)
+        return res.status_code
 
 async def send_seen(
     chat_id: str,
@@ -126,10 +129,11 @@ async def send_seen(
                 "participant": participant,
             }
         )
+
         print("🚀 ~ res:", res)
         return res.status_code
 
-async def start_typing(chat_id: str) -> dict[str, Any]:
+async def start_typing(chat_id: str):
     """
     Start typing indicator in chat
 
@@ -148,9 +152,10 @@ async def start_typing(chat_id: str) -> dict[str, Any]:
                 "chatId": chat_id,
             }
         )
-        return res.json()
+        print("🚀 ~ res:", res)
+        return res.status_code
 
-async def stop_typing(chat_id: str) -> dict[str, Any]:
+async def stop_typing(chat_id: str):
     """
     Stop typing indicator in chat
 
@@ -169,7 +174,8 @@ async def stop_typing(chat_id: str) -> dict[str, Any]:
                 "chatId": chat_id,
             }
         )
-        return res.json()
+        print("🚀 ~ res:", res)
+        return res.status_code
 
 async def typing(chat_id: str, seconds: float) -> None:
     """
