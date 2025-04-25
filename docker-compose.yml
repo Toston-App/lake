@@ -98,7 +98,7 @@ services:
       - waha
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    command: tunnel --no-autoupdate run
+    command: tunnel --no-autoupdate run --url http://waha:3000
 
 
 volumes:
