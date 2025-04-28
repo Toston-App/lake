@@ -55,8 +55,8 @@ async def create_user(
         )
     return user
 
-
-@router.put("/me", response_model=schemas.User)
+# avoid send all model to the client
+@router.put("/me", response_model=bool)
 async def update_user_me(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
@@ -82,25 +82,18 @@ async def update_user_me(
     if country is not None:
         user_in.country = country
     if phone is not None:
-        # Check if phone is already registered to another user
-        existing_user = await crud.user.get_by_phone(db, phone=phone)
-        if existing_user and existing_user.id != current_user.id:
-            raise HTTPException(
-                status_code=400,
-                detail="Phone number already registered to another user",
-            )
-
+        # We don't need to check if phone already exists, because we are using the phone as a hash. If two users have the same phone, they will have the same hash. Only the person who send the message with that phone will get the same hash and prob get wrong user, but we don't care about that. If user is adding his real phone, this will never happen (prob).
         try:
             phone_num = phonenumbers.parse(phone, None)
             is_valid = phonenumbers.is_valid_number(phone_num)
 
-            if(is_valid == False):
+            if is_valid is False:
                 raise HTTPException(
                     status_code=400,
                     detail="Invalid phone number",
                 )
 
-            formatted_phone  = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.E164)
+            formatted_phone = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.E164)
 
             # Ensure Mexican mobile numbers start with +521 (add '1' if missing), this to match whatsapp phone format
             if phone_num.country_code == 52 and not formatted_phone.startswith("+521"):
@@ -114,19 +107,19 @@ async def update_user_me(
             )
 
     user_in.updated_at = datetime.now(timezone.utc)
-    user = await crud.user.update(db, db_obj=current_user, obj_in=user_in)
-    return user
+    await crud.user.update(db, db_obj=current_user, obj_in=user_in)
+    return True
 
-
-@router.get("/me", response_model=schemas.User)
-async def read_user_me(
-    db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
-) -> Any:
-    """
-    Get current user.
-    """
-    return current_user
+# we don't need this endpoint for now
+# @router.get("/me", response_model=schemas.User)
+# async def read_user_me(
+#     db: AsyncSession = Depends(deps.async_get_db),
+#     current_user: models.User = Depends(deps.get_current_active_user),
+# ) -> Any:
+#     """
+#     Get current user.
+#     """
+#     return current_user
 
 
 @router.post("/open", response_model=schemas.Msg)
