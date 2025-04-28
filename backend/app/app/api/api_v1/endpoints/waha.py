@@ -41,8 +41,6 @@ async def handle_whatsapp_message(request: Request, db: AsyncSession = Depends(d
     payload = data["payload"]
     # Number in format 1231231231@c.us or @g.us for group
     chat_id = payload["from"] if data["event"] == "message" else payload["vote"]["from"]
-    # Message ID - false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-    message_id = payload['id']
     phone_number = hash_sha256(f"+{chat_id.split('@')[0]}")
     user = await crud.user.get_by_phone(db, phone=phone_number)
 
@@ -71,6 +69,9 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
 
     if data.get("event") == "message":
         text = payload.get("body")
+
+        # Message ID - false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+        message_id = payload['id']
 
         if not text:
             # We can't process non-text messages yet
