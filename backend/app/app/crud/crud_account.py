@@ -28,6 +28,7 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
         result = await db.execute(
             select(self.model)
             .filter(Account.owner_id == owner_id)
+            .order_by(Account.name)
             .offset(skip)
             .limit(limit)
         )

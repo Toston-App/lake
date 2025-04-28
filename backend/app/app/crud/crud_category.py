@@ -24,6 +24,7 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
         result = await db.execute(
             select(self.model)
             .filter(Category.owner_id == owner_id)
+            .order_by(Category.name)
             .offset(skip)
             .limit(limit)
         )
