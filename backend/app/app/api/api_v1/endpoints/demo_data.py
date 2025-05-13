@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import datetime
 import random
 from typing import Any, Optional
@@ -6,6 +5,7 @@ from typing import Any, Optional
 from faker import Faker
 from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete, or_, update
 
 from app import crud, models, schemas
 from app.api import deps
@@ -138,7 +138,7 @@ async def generate_fake_user_data(
         transaction_type = random.choices(["income", "expense", "transfer"], weights=[0.3, 0.5, 0.2], k=1)[0]
         transaction_date = str(fake.date_between(start_date=start_date, end_date=end_date))
         description = fake.sentence(nb_words=random.randint(3,6)).replace(".","")
-        amount = round(random.uniform(5.0, 750.0), 2)
+        amount = round(random.uniform(5.0, 1250.0), 2)
         made_from = "Web"
 
         if transaction_type == "income" and income_subcategories:
@@ -186,3 +186,97 @@ async def generate_fake_user_data(
     total_generated = len(incomes_to_create_bulk) + len(expenses_to_create_bulk) + transfers_created_count
 
     return schemas.Msg(msg=f"Successfully generated {total_generated} transactions ({len(incomes_to_create_bulk)} incomes, {len(expenses_to_create_bulk)} expenses, {transfers_created_count} transfers) for user {user_id}. Attempted to generate {transactions_attempted} based on num_transactions param.")
+
+
+@router.post("/delete-user-financial-data", response_model=schemas.Msg, status_code=200)
+async def delete_user_financial_data(
+    db: AsyncSession = Depends(deps.async_get_db),
+    user_id: int = Body(..., embed=True, description="ID of the user whose financial data is to be deleted."),
+    current_superuser: models.User = Depends(deps.get_current_active_superuser)
+) -> Any:
+    """
+    Delete all financial data (accounts, places, incomes, expenses, transfers) for a specified user.
+    Only accessible by superusers.
+    """
+    user_to_clear = await crud.user.get(db, id=user_id)
+
+    if not user_to_clear:
+        raise HTTPException(status_code=404, detail=f"User with id {user_id} not found.")
+
+    # delete_transfers:
+    user_accounts_stmt = select(models.Account.id).where(models.Account.owner_id == user_id)
+    user_account_ids_result = await db.execute(user_accounts_stmt)
+    user_account_ids = [acc_id[0] for acc_id in user_account_ids_result.fetchall()]
+
+    if user_account_ids:
+        delete_transfers_stmt = delete(models.Transfer).where(
+            or_(
+                models.Transfer.from_acc.in_(user_account_ids),
+                models.Transfer.to_acc.in_(user_account_ids)
+            )
+        )
+        transfer_delete_result = await db.execute(delete_transfers_stmt)
+        deleted_transfers_count = transfer_delete_result.rowcount
+    else:
+        deleted_transfers_count = 0
+
+
+    # delete_incomes:
+    delete_incomes_stmt = delete(models.Income).where(models.Income.owner_id == user_id)
+    income_delete_result = await db.execute(delete_incomes_stmt)
+    deleted_incomes_count = income_delete_result.rowcount
+
+    # delete_expenses:
+    delete_expenses_stmt = delete(models.Expense).where(models.Expense.owner_id == user_id)
+    expense_delete_result = await db.execute(delete_expenses_stmt)
+    deleted_expenses_count = expense_delete_result.rowcount
+
+    # delete_accounts:
+    delete_accounts_stmt = delete(models.Account).where(models.Account.owner_id == user_id)
+    account_delete_result = await db.execute(delete_accounts_stmt)
+    deleted_accounts_count = account_delete_result.rowcount
+
+    # delete_places:
+    delete_places_stmt = delete(models.Place).where(models.Place.owner_id == user_id)
+    place_delete_result = await db.execute(delete_places_stmt)
+    deleted_places_count = place_delete_result.rowcount
+
+    # Update user balances
+    user_to_clear.balance_total = 0.0
+    user_to_clear.balance_income = 0.0
+    user_to_clear.balance_outcome = 0.0
+    db.add(user_to_clear) # Add the user object to the session to mark it for update
+
+    # Update category totals
+    update_categories_stmt = (
+        update(models.Category)
+        .where(models.Category.owner_id == user_id)
+        .values(total=0.0)
+    )
+    await db.execute(update_categories_stmt)
+
+    # Update subcategory totals
+    update_subcategories_stmt = (
+        update(models.Subcategory)
+        .where(models.Subcategory.owner_id == user_id)
+        .values(total=0.0)
+    )
+    await db.execute(update_subcategories_stmt)
+
+    deleted_counts = {
+        "transfers": deleted_transfers_count,
+        "incomes": deleted_incomes_count,
+        "expenses": deleted_expenses_count,
+        "accounts": deleted_accounts_count,
+        "places": deleted_places_count
+    }
+
+    await db.commit() # Commit all deletions
+
+    return schemas.Msg(
+        msg=(f"Successfully deleted financial data for user {user_id}. "
+             f"Deleted: {deleted_counts['accounts']} accounts, "
+             f"{deleted_counts['incomes']} incomes, "
+             f"{deleted_counts['expenses']} expenses, "
+             f"{deleted_counts['transfers']} transfers.")
+    )
