@@ -30,11 +30,17 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
 
         return None
 
-    def get_subcategory_name(row, income=False):
+    def get_subcategory_name(row):
         subcategory_id = row["subcategory_id"]
         if pd.notna(subcategory_id) and subcategory_id in subcategories_df.index:
             return subcategories_df.loc[subcategory_id, "name"]
 
+        return None
+
+    def get_income_category_id(row):
+        subcategory_id = row["subcategory_id"]
+        if pd.notna(subcategory_id) and subcategory_id in subcategories_df.index:
+            return subcategories_df.loc[subcategory_id, "category_id"]
         return None
 
     def get_place_name(row):
@@ -42,6 +48,20 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
         if pd.notna(place_id) and place_id in places_df.index:
             return places_df.loc[place_id, "name"]
 
+        return None
+
+    def get_category_color(row):
+        category_id = row["category_id"]
+        if pd.notna(category_id) and category_id in categories_df.index:
+            return categories_df.loc[category_id, "color"]
+        return None
+
+    def get_income_category_color(row):
+        subcategory_id = row["subcategory_id"]
+        if pd.notna(subcategory_id) and subcategory_id in subcategories_df.index:
+            category_id = subcategories_df.loc[subcategory_id, "category_id"]
+            if category_id in categories_df.index:
+                return categories_df.loc[category_id, "color"]
         return None
 
     incomes_df = pd.DataFrame(incomes)
@@ -72,17 +92,16 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
         expenses_df["amount"] = -expenses_df["amount"]
         expenses_df.set_index("id", inplace=True)
 
+        expenses_df["place"] = expenses_df.apply(get_place_name, axis=1)
         expenses_df["account"] = expenses_df.apply(get_account_id, axis=1)
         expenses_df["category"] = expenses_df.apply(get_category_name, axis=1)
-        expenses_df["place"] = expenses_df.apply(get_place_name, axis=1)
         expenses_df["subcategory"] = expenses_df.apply(get_subcategory_name, axis=1)
+        expenses_df["category_color"] = expenses_df.apply(get_category_color, axis=1)
 
         expenses_df.drop(
             columns=[
                 "account_id",
-                "category_id",
                 "place_id",
-                "subcategory_id",
                 "owner_id",
             ],
             inplace=True,
@@ -94,11 +113,13 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
 
         incomes_df["account"] = incomes_df.apply(get_account_id, axis=1)
         incomes_df["place"] = incomes_df.apply(get_place_name, axis=1)
-        # TODO: add category to incomes database with id that corresponds to Ingresos
         incomes_df["subcategory"] = incomes_df.apply(get_subcategory_name, axis=1)
+        incomes_df["category_id"] = incomes_df.apply(get_income_category_id, axis=1)
+        incomes_df["category"] = incomes_df.apply(get_category_name, axis=1)
+        incomes_df["category_color"] = incomes_df.apply(get_income_category_color, axis=1)
 
         incomes_df.drop(
-            columns=["account_id", "place_id", "subcategory_id", "owner_id"],
+            columns=["account_id", "place_id", "owner_id"],
             inplace=True,
         )
 
@@ -361,62 +382,62 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         )
 
 
-def categories_charts(incomes, expenses):
-    if incomes.empty and expenses.empty:
+def categories_charts(incomes_df, expenses_df):
+    if incomes_df.empty and expenses_df.empty:
         return None
 
-    if incomes.empty:
-        incomes = pd.DataFrame(columns=["category", "subcategory", "amount"])
+    if incomes_df.empty:
+        incomes_df = pd.DataFrame(columns=["category", "subcategory", "amount", "category_color"])
 
-    if expenses.empty:
-        expenses = pd.DataFrame(columns=["category", "subcategory", "amount"])
+    if expenses_df.empty:
+        expenses_df = pd.DataFrame(columns=["category", "subcategory", "amount", "category_color"])
 
-    expenses_subandcats = (
-        expenses.groupby(["category", "subcategory"])["amount"]
+    combined_df = pd.concat(
+        [expenses_df, incomes_df], ignore_index=True
+    )
+
+    data_df = (
+        combined_df.groupby(["category", "subcategory", "category_color", "type"])["amount"]
         .sum()
         .fillna(0)
         .reset_index()
     )
-    expenses_subandcats["amount"] = expenses_subandcats["amount"].abs()
+    data_df["amount"] = data_df["amount"].abs()
 
-    incomes_to_add = {
-        "category": "Ingresos",
-        "subcategory": "Ingresos",
-        "amount": incomes["amount"].sum(),
-    }
-    expenses_subandcats.loc[len(expenses_subandcats)] = incomes_to_add
-
-    incomes_subandcats = (
-        incomes.groupby(["subcategory"])["amount"].sum().fillna(0).reset_index()
-    )
-    incomes_subandcats["category"] = "Ingresos"
-
-    combined_df = pd.concat(
-        [expenses_subandcats, incomes_subandcats], ignore_index=True
-    )
+    # Calculate total amount per category for sorting
+    category_totals = data_df.groupby("category")["amount"].sum().reset_index()
+    category_totals = category_totals.sort_values("amount", ascending=False)
 
     result = []
 
-    for category, group in combined_df.groupby("category"):
+    # Iterate through categories in descending order by amount
+    for category in category_totals["category"]:
+        group = data_df[data_df["category"] == category]
         category_data = {"name": category, "data": []}
 
-        for _, row in group.iterrows():
-            if row["subcategory"] != "Ingresos":
-                subcategory_data = {"name": row["subcategory"], "value": row["amount"]}
-                category_data["data"].append(subcategory_data)
+        # Sort subcategories by amount in descending order
+        group_sorted = group.sort_values("amount", ascending=False)
+
+        for _, row in group_sorted.iterrows():
+            subcategory_data = {"name": row["subcategory"], "value": round(row["amount"], 2)}
+            category_data["data"].append(subcategory_data)
 
         result.append(category_data)
 
     cats_df = (
-        expenses_subandcats.groupby(["category"])["amount"]
+        data_df.groupby(["category", "category_color"])["amount"]
         .sum()
         .fillna(0)
         .reset_index()
     )
+
+    # Sort categories by amount in descending order
+    cats_df = cats_df.sort_values("amount", ascending=False)
+
     return {
         "drilldown": result,
         "categories": [
-            {"name": row["category"], "value": row["amount"]}
+            {"name": row["category"], "value": round(row["amount"], 2), "color": row["category_color"]}
             for _, row in cats_df.iterrows()
         ],
     }
