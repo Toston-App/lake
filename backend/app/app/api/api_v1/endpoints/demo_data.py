@@ -4,8 +4,8 @@ from typing import Any, Optional
 
 from faker import Faker
 from fastapi import APIRouter, Body, Depends, HTTPException
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, or_, update
 
 from app import crud, models, schemas
 from app.api import deps
