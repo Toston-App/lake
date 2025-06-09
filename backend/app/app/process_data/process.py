@@ -146,6 +146,7 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
 
 def transaction_charts(date_filter_type, incomes_df, expenses_df):
     combined_df = pd.concat([expenses_df, incomes_df], ignore_index=True)
+    income_color = incomes_df["category_color"].iloc[0] if not incomes_df.empty else "#4aae27"
 
     # Make df with all months
     all_months = pd.DataFrame({"month": calendar.month_name[1:]})
@@ -194,6 +195,7 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             total=total["amount"].tolist(),
             expenses=expenses["amount"].tolist(),
             incomes=incomes["amount"].tolist(),
+            income_color=income_color,
         )
 
     if date_filter_type == DateFilterType.quarter:
@@ -261,6 +263,7 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             incomes=quarter_incomes[~pd.isna(quarter_incomes["amount"])][
                 "amount"
             ].tolist(),
+            income_color=income_color,
         )
 
     if date_filter_type == DateFilterType.month:
@@ -305,6 +308,7 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             total=month_total["amount"].tolist(),
             expenses=month_expenses["amount"].tolist(),
             incomes=month_incomes["amount"].tolist(),
+            income_color=income_color,
         )
 
     if date_filter_type == DateFilterType.week:
@@ -349,6 +353,7 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             total=week_total["amount"].tolist(),
             expenses=week_expenses["amount"].tolist(),
             incomes=week_incomes["amount"].tolist(),
+            income_color=income_color,
         )
 
     if (
@@ -379,6 +384,7 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             total=date_total["amount"].tolist(),
             expenses=date_incomes["amount"].tolist(),
             incomes=date_expenses["amount"].tolist(),
+            income_color=income_color
         )
 
 
