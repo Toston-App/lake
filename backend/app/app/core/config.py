@@ -1,12 +1,8 @@
 import secrets
 from typing import Any, Optional
 
-from pydantic import AnyHttpUrl, BaseSettings, EmailStr, HttpUrl, PostgresDsn, validator
-
-
-class AsyncPostgresDsn(PostgresDsn):
-    allowed_schemes = {"postgres+asyncpg", "postgresql+asyncpg"}
-
+from pydantic import AnyHttpUrl, EmailStr, HttpUrl, PostgresDsn, validator
+from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
@@ -37,7 +33,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str
     SQLALCHEMY_DATABASE_URI: Optional[PostgresDsn] = None
-    SQLALCHEMY_DATABASE_URI_ASYNC: Optional[AsyncPostgresDsn] = None
+    SQLALCHEMY_DATABASE_URI_ASYNC: Optional[str] = None
 
     @validator("POSTGRES_DB", pre=True)
     def assemble_db_name(cls, v: Optional[str], values: dict[str, Any]) -> Any:
@@ -50,13 +46,11 @@ class Settings(BaseSettings):
     def assemble_db_connection(cls, v: Optional[str], values: dict[str, Any]) -> Any:
         if isinstance(v, str):
             return v
-        return PostgresDsn.build(
-            scheme="postgresql",
-            user=values.get("POSTGRES_USER"),
-            password=values.get("POSTGRES_PASSWORD"),
-            host=values.get("POSTGRES_SERVER"),
-            path=f"/{values.get('POSTGRES_DB') or ''}",
-        )
+        user = values.get("POSTGRES_USER")
+        password = values.get("POSTGRES_PASSWORD")
+        host = values.get("POSTGRES_SERVER")
+        db = values.get("POSTGRES_DB")
+        return f"postgresql://{user}:{password}@{host}/{db}"
 
     @validator("SQLALCHEMY_DATABASE_URI_ASYNC", pre=True)
     def assemble_async_db_connection(
@@ -64,13 +58,11 @@ class Settings(BaseSettings):
     ) -> Any:
         if isinstance(v, str):
             return v
-        return AsyncPostgresDsn.build(
-            scheme="postgresql+asyncpg",
-            user=values.get("POSTGRES_USER"),
-            password=values.get("POSTGRES_PASSWORD"),
-            host=values.get("POSTGRES_SERVER"),
-            path=f"/{values.get('POSTGRES_DB') or ''}",
-        )
+        user = values.get("POSTGRES_USER")
+        password = values.get("POSTGRES_PASSWORD")
+        host = values.get("POSTGRES_SERVER")
+        db = values.get("POSTGRES_DB")
+        return f"postgresql+asyncpg://{user}:{password}@{host}/{db}"
 
     SMTP_TLS: bool = True
     SMTP_PORT: Optional[int] = None
