@@ -59,6 +59,7 @@ dependencies = [
     { name = "phonenumbers" },
     { name = "psycopg2-binary" },
     { name = "pydantic" },
+    { name = "pydantic-ai" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "python-jose", extra = ["cryptography"] },
@@ -102,6 +103,7 @@ requires-dist = [
     { name = "phonenumbers", specifier = ">=9.0.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.3,<3.0.0" },
     { name = "pydantic", specifier = ">=1.10.2,<2.0.0" },
+    { name = "pydantic-ai", specifier = ">=0.0.0" },
     { name = "pytest", specifier = ">=7.1.3,<8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.20.3,<1.0.0" },
     { name = "python-jose", extras = ["cryptography"], specifier = ">=3.3.0,<4.0.0" },
@@ -1297,6 +1299,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/05/a1/4c84b1ce488acd760e9ecd945b3c0ff6ecf1a26186f5eb058bab62d51d68/pydantic-1.10.21-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:0bb58bbe65a43483d49f66b6c8474424d551a3fbe8a7796c42da314bac712738", size = 3117257 },
     { url = "https://files.pythonhosted.org/packages/8a/a1/4ff39f2e89bf87496b9dc1aa56085848df971b341b14ad9e02a8bc13c966/pydantic-1.10.21-cp313-cp313-win_amd64.whl", hash = "sha256:e622314542fb48542c09c7bd1ac51d71c5632dd3c92dc82ede6da233f55f4848", size = 2172972 },
     { url = "https://files.pythonhosted.org/packages/2d/a8/3e34e7127203ac002e1a5eb45108ef523d9196f75468fde5fdbec7544201/pydantic-1.10.21-py3-none-any.whl", hash = "sha256:db70c920cba9d05c69ad4a9e7f8e9e83011abb2c6490e561de9ae24aee44925c", size = 166430 },
+]
+
+[[package]]
+name = "pydantic-ai"
+version = "0.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/e6/e7c03ed4f468885149002862774ae8e86a67469852fb76b60f786101c91b/pydantic_ai-0.0.0.tar.gz", hash = "sha256:d8e54b8a84d1b3a64aa776a23b5314a614b24ee87166a59053a1bac6ed023ed5", size = 1367 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/be/00de97abb1b92953ffc3946e81b563f17f66229a4c8ed888f2ee0821ebfc/pydantic_ai-0.0.0-py3-none-any.whl", hash = "sha256:0464a0825d83b6b736eba3c7ea10e34ecfca9efa41ad5b51ab31ab6e7925f0bc", size = 1926 },
 ]
 
 [[package]]

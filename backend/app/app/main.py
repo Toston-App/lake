@@ -23,33 +23,33 @@ app = FastAPI(
     openapi_url=None,
 )
 
-SecWeb(app=app, Option={'csp': {
-    "default-src": ["'self'"],
-    "img-src": [
-        "'self'",
-        "data:",
-    ],
-    "connect-src": ["'self'"],
-    "script-src": ["'self'"],
-    "style-src": ["'self'", "'unsafe-inline'"],
-    "script-src-elem": [
-        "'self'",
-        "'unsafe-inline'",
-        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
-    ],
-    "style-src-elem": [
-        "'self'",
-        "'unsafe-inline'",
-        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-    ],
-    "base-uri": ["'self'"],
-    "font-src": ["'self'", "https:", "data:"],
-    "frame-ancestors": ["'self'"],
-    "object-src": ["'none'"],
-    "script-src-attr": ["'none'"],
-    "require-trusted-types-for": ["'script'"],
-}
-})
+# SecWeb(app=app, Option={'csp': {
+#     "default-src": ["'self'"],
+#     "img-src": [
+#         "'self'",
+#         "data:",
+#     ],
+#     "connect-src": ["'self'"],
+#     "script-src": ["'self'"],
+#     "style-src": ["'self'", "'unsafe-inline'"],
+#     "script-src-elem": [
+#         "'self'",
+#         "'unsafe-inline'",
+#         "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+#     ],
+#     "style-src-elem": [
+#         "'self'",
+#         "'unsafe-inline'",
+#         "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+#     ],
+#     "base-uri": ["'self'"],
+#     "font-src": ["'self'", "https:", "data:"],
+#     "frame-ancestors": ["'self'"],
+#     "object-src": ["'none'"],
+#     "script-src-attr": ["'none'"],
+#     "require-trusted-types-for": ["'script'"],
+# }
+# })
 
 security = HTTPBasic()
 
@@ -61,10 +61,11 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-# Set all CORS enabled origins
+# # Set all CORS enabled origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "*",
         "https://www.cleverbill.ing",
         "https://cleverbill.ing",
         "https://api.cleverbill.ing",
@@ -81,11 +82,11 @@ app.add_middleware(
         r"http:\/\/*\.cleverbill\.ing/",
         "http://localhost:4321",
         "http://localhost",
-        "http://localhost:4200",
+        "http://localhost:*",
         "http://localhost:3000",
         "http://localhost:8080",
         "https://localhost",
-        "https://localhost:4200",
+        "https://localhost:*",
         "https://localhost:3000",
         "https://localhost:8080",
         "https://localhost:8888",

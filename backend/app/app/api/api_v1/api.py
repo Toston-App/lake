@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.api_v1.endpoints import (
     accounts,
     ai,
+    chat,
     categories,
     demo_data,
     expenses,
@@ -36,5 +37,6 @@ api_router.include_router(
 )
 api_router.include_router(imports.router, prefix="/import", tags=["imports"])
 api_router.include_router(ai.router, prefix="/ai", tags=["ai"])
+api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])
 api_router.include_router(waha.router, prefix="/waha", tags=["whatsapp", "waha"])
