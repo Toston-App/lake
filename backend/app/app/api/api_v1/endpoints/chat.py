@@ -8,6 +8,7 @@ import asyncio
 from app import models
 from app.api import deps
 from app.ai.financial_agent import FinancialAgent, ChatMessage, ChatResponse
+from app.ai.transaction_parser import TransactionParser
 from app.utilities.logger import setup_logger
 
 router = APIRouter()
@@ -99,6 +100,54 @@ async def chat_stream(
     )
 
 
+@router.post("/transaction")
+async def create_transaction(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    chat_message: ChatMessage,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Create a transaction (expense, income, or transfer) from natural language input.
+    """
+    logger.info(f"Transaction creation request received - User ID: {current_user.id} - Message: {chat_message.message[:100]}...")
+    
+    try:
+        # Initialize the transaction parser
+        parser = TransactionParser(db, current_user.id)
+        
+        # Parse and create the transaction
+        parsed_transaction = await parser.parse_transaction(chat_message.message)
+        result = await parser.create_transaction(parsed_transaction)
+        
+        # Format the response message
+        if parsed_transaction.transaction_type == "expense":
+            message = f"✅ Expense recorded: ${result['amount']:.2f} for {result['description']}"
+        elif parsed_transaction.transaction_type == "income":
+            message = f"✅ Income recorded: ${result['amount']:.2f} for {result['description']}"
+        elif parsed_transaction.transaction_type == "transfer":
+            message = f"✅ Transfer recorded: ${result['amount']:.2f} from {result['from_account']} to {result['to_account']}"
+        else:
+            message = f"✅ Transaction recorded: ${result['amount']:.2f} for {result['description']}"
+        
+        logger.info(f"Transaction creation completed - User ID: {current_user.id} - Type: {parsed_transaction.transaction_type}")
+        
+        return {
+            "success": True,
+            "message": message,
+            "transaction": result,
+            "transaction_type": parsed_transaction.transaction_type
+        }
+        
+    except Exception as e:
+        logger.error(f"Transaction creation failed - User ID: {current_user.id} - Error: {str(e)}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": f"I couldn't create the transaction: {str(e)}"
+        }
+
+
 @router.get("/capabilities")
 async def get_chat_capabilities(
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -143,6 +192,36 @@ async def get_chat_capabilities(
                     "Show me my savings account balance",
                     "What's the balance in my checking account?"
                 ]
+            },
+            {
+                "name": "Quick Expense Entry",
+                "description": "Quickly add expenses using natural language",
+                "examples": [
+                    "Add $25 for lunch at McDonald's",
+                    "Record $150 gas expense",
+                    "Add $50 for groceries",
+                    "Record $30 for coffee"
+                ]
+            },
+            {
+                "name": "Income Recording",
+                "description": "Record income transactions using natural language",
+                "examples": [
+                    "Add $2000 salary deposit",
+                    "Record $500 freelance payment",
+                    "Add $1000 bonus",
+                    "Record $200 refund"
+                ]
+            },
+            {
+                "name": "Transfer Tracking",
+                "description": "Track transfers between accounts using natural language",
+                "examples": [
+                    "Transfer $500 from checking to savings",
+                    "Move $100 to crypto wallet",
+                    "Transfer $200 from savings to checking",
+                    "Move $50 to emergency fund"
+                ]
             }
         ],
         "supported_periods": [
@@ -151,6 +230,11 @@ async def get_chat_capabilities(
             "this week",
             "last week",
             "this year"
+        ],
+        "transaction_types": [
+            "expense",
+            "income", 
+            "transfer"
         ]
     }
     
@@ -176,6 +260,44 @@ async def test_chat_endpoint(
             "status": "success",
             "test_message": test_message,
             "response": response,
+            "user_id": current_user.id
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "user_id": current_user.id
+        }
+
+
+@router.post("/test-transaction")
+async def test_transaction_endpoint(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Test endpoint to verify the transaction creation functionality is working.
+    """
+    test_message = "Add $25 for lunch at McDonald's"
+    
+    try:
+        parser = TransactionParser(db, current_user.id)
+        parsed_transaction = await parser.parse_transaction(test_message)
+        
+        return {
+            "status": "success",
+            "test_message": test_message,
+            "parsed_transaction": {
+                "type": parsed_transaction.transaction_type,
+                "amount": parsed_transaction.amount,
+                "description": parsed_transaction.description,
+                "date": parsed_transaction.date,
+                "account_id": parsed_transaction.account_id,
+                "category_id": parsed_transaction.category_id,
+                "place_id": parsed_transaction.place_id
+            },
             "user_id": current_user.id
         }
         

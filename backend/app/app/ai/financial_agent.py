@@ -1,15 +1,16 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, tool
 from pydantic_ai.models.openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.financial_analytics import FinancialAnalytics, SpendingAnalysis, CategoryAnalysis, TrendAnalysis, AccountBalance
+from app.ai.transaction_parser import TransactionParser, ParsedTransaction
 from app.core.config import settings
 
 
 class FinancialAgent(Agent):
-    """Financial analytics agent for handling user queries about spending, categories, trends, and account balances"""
+    """Financial analytics agent for handling user queries about spending, categories, trends, account balances, and transaction management"""
     
     def __init__(self, db: AsyncSession, user_id: int):
         super().__init__(
@@ -19,18 +20,27 @@ class FinancialAgent(Agent):
                 temperature=0.1
             ),
             system_prompt="""You are a helpful financial assistant that can analyze spending patterns, 
-            track categories, analyze trends, and provide account balance information. 
+            track categories, analyze trends, provide account balance information, and help manage transactions.
             
             You can help users with:
             - Spending analysis for different time periods
             - Category-specific spending analysis
             - Trend analysis over time
             - Account balance information
+            - Quick expense entry: "Add $25 for lunch at McDonald's"
+            - Income recording: "Add $2000 salary deposit"
+            - Transfer tracking: "Transfer $500 from checking to savings"
+            
+            For transaction management:
+            - When users want to add expenses, income, or transfers, use the appropriate tools
+            - Confirm the transaction details before creating them
+            - Provide clear feedback about what was created
             
             Always provide clear, actionable insights and format monetary amounts appropriately.
             Be conversational and helpful in your responses."""
         )
         self.analytics = FinancialAnalytics(db, user_id)
+        self.transaction_parser = TransactionParser(db, user_id)
     
     @tool
     async def analyze_spending(
@@ -69,6 +79,124 @@ class FinancialAgent(Agent):
     ) -> Optional[AccountBalance]:
         """Get balance for a specific account"""
         return await self.analytics.get_specific_account_balance(account_name)
+    
+    @tool
+    async def create_expense(
+        self,
+        message: str = Field(description="Natural language description of the expense (e.g., 'Add $25 for lunch at McDonald's')")
+    ) -> Dict[str, Any]:
+        """Create an expense transaction from natural language input"""
+        try:
+            parsed_transaction = await self.transaction_parser.parse_transaction(message)
+            
+            if parsed_transaction.transaction_type != "expense":
+                return {
+                    "success": False,
+                    "error": f"Expected expense transaction, but detected {parsed_transaction.transaction_type}"
+                }
+            
+            result = await self.transaction_parser.create_transaction(parsed_transaction)
+            
+            return {
+                "success": True,
+                "message": f"✅ Expense recorded: ${result['amount']:.2f} for {result['description']}",
+                "transaction": result
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to create expense: {str(e)}"
+            }
+    
+    @tool
+    async def create_income(
+        self,
+        message: str = Field(description="Natural language description of the income (e.g., 'Add $2000 salary deposit')")
+    ) -> Dict[str, Any]:
+        """Create an income transaction from natural language input"""
+        try:
+            parsed_transaction = await self.transaction_parser.parse_transaction(message)
+            
+            if parsed_transaction.transaction_type != "income":
+                return {
+                    "success": False,
+                    "error": f"Expected income transaction, but detected {parsed_transaction.transaction_type}"
+                }
+            
+            result = await self.transaction_parser.create_transaction(parsed_transaction)
+            
+            return {
+                "success": True,
+                "message": f"✅ Income recorded: ${result['amount']:.2f} for {result['description']}",
+                "transaction": result
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to create income: {str(e)}"
+            }
+    
+    @tool
+    async def create_transfer(
+        self,
+        message: str = Field(description="Natural language description of the transfer (e.g., 'Transfer $500 from checking to savings')")
+    ) -> Dict[str, Any]:
+        """Create a transfer transaction from natural language input"""
+        try:
+            parsed_transaction = await self.transaction_parser.parse_transaction(message)
+            
+            if parsed_transaction.transaction_type != "transfer":
+                return {
+                    "success": False,
+                    "error": f"Expected transfer transaction, but detected {parsed_transaction.transaction_type}"
+                }
+            
+            result = await self.transaction_parser.create_transaction(parsed_transaction)
+            
+            return {
+                "success": True,
+                "message": f"✅ Transfer recorded: ${result['amount']:.2f} from {result['from_account']} to {result['to_account']}",
+                "transaction": result
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to create transfer: {str(e)}"
+            }
+    
+    @tool
+    async def create_transaction_from_message(
+        self,
+        message: str = Field(description="Natural language description of any transaction (expense, income, or transfer)")
+    ) -> Dict[str, Any]:
+        """Create any type of transaction (expense, income, or transfer) from natural language input"""
+        try:
+            parsed_transaction = await self.transaction_parser.parse_transaction(message)
+            result = await self.transaction_parser.create_transaction(parsed_transaction)
+            
+            if parsed_transaction.transaction_type == "expense":
+                message_text = f"✅ Expense recorded: ${result['amount']:.2f} for {result['description']}"
+            elif parsed_transaction.transaction_type == "income":
+                message_text = f"✅ Income recorded: ${result['amount']:.2f} for {result['description']}"
+            elif parsed_transaction.transaction_type == "transfer":
+                message_text = f"✅ Transfer recorded: ${result['amount']:.2f} from {result['from_account']} to {result['to_account']}"
+            else:
+                message_text = f"✅ Transaction recorded: ${result['amount']:.2f} for {result['description']}"
+            
+            return {
+                "success": True,
+                "message": message_text,
+                "transaction": result
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to create transaction: {str(e)}"
+            }
     
     async def chat(self, message: str) -> str:
         """Process a user message and return a helpful response"""

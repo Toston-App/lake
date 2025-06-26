@@ -10,6 +10,11 @@ A powerful financial analytics chatbot built with PydanticAI and FastAPI, design
 - **Trend Analysis**: "Show me my spending trends over the last 3 months" / "Which categories are increasing?"
 - **Account Balances**: "What's my current balance across all accounts?" / "Show me my savings account balance"
 
+### 💰 Transaction Management
+- **Quick Expense Entry**: "Add $25 for lunch at McDonald's" / "Record $150 gas expense"
+- **Income Recording**: "Add $2000 salary deposit" / "Record $500 freelance payment"
+- **Transfer Tracking**: "Transfer $500 from checking to savings" / "Move $100 to crypto wallet"
+
 ## API Endpoints
 
 ### 1. Chat Message Endpoint
@@ -41,19 +46,52 @@ POST /api/v1/chat/stream
 
 Returns a Server-Sent Events (SSE) stream for real-time chat responses.
 
-### 3. Capabilities Endpoint
+### 3. Transaction Creation Endpoint
+```http
+POST /api/v1/chat/transaction
+```
+
+**Request Body:**
+```json
+{
+  "message": "Add $25 for lunch at McDonald's",
+  "user_id": 123
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "✅ Expense recorded: $25.00 for lunch at McDonald's",
+  "transaction": {
+    "type": "expense",
+    "id": 456,
+    "amount": 25.0,
+    "description": "lunch at McDonald's",
+    "date": "2024-01-15",
+    "account": "Checking Account",
+    "category": "Food",
+    "place": "McDonald's"
+  },
+  "transaction_type": "expense"
+}
+```
+
+### 4. Capabilities Endpoint
 ```http
 GET /api/v1/chat/capabilities
 ```
 
 Returns information about what the chatbot can do.
 
-### 4. Test Endpoint
+### 5. Test Endpoints
 ```http
 POST /api/v1/chat/test
+POST /api/v1/chat/test-transaction
 ```
 
-Tests the chat functionality with a sample message.
+Test the chat and transaction functionality with sample messages.
 
 ## Frontend Integration with Vercel AI SDK
 
@@ -86,13 +124,69 @@ export default function ChatComponent() {
         <input
           value={input}
           onChange={handleInputChange}
-          placeholder="Ask about your finances..."
+          placeholder="Ask about your finances or add transactions..."
           disabled={isLoading}
         />
         <button type="submit" disabled={isLoading}>
           Send
         </button>
       </form>
+    </div>
+  )
+}
+```
+
+### Transaction Creation Component
+
+```typescript
+import { useState } from 'react'
+
+export default function TransactionComponent() {
+  const [message, setMessage] = useState('')
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const createTransaction = async () => {
+    setLoading(true)
+    try {
+      const response = await fetch('/api/v1/chat/transaction', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: message,
+          user_id: currentUser.id,
+        }),
+      })
+      
+      const data = await response.json()
+      setResult(data)
+    } catch (error) {
+      console.error('Error creating transaction:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div>
+      <input
+        type="text"
+        value={message}
+        onChange={(e) => setMessage(e.target.value)}
+        placeholder="Add $25 for lunch at McDonald's"
+      />
+      <button onClick={createTransaction} disabled={loading}>
+        {loading ? 'Creating...' : 'Add Transaction'}
+      </button>
+      
+      {result && (
+        <div className={result.success ? 'success' : 'error'}>
+          {result.message}
+        </div>
+      )}
     </div>
   )
 }
@@ -127,7 +221,7 @@ export default function StreamingChatComponent() {
         <input
           value={input}
           onChange={handleInputChange}
-          placeholder="Ask about your finances..."
+          placeholder="Ask about your finances or add transactions..."
           disabled={isLoading}
         />
         <button type="submit" disabled={isLoading}>
@@ -216,6 +310,29 @@ export default async function handler(
 - "What's the balance in my checking account?"
 - "How much money do I have in total?"
 
+### Transaction Management
+
+#### Quick Expense Entry
+- "Add $25 for lunch at McDonald's"
+- "Record $150 gas expense"
+- "Add $50 for groceries"
+- "Record $30 for coffee"
+- "Add $200 for dinner at restaurant"
+
+#### Income Recording
+- "Add $2000 salary deposit"
+- "Record $500 freelance payment"
+- "Add $1000 bonus"
+- "Record $200 refund"
+- "Add $1500 commission payment"
+
+#### Transfer Tracking
+- "Transfer $500 from checking to savings"
+- "Move $100 to crypto wallet"
+- "Transfer $200 from savings to checking"
+- "Move $50 to emergency fund"
+- "Transfer $1000 from checking to investment account"
+
 ## Supported Time Periods
 
 - `this month` - Current month from the 1st to today
@@ -223,6 +340,29 @@ export default async function handler(
 - `this week` - Current week (Monday to today)
 - `last week` - Previous week (Monday to Sunday)
 - `this year` - Current year from January 1st to today
+
+## Transaction Parsing Features
+
+### Amount Recognition
+- Currency symbols: `$25`, `$25.50`
+- Written amounts: `25 dollars`, `25 bucks`
+- Currency codes: `25 USD`
+
+### Category Detection
+- **Food**: lunch, dinner, breakfast, restaurant, coffee, food, groceries
+- **Transport**: gas, fuel, uber, taxi, bus, train, transport
+- **Entertainment**: movie, bar, drinks, entertainment
+- **Shopping**: clothes, shoes, electronics, shopping
+
+### Account Detection
+- Automatically detects account names mentioned in the message
+- Falls back to default accounts if none specified
+- For transfers, intelligently determines "from" and "to" accounts
+
+### Date Handling
+- Defaults to today's date
+- Recognizes "yesterday" keyword
+- Can be extended to support more date formats
 
 ## Technical Architecture
 
@@ -233,14 +373,20 @@ export default async function handler(
    - Handles data aggregation and calculations
    - Provides structured analysis results
 
-2. **FinancialAgent** (`app/ai/financial_agent.py`)
+2. **TransactionParser** (`app/ai/transaction_parser.py`)
+   - Natural language transaction parsing
+   - Extracts amounts, descriptions, categories, accounts
+   - Creates database transactions
+
+3. **FinancialAgent** (`app/ai/financial_agent.py`)
    - PydanticAI agent with financial tools
    - Natural language processing
-   - Tool orchestration
+   - Tool orchestration for analytics and transactions
 
-3. **Chat Endpoints** (`app/api/api_v1/endpoints/chat.py`)
+4. **Chat Endpoints** (`app/api/api_v1/endpoints/chat.py`)
    - REST API endpoints
    - Streaming support
+   - Transaction creation endpoint
    - Error handling and logging
 
 ### Data Models
@@ -249,6 +395,7 @@ export default async function handler(
 - `CategoryAnalysis` - Category-specific analysis
 - `TrendAnalysis` - Time-based trend analysis
 - `AccountBalance` - Account balance information
+- `ParsedTransaction` - Transaction details from natural language
 
 ## Setup and Installation
 
@@ -275,6 +422,7 @@ The chatbot includes comprehensive error handling:
 - Database connection errors
 - Invalid user queries
 - Missing data scenarios
+- Transaction parsing errors
 - API rate limiting
 - Authentication failures
 
@@ -286,6 +434,7 @@ All errors are logged and return user-friendly messages.
 - Caching can be added for frequently requested data
 - Streaming responses reduce perceived latency
 - Async/await patterns for better concurrency
+- Transaction parsing is optimized for common patterns
 
 ## Security
 
@@ -294,6 +443,7 @@ All errors are logged and return user-friendly messages.
 - Input validation and sanitization
 - Rate limiting support
 - Secure API key handling
+- Transaction validation and verification
 
 ## Monitoring and Logging
 
@@ -301,5 +451,17 @@ All errors are logged and return user-friendly messages.
 - Error tracking
 - Performance metrics
 - User activity monitoring
+- Transaction creation tracking
 
-Logs are stored in `chat_requests.log` for debugging and monitoring. 
+Logs are stored in `chat_requests.log` for debugging and monitoring.
+
+## Future Enhancements
+
+- **Smart Suggestions**: Suggest categories and accounts based on transaction history
+- **Recurring Transactions**: Set up automatic recurring transactions
+- **Budget Alerts**: Get notified when approaching budget limits
+- **Receipt Scanning**: OCR integration for receipt processing
+- **Voice Input**: Voice-to-text for hands-free transaction entry
+- **Multi-language Support**: Support for multiple languages
+- **Advanced Date Parsing**: Support for relative dates like "last Friday"
+- **Transaction Templates**: Save and reuse common transaction patterns 
