@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, date
+from datetime import datetime, timedelta, date as date_type
 from typing import Optional, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,12 +21,12 @@ class ParsedTransaction(BaseModel):
     transaction_type: str = Field(description="Type of transaction: expense, income, or transfer")
     amount: float = Field(description="Transaction amount")
     description: str = Field(description="Transaction description")
-    date: Optional[date] = Field(description="Transaction date", default=None)
-    account_id: Optional[int] = Field(description="Account ID", default=None)
-    category_id: Optional[int] = Field(description="Category ID", default=None)
-    place_id: Optional[int] = Field(description="Place ID", default=None)
-    from_account_id: Optional[int] = Field(description="From account ID for transfers", default=None)
-    to_account_id: Optional[int] = Field(description="To account ID for transfers", default=None)
+    date: date_type | None = Field(description="Transaction date", default=None)
+    account_id: int | None = Field(description="Account ID", default=None)
+    category_id: int | None = Field(description="Category ID", default=None)
+    place_id: int | None = Field(description="Place ID", default=None)
+    from_account_id: int | None = Field(description="From account ID for transfers", default=None)
+    to_account_id: int | None = Field(description="To account ID for transfers", default=None)
 
 
 class TransactionParser:
@@ -72,7 +72,7 @@ class TransactionParser:
         description = self._extract_description(message, amount)
         
         # Extract date (default to today)
-        transaction_date = self._extract_date(message) or date.today()
+        transaction_date = self._extract_date(message) or date_type.today()
         
         if transaction_type == "transfer":
             return await self._parse_transfer(message, amount, description, transaction_date)
@@ -128,7 +128,7 @@ class TransactionParser:
         description = " ".join(meaningful_words).strip()
         return description if description else "Transaction"
     
-    def _extract_date(self, message: str) -> Optional[date]:
+    def _extract_date(self, message: str) -> Optional[date_type]:
         """Extract date from message (simplified - defaults to today)"""
         # This is a simplified version - could be enhanced with date parsing
         today_keywords = ['today', 'now', 'current']
@@ -138,12 +138,12 @@ class TransactionParser:
         
         for keyword in yesterday_keywords:
             if keyword in message_lower:
-                return date.today() - timedelta(days=1)
+                return date_type.today() - timedelta(days=1)
         
         # Default to today
-        return date.today()
+        return date_type.today()
     
-    async def _parse_expense(self, message: str, amount: float, description: str, transaction_date: date) -> ParsedTransaction:
+    async def _parse_expense(self, message: str, amount: float, description: str, transaction_date: date_type) -> ParsedTransaction:
         """Parse expense transaction"""
         # Find account
         account_id = await self._find_account(message)
@@ -164,7 +164,7 @@ class TransactionParser:
             place_id=place_id
         )
     
-    async def _parse_income(self, message: str, amount: float, description: str, transaction_date: date) -> ParsedTransaction:
+    async def _parse_income(self, message: str, amount: float, description: str, transaction_date: date_type) -> ParsedTransaction:
         """Parse income transaction"""
         # Find account
         account_id = await self._find_account(message)
@@ -177,7 +177,7 @@ class TransactionParser:
             account_id=account_id
         )
     
-    async def _parse_transfer(self, message: str, amount: float, description: str, transaction_date: date) -> ParsedTransaction:
+    async def _parse_transfer(self, message: str, amount: float, description: str, transaction_date: date_type) -> ParsedTransaction:
         """Parse transfer transaction"""
         # Find from and to accounts
         from_account_id, to_account_id = await self._find_transfer_accounts(message)
@@ -287,7 +287,7 @@ class TransactionParser:
                 
                 expense_data = ExpenseCreate(
                     amount=parsed_transaction.amount,
-                    date=parsed_transaction.date.strftime("%Y-%m-%d"),
+                    date=parsed_transaction.date.strftime("%Y-%m-%d") if parsed_transaction.date else None,
                     description=parsed_transaction.description,
                     account_id=parsed_transaction.account_id,
                     category_id=parsed_transaction.category_id,
@@ -316,7 +316,7 @@ class TransactionParser:
                 
                 income_data = IncomeCreate(
                     amount=parsed_transaction.amount,
-                    date=parsed_transaction.date.strftime("%Y-%m-%d"),
+                    date=parsed_transaction.date.strftime("%Y-%m-%d") if parsed_transaction.date else None,
                     description=parsed_transaction.description,
                     account_id=parsed_transaction.account_id
                 )
@@ -341,7 +341,7 @@ class TransactionParser:
                 
                 transfer_data = TransferCreate(
                     amount=parsed_transaction.amount,
-                    date=parsed_transaction.date.strftime("%Y-%m-%d"),
+                    date=parsed_transaction.date.strftime("%Y-%m-%d") if parsed_transaction.date else None,
                     description=parsed_transaction.description,
                     from_acc=parsed_transaction.from_account_id,
                     to_acc=parsed_transaction.to_account_id
@@ -364,7 +364,4 @@ class TransactionParser:
                 }
         
         except Exception as e:
-            raise ValueError(f"Failed to create transaction: {str(e)}")
-
-
-from datetime import timedelta 
+            raise ValueError(f"Failed to create transaction: {str(e)}") 
