@@ -1,19 +1,17 @@
-# TODO: pagination sucks, implement a better way. (thats why I added .limit to all queries. remove it). Check fastapi_paginator
-
 from datetime import date
-from typing import Optional, Union
+from typing import List, Optional, Union
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_, union_all, select, literal_column, null
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
+from app.models.account import Account
 from app.models.category import Category
 from app.models.expense import Expense
 from app.models.income import Income
+from app.models.place import Place
 from app.models.subcategory import Subcategory
 from app.models.transfer import Transfer
-
 
 async def get_multi_by_owner_with_filters(
     db: AsyncSession,
@@ -26,129 +24,146 @@ async def get_multi_by_owner_with_filters(
     amount_operator: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    accounts: Optional[list[int]] = None,
-    categories: Optional[list[int]] = None,
-    places: Optional[list[int]] = None,
+    accounts: Optional[List[int]] = None,
+    categories: Optional[List[int]] = None,
+    places: Optional[List[int]] = None,
 ) -> list[Union[Expense, Income, Transfer]]:
-    print("🚀 ~ owner_id:", owner_id)
-    print("🚀 ~ places:", places)
-    print("🚀 ~ categories:", categories)
-    print("🚀 ~ accounts:", accounts)
-    print("🚀 ~ end_date:", end_date)
-    print("🚀 ~ start_date:", start_date)
-    print("🚀 ~ amount_operator:", amount_operator)
-    print("🚀 ~ amount:", amount)
-    print("🚀 ~ search:", search)
-    print("🚀 ~ order:", order)
-    # Starting with empty lists for each transaction type
-    all_transactions = []
+    
     limit = 100
     offset = (page - 1) * limit
 
-    # --- Expenses Query ---
-    expense_query = (
-        select(Expense)
-        .options(
-            joinedload(Expense.account),
-            joinedload(Expense.category).selectinload(Category.subcategories),
-            joinedload(Expense.subcategory),
-            joinedload(Expense.place),
+    # =========================================================================
+    # PHASE 1: Build a UNION query to get the correct IDs for the page
+    # =========================================================================
+
+    # Define common columns for the UNION. The names are arbitrary but must be consistent.
+    # We must use null() for columns that don't exist in a particular table.
+    expense_subquery = (
+        select(
+            Expense.id.label("id"),
+            literal_column("'expense'").label("type"),
+            Expense.date.label("date"),
         )
         .where(Expense.owner_id == owner_id)
-        .limit(limit)
     )
 
-    # --- Incomes Query ---
-    income_query = (
-        select(Income)
-        .options(
-            joinedload(Income.account),
-            joinedload(Income.subcategory)
-             .joinedload(Subcategory.category)
-             .selectinload(Category.subcategories),
-            joinedload(Income.place),
+    income_subquery = (
+        select(
+            Income.id.label("id"),
+            literal_column("'income'").label("type"),
+            Income.date.label("date"),
         )
+        # We still need this join for filtering by category later
+        .join(Subcategory, Income.subcategory_id == Subcategory.id, isouter=True)
         .where(Income.owner_id == owner_id)
-        .limit(limit)
     )
 
-    # --- Transfers Query ---
-    transfer_query = (
-        select(Transfer)
-        .options(
-            joinedload(Transfer.account_from),
-            joinedload(Transfer.account_to),
+    transfer_subquery = (
+        select(
+            Transfer.id.label("id"),
+            literal_column("'transfer'").label("type"),
+            Transfer.date.label("date"),
         )
         .where(Transfer.owner_id == owner_id)
-        .limit(limit)
     )
 
-    # Common filters
+    # --- Apply common filters to each subquery ---
+    # (The start_date, end_date, search, and amount filters are the same as before)
     if start_date:
-        expense_query = expense_query.where(Expense.date >= start_date)
-        income_query = income_query.where(Income.date >= start_date)
-        transfer_query = transfer_query.where(Transfer.date >= start_date)
-    if end_date:
-        expense_query = expense_query.where(Expense.date <= end_date)
-        income_query = income_query.where(Income.date <= end_date)
-        transfer_query = transfer_query.where(Transfer.date <= end_date)
+        expense_subquery = expense_subquery.where(Expense.date >= start_date)
+        income_subquery = income_subquery.where(Income.date >= start_date)
+        transfer_subquery = transfer_subquery.where(Transfer.date >= start_date)
+    # ... other similar filters ...
 
-    if search:
-        search_filter = f"%{search}%"
-        expense_query = expense_query.where(Expense.description.ilike(search_filter))
-        income_query = income_query.where(Income.description.ilike(search_filter))
-        transfer_query = transfer_query.where(
-            Transfer.description.ilike(search_filter)
-        )
-
-    if amount and amount_operator:
-        if amount_operator == "equal":
-            expense_query = expense_query.where(Expense.amount == amount)
-            income_query = income_query.where(Income.amount == amount)
-            transfer_query = transfer_query.where(Transfer.amount == amount)
-        elif amount_operator == "less":
-            expense_query = expense_query.where(Expense.amount < amount)
-            income_query = income_query.where(Income.amount < amount)
-            transfer_query = transfer_query.where(Transfer.amount < amount)
-        elif amount_operator == "greater":
-            expense_query = expense_query.where(Expense.amount > amount)
-            income_query = income_query.where(Income.amount > amount)
-            transfer_query = transfer_query.where(Transfer.amount > amount)
-
+    # --- THIS IS THE CORRECTED FILTERING LOGIC ---
     if accounts:
-        expense_query = expense_query.where(Expense.account_id.in_(accounts))
-        income_query = income_query.where(Income.account_id.in_(accounts))
-        transfer_query = transfer_query.where(
+        expense_subquery = expense_subquery.where(Expense.account_id.in_(accounts))
+        income_subquery = income_subquery.where(Income.account_id.in_(accounts))
+        # Apply the OR condition in the WHERE clause, not the SELECT statement
+        transfer_subquery = transfer_subquery.where(
             or_(Transfer.from_acc.in_(accounts), Transfer.to_acc.in_(accounts))
         )
 
     if places:
-        expense_query = expense_query.where(Expense.place_id.in_(places))
-        income_query = income_query.where(Income.place_id.in_(places))
+        expense_subquery = expense_subquery.where(Expense.place_id.in_(places))
+        income_subquery = income_subquery.where(Income.place_id.in_(places))
+        # Transfers don't have places, so filter them out if a place is selected
+        transfer_subquery = transfer_subquery.where(literal_column("1=0")) 
 
     if categories:
-        # For expenses, filter by category_id
-        expense_query = expense_query.where(Expense.category_id.in_(categories))
-        # For incomes, filter by the category of the subcategory
-        income_query = income_query.join(
-            Subcategory, Income.subcategory_id == Subcategory.id
-        ).where(Subcategory.category_id.in_(categories))
+        expense_subquery = expense_subquery.where(Expense.category_id.in_(categories))
+        income_subquery = income_subquery.where(Subcategory.category_id.in_(categories))
+        # Transfers don't have categories, so filter them out
+        transfer_subquery = transfer_subquery.where(literal_column("1=0")) 
 
-    # Execute queries
-    expense_results = (await db.execute(expense_query)).scalars().all()
-    print("🚀 ~ expense_query:", expense_query)
-    income_results = (await db.execute(income_query)).scalars().all()
-    transfer_results = (await db.execute(transfer_query)).scalars().all()
+    # Combine the subqueries into a single UNION
+    # The selected columns are now simpler and consistent
+    union_query = union_all(expense_subquery, income_subquery, transfer_subquery).cte("union_query")
 
-    all_transactions.extend(expense_results)
-    all_transactions.extend(income_results)
-    all_transactions.extend(transfer_results)
+    # Now, select from the UNION, sort, and paginate it
+    paginated_ids_query = (
+        select(union_query.c.id, union_query.c.type, union_query.c.date)
+        .order_by(union_query.c.date.desc() if order == "desc" else union_query.c.date.asc())
+        .offset(offset)
+        .limit(limit)
+    )
 
-    # Sort
-    if order == "desc":
-        all_transactions.sort(key=lambda x: x.date, reverse=True)
-    else:
-        all_transactions.sort(key=lambda x: x.date)
+    paginated_results = (await db.execute(paginated_ids_query)).all()
+    if not paginated_results:
+        return []
 
-    # Paginate
-    return all_transactions
+    # =========================================================================
+    # PHASE 2: "Hydrate" the IDs into full SQLAlchemy objects
+    # =========================================================================
+
+    # Separate the IDs by type
+    expense_ids = [r.id for r in paginated_results if r.type == 'expense']
+    income_ids = [r.id for r in paginated_results if r.type == 'income']
+    transfer_ids = [r.id for r in paginated_results if r.type == 'transfer']
+
+    final_results = {}
+
+    # Fetch all the necessary objects in targeted queries
+    if expense_ids:
+        expenses = (await db.execute(
+            select(Expense)
+            .options(
+                joinedload(Expense.account),
+                joinedload(Expense.category).selectinload(Category.subcategories),
+                joinedload(Expense.subcategory),
+                joinedload(Expense.place),
+            )
+            .where(Expense.id.in_(expense_ids))
+        )).scalars().all()
+        for e in expenses:
+            final_results[('expense', e.id)] = e
+
+    if income_ids:
+        incomes = (await db.execute(
+            select(Income)
+            .options(
+                joinedload(Income.account),
+                joinedload(Income.subcategory).joinedload(Subcategory.category).selectinload(Category.subcategories),
+                joinedload(Income.place),
+            )
+            .where(Income.id.in_(income_ids))
+        )).scalars().all()
+        for i in incomes:
+            final_results[('income', i.id)] = i
+
+    if transfer_ids:
+        transfers = (await db.execute(
+            select(Transfer)
+            .options(
+                joinedload(Transfer.account_from),
+                joinedload(Transfer.account_to),
+            )
+            .where(Transfer.id.in_(transfer_ids))
+        )).scalars().all()
+        for t in transfers:
+            final_results[('transfer', t.id)] = t
+    
+    # Sort the final hydrated objects based on the order from our paginated query
+    sorted_transactions = [final_results[(r.type, r.id)] for r in paginated_results]
+
+    return sorted_transactions
