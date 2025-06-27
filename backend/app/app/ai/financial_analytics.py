@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, and_, desc, asc
 from sqlalchemy.sql import select
 
-from app import crud, models
+from app import crud, models, schemas
 from app.crud.crud_expense import expense
 from app.crud.crud_account import account
 
@@ -35,9 +35,13 @@ class TrendAnalysis(BaseModel):
     total_spent: float = Field(description="Total amount spent in the period")
     monthly_averages: List[Dict[str, Any]] = Field(description="Monthly spending averages")
     trend_direction: str = Field(description="Trend direction (increasing, decreasing, stable)")
-    top_growing_categories: List[Dict[str, Any]] = Field(description="Categories with increasing spending")
-    top_declining_categories: List[Dict[str, Any]] = Field(description="Categories with decreasing spending")
+    # top_growing_categories: List[Dict[str, Any]] = Field(description="Categories with increasing spending")
+    # top_declining_categories: List[Dict[str, Any]] = Field(description="Categories with decreasing spending")
 
+class TrendAnalysisTest(BaseModel):
+    """List of expenses for a specific period to do trend analysis"""
+    period: str = Field(description="Analysis period (e.g., 'last 3 months')")
+    expenses: list[schemas.Expense] = Field(description="List of expenses in the period")
 
 class AccountBalance(BaseModel):
     """Account balance information"""
@@ -66,13 +70,14 @@ class FinancialAnalytics:
         # Set default dates if not provided
         if not start_date or not end_date:
             start_date, end_date = self._get_period_dates(period)
+        print("🚀 ~ start_date:", start_date.date(), end_date.date())
         
         # Get expenses for the period
         expenses = await expense.get_multi_by_date(
             db=self.db,
             owner_id=self.user_id,
             start_date=start_date.date(),
-            end_date=end_date.strftime("%Y-%m-%d")
+            end_date=end_date.date()
         )
         
         if not expenses:
@@ -185,19 +190,27 @@ class FinancialAnalytics:
             average_transaction=average_transaction
         )
     
-    async def get_trend_analysis(self, months: int = 3) -> TrendAnalysis:
+    async def get_trend_analysis(self, months: int = 3) -> TrendAnalysisTest:
         """Analyze spending trends over the last N months"""
-        
+
+        print("🚀 ~ months:", months)
         end_date = datetime.now()
         start_date = end_date - timedelta(days=months * 30)
-        
+
         # Get expenses for the period
         expenses = await expense.get_multi_by_date(
             db=self.db,
             owner_id=self.user_id,
             start_date=start_date.date(),
-            end_date=end_date.strftime("%Y-%m-%d")
+            end_date=end_date.date()
         )
+        print("🚀 ~ start_date.date(),:", start_date.date(), end_date.date())
+        print("🚀 ~ expenses:", expenses)
+        
+        # return TrendAnalysisTest(
+        #     period=f"last {months} months",
+        #     expenses=[schemas.Expense.model_validate(e) for e in expenses],
+        # )
         
         if not expenses:
             return TrendAnalysis(
@@ -205,11 +218,12 @@ class FinancialAnalytics:
                 total_spent=0.0,
                 monthly_averages=[],
                 trend_direction="no data",
-                top_growing_categories=[],
-                top_declining_categories=[]
+                # top_growing_categories=[],
+                # top_declining_categories=[]
             )
         
         total_spent = sum(exp.amount for exp in expenses)
+        print("🚀 ~ total_spent:", total_spent)
         
         # Calculate monthly averages
         monthly_totals = {}
@@ -217,10 +231,12 @@ class FinancialAnalytics:
             month_key = exp.date.strftime("%Y-%m")
             monthly_totals[month_key] = monthly_totals.get(month_key, 0) + exp.amount
         
+        print("🚀 ~ monthly_totals:", monthly_totals)
         monthly_averages = [
             {"month": month, "total": total}
             for month, total in sorted(monthly_totals.items())
         ]
+        print("🚀 ~ monthly_averages:", monthly_averages)
         
         # Determine trend direction
         if len(monthly_averages) >= 2:
@@ -233,25 +249,28 @@ class FinancialAnalytics:
                 trend_direction = "stable"
         else:
             trend_direction = "insufficient data"
-        
+        print("🚀 ~ trend_direction:", trend_direction)
+
         # Analyze category trends (simplified)
-        category_totals = {}
-        for exp in expenses:
-            if exp.category:
-                cat_name = exp.category.name
-                category_totals[cat_name] = category_totals.get(cat_name, 0) + exp.amount
+        # category_totals = {}
+        # for exp in expenses:
+        #     if exp.category:
+        #         cat_name = exp.category.name
+        #         category_totals[cat_name] = category_totals.get(cat_name, 0) + exp.amount
         
-        top_categories = sorted(category_totals.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_growing_categories = [{"category": cat, "amount": amount} for cat, amount in top_categories[:3]]
-        top_declining_categories = [{"category": cat, "amount": amount} for cat, amount in top_categories[-3:]]
+        # top_categories = sorted(category_totals.items(), key=lambda x: x[1], reverse=True)[:5]
+        # top_growing_categories = [{"category": cat, "amount": amount} for cat, amount in top_categories[:3]]
+        # top_declining_categories = [{"category": cat, "amount": amount} for cat, amount in top_categories[-3:]]
+        
+        # print("🚀 ~ top_growing_categories:", top_growing_categories)
         
         return TrendAnalysis(
             period=f"last {months} months",
             total_spent=total_spent,
             monthly_averages=monthly_averages,
             trend_direction=trend_direction,
-            top_growing_categories=top_growing_categories,
-            top_declining_categories=top_declining_categories
+            # top_growing_categories=top_growing_categories,
+            # top_declining_categories=top_declining_categories
         )
     
     async def get_account_balances(self) -> List[AccountBalance]:
@@ -323,4 +342,4 @@ class FinancialAnalytics:
             start_date = now.replace(day=1)
             end_date = now
         
-        return start_date, end_date 
+        return start_date, end_date

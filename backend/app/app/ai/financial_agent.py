@@ -3,8 +3,8 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.ai.financial_analytics import FinancialAnalytics, SpendingAnalysis, CategoryAnalysis, TrendAnalysis, AccountBalance
 from app.ai.transaction_parser import TransactionParser, ParsedTransaction
 from app.core.config import settings
@@ -23,6 +23,7 @@ class FinancialAgentContext:
 # Create the agent instance
 financial_agent = Agent(
     OpenAIModel('gpt-4o-mini', provider=OpenAIProvider(api_key=settings.OPENAI_API_KEY)),
+    # OpenAIResponsesModel('gpt-4o-mini', provider=OpenAIProvider(api_key=settings.OPENAI_API_KEY)),
     deps_type=FinancialAgentContext,
     system_prompt="""You are a helpful financial assistant that can analyze spending patterns, 
     track categories, analyze trends, provide account balance information, and help manage transactions.
