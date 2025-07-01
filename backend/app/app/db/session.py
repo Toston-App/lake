@@ -10,8 +10,9 @@ from app.core.config import settings
 engine = create_engine(str(settings.SQLALCHEMY_DATABASE_URI), pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+print("🚀 ~ settings.SQLALCHEMY_DATABASE_URI_ASYNC:", settings.SQLALCHEMY_DATABASE_URI_ASYNC, settings.SQLALCHEMY_DATABASE_URI_ASYNC.unicode_string())
 engine_async = create_async_engine(
-    settings.SQLALCHEMY_DATABASE_URI_ASYNC, pool_pre_ping=True
+    settings.SQLALCHEMY_DATABASE_URI_ASYNC.unicode_string(), pool_pre_ping=True
 )
 async_session = sessionmaker(
     bind=engine_async,

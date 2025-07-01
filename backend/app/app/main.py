@@ -23,33 +23,33 @@ app = FastAPI(
     openapi_url=None,
 )
 
-SecWeb(app=app, Option={'csp': {
-    "default-src": ["'self'"],
-    "img-src": [
-        "'self'",
-        "data:",
-    ],
-    "connect-src": ["'self'"],
-    "script-src": ["'self'"],
-    "style-src": ["'self'", "'unsafe-inline'"],
-    "script-src-elem": [
-        "'self'",
-        "'unsafe-inline'",
-        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
-    ],
-    "style-src-elem": [
-        "'self'",
-        "'unsafe-inline'",
-        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-    ],
-    "base-uri": ["'self'"],
-    "font-src": ["'self'", "https:", "data:"],
-    "frame-ancestors": ["'self'"],
-    "object-src": ["'none'"],
-    "script-src-attr": ["'none'"],
-    "require-trusted-types-for": ["'script'"],
-}
-})
+# SecWeb(app=app, Option={'csp': {
+#     "default-src": ["'self'"],
+#     "img-src": [
+#         "'self'",
+#         "data:",
+#     ],
+#     "connect-src": ["'self'"],
+#     "script-src": ["'self'"],
+#     "style-src": ["'self'", "'unsafe-inline'"],
+#     "script-src-elem": [
+#         "'self'",
+#         "'unsafe-inline'",
+#         "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+#     ],
+#     "style-src-elem": [
+#         "'self'",
+#         "'unsafe-inline'",
+#         "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+#     ],
+#     "base-uri": ["'self'"],
+#     "font-src": ["'self'", "https:", "data:"],
+#     "frame-ancestors": ["'self'"],
+#     "object-src": ["'none'"],
+#     "script-src-attr": ["'none'"],
+#     "require-trusted-types-for": ["'script'"],
+# }
+# })
 
 security = HTTPBasic()
 
@@ -128,3 +128,7 @@ async def openapi(username: str = Depends(get_current_username)):
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
+
+@app.get("/api/v1/utils/health-check/")
+def health_check():
+    return {"status": "ok"}

@@ -1,24 +1,28 @@
-networks:
-  app-network:
-    driver: bridge
-
 services:
-
   pgadmin:
     ports:
       - "5050:5050"
 
   backend:
     ports:
-      - "8888:8888"
+      - "8000:8000"
     volumes:
       - ./backend/app:/app
     environment:
       - JUPYTER=jupyter lab --ip=0.0.0.0 --allow-root --NotebookApp.custom_display_url=http://127.0.0.1:8888
       - SERVER_HOST=http://${DOMAIN?Variable not set}
-    build:
-      context: ./backend
-      dockerfile: backend.dockerfile
-
-    # command: bash -c "while true; do sleep 1; done"  # Infinite loop to keep container live doing nothing
-    command: /start-reload.sh
+    command:
+      - fastapi
+      - run
+      - --reload
+      - "app/main.py"
+    develop:
+      watch:
+        - path: ./backend
+          action: sync
+          target: /app
+          ignore:
+            - ./backend/.venv
+            - .venv
+        - path: ./backend/pyproject.toml
+          action: rebuild
