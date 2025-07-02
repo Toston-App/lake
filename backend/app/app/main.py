@@ -23,33 +23,33 @@ app = FastAPI(
     openapi_url=None,
 )
 
-# SecWeb(app=app, Option={'csp': {
-#     "default-src": ["'self'"],
-#     "img-src": [
-#         "'self'",
-#         "data:",
-#     ],
-#     "connect-src": ["'self'"],
-#     "script-src": ["'self'"],
-#     "style-src": ["'self'", "'unsafe-inline'"],
-#     "script-src-elem": [
-#         "'self'",
-#         "'unsafe-inline'",
-#         "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
-#     ],
-#     "style-src-elem": [
-#         "'self'",
-#         "'unsafe-inline'",
-#         "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-#     ],
-#     "base-uri": ["'self'"],
-#     "font-src": ["'self'", "https:", "data:"],
-#     "frame-ancestors": ["'self'"],
-#     "object-src": ["'none'"],
-#     "script-src-attr": ["'none'"],
-#     "require-trusted-types-for": ["'script'"],
-# }
-# })
+SecWeb(app=app, Option={'csp': {
+    "default-src": ["'self'"],
+    "img-src": [
+        "'self'",
+        "data:",
+    ],
+    "connect-src": ["'self'"],
+    "script-src": ["'self'"],
+    "style-src": ["'self'", "'unsafe-inline'"],
+    "script-src-elem": [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+    ],
+    "style-src-elem": [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+    ],
+    "base-uri": ["'self'"],
+    "font-src": ["'self'", "https:", "data:"],
+    "frame-ancestors": ["'self'"],
+    "object-src": ["'none'"],
+    "script-src-attr": ["'none'"],
+    "require-trusted-types-for": ["'script'"],
+}
+})
 
 security = HTTPBasic()
 

@@ -21,6 +21,29 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_DB=${POSTGRES_DB?Variable not set}
+    labels:
+      # This means the container will be stopped during backup to ensure backup integrity.
+      - docker-volume-backup.stop-during-backup=true
+
+  backup:
+    image: offen/docker-volume-backup:latest
+    restart: always
+    networks:
+      - app-network
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Enable notification settings from environment variables
+      - NOTIFICATION_URLS=${TELEGRAM_NOTIFICATION_URL:-}
+      - NOTIFICATION_LEVEL=${BACKUP_NOTIFICATION_LEVEL:-error}
+    volumes:
+      - postgres_data:/backup/postgres:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Local path to store the backup archives
+      # - ${BACKUP_ARCHIVE_PATH:-./backups}:/archive
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -40,9 +63,12 @@ services:
       - PGADMIN_CONFIG_X_CONTENT_TYPE_OPTIONS=${PGADMIN_CONFIG_X_CONTENT_TYPE_OPTIONS:-""}
       - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=${PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION:-True}
       - PGADMIN_CONFIG_X_XSS_PROTECTION=${PGADMIN_CONFIG_X_XSS_PROTECTION:-1}
+    #labels:
+    # Basic auth for pgadmin using the environment variables PG_USERNAME and PG_HASHED_PASSWORD
+    # - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME}:${PG_HASHED_PASSWORD}
 
   prestart:
-    image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
+    image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"
     build:
       context: ./backend
       dockerfile: backend.dockerfile
@@ -57,7 +83,7 @@ services:
       - .env
 
   backend:
-    image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
+    image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"
     restart: always
     networks:
       - app-network
@@ -86,7 +112,8 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - SENTRY_DSN=${SENTRY_DSN}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/api/v1/utils/health-check/"]
+      test:
+        ["CMD", "curl", "-f", "http://localhost:80/api/v1/utils/health-check/"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -96,7 +123,7 @@ services:
 
   waha:
     restart: always
-    image: devlikeapro/waha:arm
+    image: devlikeapro/waha:latest
     networks:
       - app-network
     ports:
@@ -106,6 +133,7 @@ services:
     env_file:
       - .env
 
+  # used to expose the waha service to the internet
   cloudflaretunnel:
     image: cloudflare/cloudflared:latest
     networks:

@@ -27,13 +27,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-project
 
-RUN pip install "fastapi[standard]" uvicorn Secweb
 ENV PYTHONPATH=/app
 
 COPY ./scripts /app/scripts
 COPY ./pyproject.toml ./uv.lock ./app/alembic.ini /app/
 COPY ./app /app
 
+# this shouldn't be necessary, that's what `Install dependencies` do but shit don't work
 RUN uv pip compile /app/pyproject.toml > requirements.txt && \
     uv pip install --system --no-cache -r requirements.txt
 
