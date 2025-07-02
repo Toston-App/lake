@@ -1,7 +1,7 @@
 from datetime import date, datetime
-from typing import Optional, Any
+from typing import Optional
 
-from pydantic import BaseModel, model_validator, validator
+from pydantic import BaseModel, field_validator, validator
 
 
 # Shared properties
@@ -13,12 +13,13 @@ class TransferBase(BaseModel):
     to_acc: Optional[int] = None
 
     # Fix the amount to 2 decimal places
-    @model_validator(mode='before')
-    def round_amount(cls, data: Any) -> Any:
-        amount = data.get("amount")
-        if amount is not None:
-            data["amount"] = round(amount, 2)
-        return data
+    @field_validator('amount')
+    @classmethod
+    def round_amount(cls, v: float) -> float:
+        # 'v' is the value of the 'amount' field
+        if v is not None:
+            return round(v, 2)
+        return v
 
     # Validate that the amount is positive
     @validator("amount", pre=True, always=True)
