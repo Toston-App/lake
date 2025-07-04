@@ -128,3 +128,7 @@ async def openapi(username: str = Depends(get_current_username)):
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
+
+@app.get("/api/v1/utils/health-check/")
+def health_check():
+    return {"status": "ok"}

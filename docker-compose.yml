@@ -1,11 +1,13 @@
-networks:
-  app-network:
-    driver: bridge
-
 services:
-
   db:
     image: postgres:16
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+      start_period: 30s
+      timeout: 10s
     networks:
       - app-network
     ports:
@@ -17,8 +19,7 @@ services:
     environment:
       - PGDATA=/var/lib/postgresql/data/pgdata
     labels:
-      # This means the container will be stopped during backup to ensure
-      # backup integrity.
+      # This means the container will be stopped during backup to ensure backup integrity.
       - docker-volume-backup.stop-during-backup=true
 
   backup:
@@ -27,7 +28,8 @@ services:
     networks:
       - app-network
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -59,25 +61,49 @@ services:
       - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=${PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION:-True}
       - PGADMIN_CONFIG_X_XSS_PROTECTION=${PGADMIN_CONFIG_X_XSS_PROTECTION:-1}
     #labels:
-      # Basic auth for pgadmin using the environment variables PG_USERNAME and PG_HASHED_PASSWORD
-      # - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME}:${PG_HASHED_PASSWORD}
+    # Basic auth for pgadmin using the environment variables PG_USERNAME and PG_HASHED_PASSWORD
+    # - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME}:${PG_HASHED_PASSWORD}
+
+  prestart:
+    image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"
+    build:
+      context: ./backend
+      dockerfile: backend.dockerfile
+    networks:
+      - app-network
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    command: bash scripts/prestart.sh
+    env_file:
+      - .env
 
   backend:
+    image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"
     restart: always
     networks:
       - app-network
-    ports:
-      - "9000:80"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      prestart:
+        condition: service_completed_successfully
     env_file:
       - .env
+    healthcheck:
+      test:
+        ["CMD", "curl", "-f", "http://localhost:80/api/v1/utils/health-check/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     build:
       context: ./backend
       dockerfile: backend.dockerfile
 
   waha:
     restart: always
+    # in macos change to waha:arm
     image: devlikeapro/waha:latest
     networks:
       - app-network
@@ -100,7 +126,10 @@ services:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     command: tunnel --no-autoupdate run --url http://waha:3000
 
-
 volumes:
   postgres_data:
   pgadmin-data:
+
+networks:
+  app-network:
+    driver: bridge
