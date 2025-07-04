@@ -90,7 +90,7 @@ services:
       prestart:
         condition: service_completed_successfully
     ports:
-      - "8000:8000"
+      - "9000:8000"
     env_file:
       - .env
     healthcheck:
