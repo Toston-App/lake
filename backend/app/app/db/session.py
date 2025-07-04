@@ -11,7 +11,7 @@ engine = create_engine(str(settings.SQLALCHEMY_DATABASE_URI), pool_pre_ping=True
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 engine_async = create_async_engine(
-    settings.SQLALCHEMY_DATABASE_URI_ASYNC, pool_pre_ping=True
+    settings.SQLALCHEMY_DATABASE_URI_ASYNC.unicode_string(), pool_pre_ping=True
 )
 async_session = sessionmaker(
     bind=engine_async,

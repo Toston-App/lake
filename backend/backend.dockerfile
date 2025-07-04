@@ -1,28 +1,45 @@
 FROM python:3.10
 
-# Install uv for faster package installation
-COPY --from=ghcr.io/astral-sh/uv:0.6.3 /uv /uvx /bin/
-
-EXPOSE 80
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app/
 
-# Copy dependency files
-COPY pyproject.toml uv.lock ./
+# Install uv
+# Ref: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
+COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
 
-# Install dependencies using uv
-RUN uv pip compile pyproject.toml > requirements.txt && \
-    uv pip install --system --no-cache -r requirements.txt
+# Place executables in the environment at the front of the path
+# Ref: https://docs.astral.sh/uv/guides/integration/docker/#using-the-environment
+ENV PATH="/app/.venv/bin:$PATH"
 
-COPY ./start.sh /start.sh
-RUN chmod +x /start.sh
+# Compile bytecode
+# Ref: https://docs.astral.sh/uv/guides/integration/docker/#compiling-bytecode
+ENV UV_COMPILE_BYTECODE=1
 
-COPY ./gunicorn_conf.py /gunicorn_conf.py
+# uv Cache
+# Ref: https://docs.astral.sh/uv/guides/integration/docker/#caching
+ENV UV_LINK_MODE=copy
 
-COPY ./start-reload.sh /start-reload.sh
-RUN chmod +x /start-reload.sh
+# Install dependencies
+# Ref: https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --frozen --no-install-project
 
-COPY ./app /app
 ENV PYTHONPATH=/app
 
-CMD ["/start.sh"]
+COPY ./scripts /app/scripts
+COPY ./pyproject.toml ./uv.lock ./app/alembic.ini /app/
+COPY ./app /app
+
+# this shouldn't be necessary, that's what `Install dependencies` do but shit don't work
+RUN uv pip compile /app/pyproject.toml > requirements.txt && \
+    uv pip install --system --no-cache -r requirements.txt
+
+# Sync the project
+# Ref: https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync
+
+CMD ["/app/.venv/bin/fastapi", "run", "--workers", "4", "app/main.py"]
