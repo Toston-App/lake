@@ -89,8 +89,6 @@ services:
         condition: service_healthy
       prestart:
         condition: service_completed_successfully
-    ports:
-      - "9000:80"
     env_file:
       - .env
     healthcheck:
