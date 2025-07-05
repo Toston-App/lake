@@ -1,5 +1,6 @@
 import logging
 import secrets
+import random
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -131,4 +132,5 @@ app.include_router(api_router_v2, prefix=settings.API_V2_STR)
 
 @app.get("/api/v1/utils/health-check/")
 def health_check():
+    print(f"🚀 - Random number: {random.randint(1, 100)}")
     return {"status": "ok"}
