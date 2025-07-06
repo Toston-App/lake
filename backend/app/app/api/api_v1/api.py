@@ -12,6 +12,7 @@ from app.api.api_v1.endpoints import (
     login,
     places,
     subcategories,
+    transactions,
     transfers,
     users,
     utils,
@@ -29,6 +30,9 @@ api_router.include_router(places.router, prefix="/places", tags=["places"])
 api_router.include_router(expenses.router, prefix="/expenses", tags=["expenses"])
 api_router.include_router(incomes.router, prefix="/incomes", tags=["incomes"])
 api_router.include_router(transfers.router, prefix="/transfers", tags=["transfers"])
+api_router.include_router(
+    transactions.router, prefix="/transactions", tags=["transactions"]
+)
 api_router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
 api_router.include_router(categories.router, prefix="/categories", tags=["categories"])
 api_router.include_router(

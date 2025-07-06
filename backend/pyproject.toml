@@ -36,6 +36,7 @@ dependencies = [
     "cryptography>=44.0.1",
     "secweb>=1.18.1",
     "upstash-redis>=1.4.0",
+    "fastapi-pagination>=0.13.3",
     "uvicorn>=0.35.0",
     "pandas>=2.3.0",
 ]
