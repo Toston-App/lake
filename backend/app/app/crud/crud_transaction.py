@@ -12,21 +12,23 @@ from app.models.income import Income
 from app.models.place import Place
 from app.models.subcategory import Subcategory
 from app.models.transfer import Transfer
+from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 
 async def get_multi_by_owner_with_filters(
     db: AsyncSession,
     *,
     owner_id: int,
     page: int = 1,
-    order: str = "desc",
+    order: OrderDirection = OrderDirection.desc,
     search: Optional[str] = None,
     amount: Optional[float] = None,
-    amount_operator: Optional[str] = None,
+    amount_operator: Optional[AmountOperator] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     accounts: Optional[List[int]] = None,
     categories: Optional[List[int]] = None,
     places: Optional[List[int]] = None,
+    transaction_type: Optional[List[TransactionType]] = None,
 ) -> list[Union[Expense, Income, Transfer]]:
     limit = 100
     offset = (page - 1) * limit
@@ -84,15 +86,15 @@ async def get_multi_by_owner_with_filters(
         transfer_subquery = transfer_subquery.where(Transfer.description.ilike(search_term))
 
     if amount and amount_operator:
-        if amount_operator == "equal":
+        if amount_operator == AmountOperator.equal:
             expense_subquery = expense_subquery.where(Expense.amount == amount)
             income_subquery = income_subquery.where(Income.amount == amount)
             transfer_subquery = transfer_subquery.where(Transfer.amount == amount)
-        elif amount_operator == "less":
+        elif amount_operator == AmountOperator.less:
             expense_subquery = expense_subquery.where(Expense.amount < amount)
             income_subquery = income_subquery.where(Income.amount < amount)
             transfer_subquery = transfer_subquery.where(Transfer.amount < amount)
-        elif amount_operator == "greater":
+        elif amount_operator == AmountOperator.greater:
             expense_subquery = expense_subquery.where(Expense.amount > amount)
             income_subquery = income_subquery.where(Income.amount > amount)
             transfer_subquery = transfer_subquery.where(Transfer.amount > amount)
@@ -119,12 +121,23 @@ async def get_multi_by_owner_with_filters(
 
     # Combine the subqueries into a single UNION
     # The selected columns are now simpler and consistent
-    union_query = union_all(expense_subquery, income_subquery, transfer_subquery).cte("union_query")
+    subqueries = []
+    if not transaction_type or TransactionType.expense in transaction_type:
+        subqueries.append(expense_subquery)
+    if not transaction_type or TransactionType.income in transaction_type:
+        subqueries.append(income_subquery)
+    if not transaction_type or TransactionType.transfer in transaction_type:
+        subqueries.append(transfer_subquery)
+
+    if not subqueries:
+        return []
+
+    union_query = union_all(*subqueries).cte("union_query")
 
     # Now, select from the UNION, sort, and paginate it
     paginated_ids_query = (
         select(union_query.c.id, union_query.c.type, union_query.c.date)
-        .order_by(union_query.c.date.desc() if order == "desc" else union_query.c.date.asc())
+        .order_by(union_query.c.date.desc() if order == OrderDirection.desc else union_query.c.date.asc())
         .offset(offset)
         .limit(limit)
     )

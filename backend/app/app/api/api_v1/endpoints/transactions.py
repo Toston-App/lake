@@ -8,6 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from app import models, schemas
 from app.api import deps
 from app.crud import crud_transaction
+from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 
 router = APIRouter()
 
@@ -17,15 +18,16 @@ async def read_transactions(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
     page: int = 1,
-    order: str = Query("desc", enum=["asc", "desc"]),
+    order: OrderDirection = Query(OrderDirection.desc),
     search: Optional[str] = None,
     amount: Optional[float] = None,
-    amount_operator: Optional[str] = Query(None, enum=["equal", "less", "greater"]),
+    amount_operator: Optional[AmountOperator] = Query(None),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     accounts: Optional[list[int]] = Query(None),
     categories: Optional[list[int]] = Query(None),
     places: Optional[list[int]] = Query(None),
+    transaction_type: Optional[list[TransactionType]] = Query(None),
 ) -> Any:
     """
     Retrieve transactions.
@@ -43,6 +45,7 @@ async def read_transactions(
         accounts=accounts,
         categories=categories,
         places=places,
+        transaction_type=transaction_type,
     )
 
     return transactions

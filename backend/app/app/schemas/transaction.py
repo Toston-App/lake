@@ -1,7 +1,30 @@
 from datetime import date
+from enum import Enum
 from typing import Literal, Optional, Union
 
 from pydantic import BaseModel
+
+from app.schemas.account import Account
+from app.schemas.category import Category
+from app.schemas.place import Place
+from app.schemas.subcategory import Subcategory
+
+
+class TransactionType(str, Enum):
+    expense = "expense"
+    income = "income"
+    transfer = "transfer"
+
+
+class AmountOperator(str, Enum):
+    equal = "equal"
+    less = "less"
+    greater = "greater"
+
+
+class OrderDirection(str, Enum):
+    asc = "asc"
+    desc = "desc"
 
 
 class ExpenseTransaction(BaseModel):
@@ -52,5 +75,4 @@ class TransferTransaction(BaseModel):
         orm_mode = True
 
 
-# Transaction = Union[ExpenseTransaction]
 Transaction = Union[ExpenseTransaction, IncomeTransaction, TransferTransaction]
