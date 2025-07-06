@@ -3,6 +3,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.encoders import jsonable_encoder
 
 from app import models, schemas
 from app.api import deps
@@ -43,6 +44,5 @@ async def read_transactions(
         categories=categories,
         places=places,
     )
-    print("🚀 ~ transactions:", transactions)
 
     return transactions
