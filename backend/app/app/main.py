@@ -7,6 +7,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from Secweb import SecWeb
 from starlette.middleware.cors import CORSMiddleware
+from fastapi_pagination import add_pagination as PaginationProvider
 
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
@@ -22,6 +23,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+PaginationProvider(app)
 
 SecWeb(app=app, Option={'csp': {
     "default-src": ["'self'"],

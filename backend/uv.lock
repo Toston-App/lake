@@ -48,6 +48,7 @@ dependencies = [
     { name = "emails" },
     { name = "faker" },
     { name = "fastapi" },
+    { name = "fastapi-pagination" },
     { name = "filetype" },
     { name = "fuzzywuzzy" },
     { name = "gunicorn" },
@@ -91,6 +92,7 @@ requires-dist = [
     { name = "emails", specifier = ">=0.6,<1.0" },
     { name = "faker", specifier = ">=19.3.1,<20.0.0" },
     { name = "fastapi", specifier = ">=0.82.0,<1.0.0" },
+    { name = "fastapi-pagination", specifier = ">=0.13.3" },
     { name = "filetype", specifier = ">=1.2.0" },
     { name = "fuzzywuzzy", specifier = ">=0.18.0,<1.0.0" },
     { name = "gunicorn", specifier = ">=20.1.0,<21.0.0" },
@@ -595,6 +597,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a2/b2/5a5dc4affdb6661dea100324e19a7721d5dc524b464fe8e366c093fd7d87/fastapi-0.115.8.tar.gz", hash = "sha256:0ce9111231720190473e222cdf0f07f7206ad7e53ea02beb1d2dc36e2f0741e9", size = 295403 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/7d/2d6ce181d7a5f51dedb8c06206cbf0ec026a99bf145edd309f9e17c3282f/fastapi-0.115.8-py3-none-any.whl", hash = "sha256:753a96dd7e036b34eeef8babdfcfe3f28ff79648f86551eb36bfc1b0bf4a8cbf", size = 94814 },
+]
+
+[[package]]
+name = "fastapi-pagination"
+version = "0.13.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/10/4c/e98a1665b6ac2e9e4ed98450e4e0ea48108f3bc52de517d9a70cc22761c2/fastapi_pagination-0.13.3.tar.gz", hash = "sha256:40c2383aff13a3a0e4a2742dfbf004572e88458cd8f338d85f90a27e07abab4a", size = 550898 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bf/73/ef1ab892c2d189d8b6bd72325e9e710df6737c3b7976e12aa5749a56ea01/fastapi_pagination-0.13.3-py3-none-any.whl", hash = "sha256:e1b1cc7fa5c773c61087845ef8a73ed6b516071c057418698b9242461573f44e", size = 50986 },
 ]
 
 [[package]]

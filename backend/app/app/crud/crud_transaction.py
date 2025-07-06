@@ -13,12 +13,13 @@ from app.models.place import Place
 from app.models.subcategory import Subcategory
 from app.models.transfer import Transfer
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlalchemy import paginate
 
 async def get_multi_by_owner_with_filters(
     db: AsyncSession,
     *,
     owner_id: int,
-    page: int = 1,
     order: OrderDirection = OrderDirection.desc,
     search: Optional[str] = None,
     amount: Optional[float] = None,
@@ -29,10 +30,7 @@ async def get_multi_by_owner_with_filters(
     categories: Optional[List[int]] = None,
     places: Optional[List[int]] = None,
     transaction_type: Optional[List[TransactionType]] = None,
-) -> list[Union[Expense, Income, Transfer]]:
-    limit = 100
-    offset = (page - 1) * limit
-
+) -> Page[Union[Expense, Income, Transfer]]:
     # =========================================================================
     # PHASE 1: Build a UNION query to get the correct IDs for the page
     # =========================================================================
@@ -68,8 +66,6 @@ async def get_multi_by_owner_with_filters(
         .where(Transfer.owner_id == owner_id)
     )
 
-    # --- Apply common filters to each subquery ---
-    # (The start_date, end_date, search, and amount filters are the same as before)
     if start_date:
         expense_subquery = expense_subquery.where(Expense.date >= start_date)
         income_subquery = income_subquery.where(Income.date >= start_date)
@@ -130,7 +126,7 @@ async def get_multi_by_owner_with_filters(
         subqueries.append(transfer_subquery)
 
     if not subqueries:
-        return []
+        return Page(items=[], total=0, page=1, size=0)
 
     union_query = union_all(*subqueries).cte("union_query")
 
@@ -138,69 +134,64 @@ async def get_multi_by_owner_with_filters(
     paginated_ids_query = (
         select(union_query.c.id, union_query.c.type, union_query.c.date)
         .order_by(union_query.c.date.desc() if order == OrderDirection.desc else union_query.c.date.asc())
-        .offset(offset)
-        .limit(limit)
     )
 
-    paginated_results = (await db.execute(paginated_ids_query)).all()
-    if not paginated_results:
-        return []
+    async def _hydrate_transactions(paginated_results: list) -> list:
+        # =========================================================================
+        # PHASE 2: "Hydrate" the IDs into full SQLAlchemy objects
+        # =========================================================================
 
-    # =========================================================================
-    # PHASE 2: "Hydrate" the IDs into full SQLAlchemy objects
-    # =========================================================================
+        # Separate the IDs by type
+        expense_ids = [r.id for r in paginated_results if r.type == 'expense']
+        income_ids = [r.id for r in paginated_results if r.type == 'income']
+        transfer_ids = [r.id for r in paginated_results if r.type == 'transfer']
 
-    # Separate the IDs by type
-    expense_ids = [r.id for r in paginated_results if r.type == 'expense']
-    income_ids = [r.id for r in paginated_results if r.type == 'income']
-    transfer_ids = [r.id for r in paginated_results if r.type == 'transfer']
+        final_results = {}
 
-    final_results = {}
+        # Fetch all the necessary objects in targeted queries
+        if expense_ids:
+            expenses = (await db.execute(
+                select(Expense)
+                .options(
+                    joinedload(Expense.account),
+                    joinedload(Expense.category).selectinload(Category.subcategories),
+                    joinedload(Expense.subcategory),
+                    joinedload(Expense.place),
+                )
+                .where(Expense.id.in_(expense_ids))
+            )).scalars().all()
+            for e in expenses:
+                e.type = "expense"
+                final_results[('expense', e.id)] = e
 
-    # Fetch all the necessary objects in targeted queries
-    if expense_ids:
-        expenses = (await db.execute(
-            select(Expense)
-            .options(
-                joinedload(Expense.account),
-                joinedload(Expense.category).selectinload(Category.subcategories),
-                joinedload(Expense.subcategory),
-                joinedload(Expense.place),
-            )
-            .where(Expense.id.in_(expense_ids))
-        )).scalars().all()
-        for e in expenses:
-            e.type = "expense"
-            final_results[('expense', e.id)] = e
+        if income_ids:
+            incomes = (await db.execute(
+                select(Income)
+                .options(
+                    joinedload(Income.account),
+                    joinedload(Income.subcategory).joinedload(Subcategory.category).selectinload(Category.subcategories),
+                    joinedload(Income.place),
+                )
+                .where(Income.id.in_(income_ids))
+            )).scalars().all()
+            for i in incomes:
+                i.type = "income"
+                final_results[('income', i.id)] = i
 
-    if income_ids:
-        incomes = (await db.execute(
-            select(Income)
-            .options(
-                joinedload(Income.account),
-                joinedload(Income.subcategory).joinedload(Subcategory.category).selectinload(Category.subcategories),
-                joinedload(Income.place),
-            )
-            .where(Income.id.in_(income_ids))
-        )).scalars().all()
-        for i in incomes:
-            i.type = "income"
-            final_results[('income', i.id)] = i
+        if transfer_ids:
+            transfers = (await db.execute(
+                select(Transfer)
+                .options(
+                    joinedload(Transfer.account_from),
+                    joinedload(Transfer.account_to),
+                )
+                .where(Transfer.id.in_(transfer_ids))
+            )).scalars().all()
+            for t in transfers:
+                t.type = "transfer"
+                final_results[('transfer', t.id)] = t
 
-    if transfer_ids:
-        transfers = (await db.execute(
-            select(Transfer)
-            .options(
-                joinedload(Transfer.account_from),
-                joinedload(Transfer.account_to),
-            )
-            .where(Transfer.id.in_(transfer_ids))
-        )).scalars().all()
-        for t in transfers:
-            t.type = "transfer"
-            final_results[('transfer', t.id)] = t
+        # Sort the final hydrated objects based on the order from our paginated query
+        return [final_results[(r.type, r.id)] for r in paginated_results]
 
-    # Sort the final hydrated objects based on the order from our paginated query
-    sorted_transactions = [final_results[(r.type, r.id)] for r in paginated_results]
-
-    return sorted_transactions
+    return await paginate(db, paginated_ids_query, transformer=_hydrate_transactions)

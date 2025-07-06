@@ -9,15 +9,14 @@ from app import models, schemas
 from app.api import deps
 from app.crud import crud_transaction
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
+from fastapi_pagination import Page
 
 router = APIRouter()
 
-# TODO: this schema is returning the expense schema instead of what it correspond. Fix return types.
-@router.get("/", response_model=list[schemas.Transaction])
+@router.get("/", response_model=Page[schemas.Transaction])
 async def read_transactions(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
-    page: int = 1,
     order: OrderDirection = Query(OrderDirection.desc),
     search: Optional[str] = None,
     amount: Optional[float] = None,
@@ -30,12 +29,11 @@ async def read_transactions(
     transaction_type: Optional[list[TransactionType]] = Query(None),
 ) -> Any:
     """
-    Retrieve transactions.
+    Retrieve transactions (Expenses, Incomes, Transfers).
     """
     transactions = await crud_transaction.get_multi_by_owner_with_filters(
         db=db,
         owner_id=current_user.id,
-        page=page,
         order=order,
         search=search,
         amount=amount,
