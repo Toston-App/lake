@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, root_validator, validator
+from pydantic import BaseModel, validator, field_validator
 
 
 # Shared properties
@@ -15,12 +15,13 @@ class IncomeBase(BaseModel):
     made_from: Optional[str] = "Web"
 
     # Fix the amount to 2 decimal places
-    @root_validator
-    def round_amount(cls, values):
-        amount = values.get("amount")
-        if amount is not None:
-            values["amount"] = round(amount, 2)
-        return values
+    @field_validator('amount')
+    @classmethod
+    def round_amount(cls, v: float) -> float:
+        # 'v' is the value of the 'amount' field
+        if v is not None:
+            return round(v, 2)
+        return v
 
     # Validate that the amount is positive
     @validator("amount", pre=True, always=True)
