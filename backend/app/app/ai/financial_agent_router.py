@@ -12,31 +12,41 @@ from app.models import User
 from app.crud.crud_transaction import get_multi_by_owner_with_filters
 from app.api.api_v1.endpoints.transactions import read_transactions
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
+from app.schemas.transaction import Transaction
 
 from app.models.expense import Expense
 from app.models.income import Income
 from app.models.transfer import Transfer
 from fastapi_pagination import Page
 
-instructions = """## Your identity
+instructions = f"""
+## Your identity
 
-      You are a friendly financial assistant for an open source personal finance application called "Maybe", which is short for "Maybe Finance".
+You are a friendly financial assistant for an open source personal finance application called "Maybe", which is short for "Maybe Finance".
 
-      ## Your purpose
+## Your purpose
 
-      You help users understand their financial data by answering questions about their accounts, transactions, income, expenses, net worth, forecasting and more.
+You help users understand their financial data by answering questions about their accounts, transactions, income, expenses, net worth, forecasting and more.
 
-      ## Your rules
+## Your rules
 
-      Follow all rules below at all times.
+Follow all rules below at all times.
 
-      ### General rules
+### General rules
 
-      - Provide ONLY the most important numbers and insights
-      - Eliminate all unnecessary words and context
-      - Ask follow-up questions to keep the conversation going. Help educate the user about their own data and entice them to ask more questions.
-      - Do NOT add introductions or conclusions
-      - Do NOT apologize or explain limitations"""
+- Provide ONLY the most important numbers and insights
+- Eliminate all unnecessary words and context
+- Ask follow-up questions to keep the conversation going. Help educate the user about their own data and entice them to ask more questions.
+- Do NOT add introductions or conclusions
+- Do NOT apologize or explain limitations
+
+### Function calling rules
+
+- Use the functions available to you to get user financial data and enhance your responses
+- For functions that require dates, use the current date as your reference point: {date.today()}
+- If you suspect that you do not have enough data to 100% accurately answer, be transparent about it and state exactly what the data you're presenting represents and what context it is in (i.e. date range, account, etc.)
+- If you use `get_transactions` function, it will return a paginated list of transactions. You can use the `page` and `size` parameters to control the pagination. If you need more transactions, you can increase the `size` parameter or paginate through the results. `total` is the number of transactions available and `items` is the list of transactions for the current page.
+    """
 
 router = APIRouter()
 
@@ -160,8 +170,8 @@ async def get_transactions(ctx: RunContext[Deps], order: OrderDirection = OrderD
     transaction_type: Optional[List[TransactionType]] = None,
     page: Optional[int] = 1,
     size: Optional[int] = 50,
-) -> Page[Union[Expense, Income, Transfer]]:
-    """Get transactions (expenses, incomes and or transfers) for the user with the given filters.
+) -> Page[List]:
+    """Get transactions (expenses, incomes and or transfers) for the user with the given filters. It will return a paginated list of transactions. You can use the `page` and `size` parameters to control the pagination. If you need more transactions, you can increase the `size` parameter or paginate through the results. `total` is the number of transactions available and `items` is the list of transactions for the current page.
 
     Args:
         ctx: The runtime context
@@ -174,7 +184,7 @@ async def get_transactions(ctx: RunContext[Deps], order: OrderDirection = OrderD
         accounts: List of account IDs to filter by
         categories: List of category IDs to filter by
         places: List of place IDs to filter by
-        transaction_type: List of transaction types to filter by (e.g., expense, income, transfer)
+        transaction_type: List of transaction types to filter by (e.g., expense, income, transfer). If you want to get all types, pass an empty list.
         page: Page number for pagination (default: 1)
         size: Number of items per page for pagination (default: 50)
     """
@@ -219,6 +229,7 @@ async def chat(
         result = await agent.run(
             prompt, deps=deps
         )
+        print("🚀 ~ result:", result)
         # Run the agent with the dependencies
         return {"response": result}
     except Exception as e:

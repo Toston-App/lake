@@ -12,9 +12,18 @@ from app.models.income import Income
 from app.models.place import Place
 from app.models.subcategory import Subcategory
 from app.models.transfer import Transfer
-from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
+from app.schemas.transaction import (
+    AmountOperator,
+    OrderDirection,
+    TransactionType,
+    Transaction,
+    ExpenseTransaction,
+    IncomeTransaction,
+    TransferTransaction,
+)
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlalchemy import paginate
+
 
 async def get_multi_by_owner_with_filters(
     db: AsyncSession,
@@ -32,7 +41,7 @@ async def get_multi_by_owner_with_filters(
     transaction_type: Optional[List[TransactionType]] = None,
     page: Optional[int] = None,
     size: Optional[int] = None,
-) -> Page[Union[Expense, Income, Transfer]]:
+) -> Page[Transaction]:
     print("🚀 ~ db:", db)
     print("🚀 ~ owner_id:", owner_id)
     print("🚀 ~ transaction_type:", transaction_type)
@@ -150,7 +159,7 @@ async def get_multi_by_owner_with_filters(
         .order_by(union_query.c.date.desc() if order == OrderDirection.desc else union_query.c.date.asc())
     )
 
-    async def _hydrate_transactions(paginated_results: list) -> list:
+    async def _hydrate_transactions(paginated_results: list) -> list[Transaction]:
         # =========================================================================
         # PHASE 2: "Hydrate" the IDs into full SQLAlchemy objects
         # =========================================================================
@@ -175,8 +184,7 @@ async def get_multi_by_owner_with_filters(
                 .where(Expense.id.in_(expense_ids))
             )).scalars().all()
             for e in expenses:
-                e.type = "expense"
-                final_results[('expense', e.id)] = e
+                final_results[('expense', e.id)] = ExpenseTransaction.from_orm(e)
 
         if income_ids:
             incomes = (await db.execute(
@@ -189,8 +197,7 @@ async def get_multi_by_owner_with_filters(
                 .where(Income.id.in_(income_ids))
             )).scalars().all()
             for i in incomes:
-                i.type = "income"
-                final_results[('income', i.id)] = i
+                final_results[('income', i.id)] = IncomeTransaction.from_orm(i)
 
         if transfer_ids:
             transfers = (await db.execute(
@@ -202,8 +209,7 @@ async def get_multi_by_owner_with_filters(
                 .where(Transfer.id.in_(transfer_ids))
             )).scalars().all()
             for t in transfers:
-                t.type = "transfer"
-                final_results[('transfer', t.id)] = t
+                final_results[('transfer', t.id)] = TransferTransaction.from_orm(t)
 
         # Sort the final hydrated objects based on the order from our paginated query
         return [final_results[(r.type, r.id)] for r in paginated_results]
