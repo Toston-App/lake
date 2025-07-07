@@ -24,7 +24,6 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
-PaginationProvider(app)
 
 # SecWeb(app=app, Option={'csp': {
 #     "default-src": ["'self'"],
@@ -131,6 +130,8 @@ async def openapi(username: str = Depends(get_current_username)):
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
+
+PaginationProvider(app)
 
 @app.get("/api/v1/utils/health-check/")
 def health_check():

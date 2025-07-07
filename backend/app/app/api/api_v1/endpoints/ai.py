@@ -14,6 +14,8 @@ from app.core.config import settings
 from app.utilities.logger import setup_logger
 from app.utilities.simplifier import categories as simplify_categories
 from app.utilities.simplifier import places as simplify_places
+from app.ai.financial_agent_router import router as financial_agent_router
+
 
 router = APIRouter()
 logger = setup_logger("ocr_requests", "ocr_requests.log")
@@ -115,3 +117,5 @@ async def ocr_image(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
         )
+
+router.include_router(financial_agent_router, tags=["Financial Agent"])
