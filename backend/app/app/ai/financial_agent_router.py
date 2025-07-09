@@ -170,7 +170,8 @@ async def stream_chat(
         deps = Deps(db=db, owner_id=current_user.id)
 
         session_id = request.id
-        user_prompt = request.messages[-1].content
+        # Extract text from the parts array of the last message
+        user_prompt = request.messages[-1].parts[0].text
 
         history = await get_message_history(current_user.id, session_id)
         history.append(ModelRequest(parts=[UserPromptPart(content=user_prompt)]))
@@ -184,7 +185,7 @@ async def stream_chat(
                 history.append(ModelResponse(parts=[TextPart(content=response.all_messages()[-1].parts[0].content)]))
                 await store_message_history(current_user.id, session_id, history)
 
-        response = StreamingResponse(generate_stream())
+        response = StreamingResponse(generate_stream(), media_type="text/event-stream")
         response.headers['x-vercel-ai-data-stream'] = 'v1'
         return response
     except Exception as e:
