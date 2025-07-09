@@ -8,11 +8,15 @@ class MessagePart(BaseModel):
     text: str
 
 class ClientMessage(BaseModel):
-    id: str
+    # uncomment this if testing v5
+    # id: str
     role: str
     parts: List[MessagePart]
+    # comment this if testing v5
+    content: str
 
 class Request(BaseModel):
     id: str
     messages: List[ClientMessage]
-    trigger: str
+    # uncomment this if testing v5
+    # trigger: str

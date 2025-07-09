@@ -1,3 +1,4 @@
+import json
 from app.ai.prompt import Request
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic_ai import Agent, RunContext
@@ -8,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from datetime import date
 from typing import List, Optional, Dict, Any, Union
 from dataclasses import dataclass
-from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart, TextPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart, TextPart, ModelMessage
 
 from app.api import deps
 from app.core.config import settings
@@ -156,6 +157,17 @@ async def chat(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+async def stream_generator(agent, user_prompt: str, history: List[ModelMessage], deps: Deps, session_id: str, current_user: User):
+    """Generator function to stream the agent's response."""
+    async with agent.run_stream(user_prompt, deps=deps, message_history=history) as result:
+        async for chunk in result.stream_text(delta=True):
+            print("🚀 ~ ", f"0:{json.dumps(chunk)}\n")
+            yield f"0:{json.dumps(chunk)}\n"
+
+        history.append(ModelResponse(parts=[TextPart(content=result.all_messages()[-1].parts[0].content)]))
+        await store_message_history(current_user.id, session_id, history)
+
 @router.post("/chat/stream")
 async def stream_chat(
     *,
@@ -171,21 +183,18 @@ async def stream_chat(
 
         session_id = request.id
         # Extract text from the parts array of the last message
-        user_prompt = request.messages[-1].parts[0].text
+        # v5
+        # user_prompt = request.messages[-1].parts[0].text
+        user_prompt = request.messages[-1].content
 
         history = await get_message_history(current_user.id, session_id)
         history.append(ModelRequest(parts=[UserPromptPart(content=user_prompt)]))
 
-        async def generate_stream():
-            async with agent.run_stream(user_prompt, deps=deps, message_history=history) as response:
-                async for chunk in response.stream_text(delta=True):
-                    print("🚀 ~ chunk:", chunk)
-                    yield f'0:"{chunk}"\n'
 
-                history.append(ModelResponse(parts=[TextPart(content=response.all_messages()[-1].parts[0].content)]))
-                await store_message_history(current_user.id, session_id, history)
-
-        response = StreamingResponse(generate_stream(), media_type="text/event-stream")
+        response =  StreamingResponse(
+            stream_generator(agent, user_prompt, history, deps, session_id, current_user),
+            media_type="text/event-stream",
+        )
         response.headers['x-vercel-ai-data-stream'] = 'v1'
         return response
     except Exception as e:
