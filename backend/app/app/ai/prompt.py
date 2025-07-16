@@ -8,11 +8,12 @@ class MessagePart(BaseModel):
     text: str
 
 class ClientMessage(BaseModel):
-    id: str
+    # id: str
     role: str
+    content: str
     parts: List[MessagePart]
 
 class Request(BaseModel):
     id: str
     messages: List[ClientMessage]
-    trigger: str
+    # trigger: str

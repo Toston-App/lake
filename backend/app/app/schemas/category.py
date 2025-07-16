@@ -51,13 +51,15 @@ class CategoryInDBBase(CategoryBase):
     subcategories: list["Subcategory"] = []
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties to return to client
 class Category(CategoryInDBBase):
     pass
 
+    class Config:
+        from_attributes = True
 
 # Properties properties stored in DB
 class CategoryInDB(CategoryInDBBase):

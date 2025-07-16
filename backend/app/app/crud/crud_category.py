@@ -9,6 +9,14 @@ from app.schemas.category import CategoryCreate, CategoryUpdate
 
 
 class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
+    async def get(self, db: AsyncSession, id: int) -> Category | None:
+        result = await db.execute(
+            select(self.model)
+            .filter(self.model.id == id)
+            .options(selectinload(self.model.subcategories))
+        )
+        return result.scalars().first()
+
     async def get_multi(
         self, db: AsyncSession, *, skip: int = 0, limit: int = 100
     ) -> list[Category]:

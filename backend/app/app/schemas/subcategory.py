@@ -37,12 +37,14 @@ class SubcategoryInDBBase(SubcategoryBase):
     category_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties to return to client
 class Subcategory(SubcategoryInDBBase):
-    pass
+    class Config:
+        from_attributes = True
+
 
 
 # Properties properties stored in DB
