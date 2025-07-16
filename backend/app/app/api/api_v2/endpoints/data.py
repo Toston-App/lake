@@ -269,7 +269,7 @@ async def get_all_data(
         incomes_df=dfs["incomes"],
     )
     categories_chart = categories_charts(
-        incomes=dfs["incomes"], expenses=dfs["expenses"]
+        expenses_df=dfs["expenses"], incomes_df=dfs["incomes"]
     )
     past_accounts_total = accounts_total(
         incomes_df=past_dfs["incomes"], expenses_df=past_dfs["expenses"]

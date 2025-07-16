@@ -20,12 +20,12 @@ def get_month_weeks(year, month):
     return [int(first_day.strftime("%W")), int(last_day.strftime("%W"))]
 
 
-def return_base(xAxis, total, expenses, incomes):
+def return_base(xAxis, total, expenses, incomes, income_color):
     return {
         "series": [
-            {"name": "Total", "data": total},
-            {"name": "Expenses", "data": expenses},
-            {"name": "Incomes", "data": incomes},
+            {"name": "Total", "data": total, "color": "#168fff"},
+            {"name": "Expenses", "data": expenses, "color": "#e23670"},
+            {"name": "Incomes", "data": incomes, "color": income_color},
         ],
         "xAxis": xAxis,
     }

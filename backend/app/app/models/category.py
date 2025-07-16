@@ -22,11 +22,16 @@ class Category(Base):
     is_default: bool = Column(Boolean, index=True, nullable=False, default=False)
     is_income: bool = Column(Boolean, index=True, nullable=False, default=False)
     owner_id = Column(Integer, ForeignKey("user.id"))
-    owner: "User" = relationship("User", back_populates="categories")
+    owner: "User" = relationship("User", back_populates="categories", lazy="raise_on_sql")
     subcategories: list["Subcategory"] = relationship(
-        "Subcategory", backref="parent_category", lazy="selectin"
+        "Subcategory",
+        back_populates="category",
+        cascade="all, delete-orphan",
+        lazy="raise_on_sql",
     )
-    expenses: list["Expense"] = relationship("Expense", back_populates="category")
+    expenses: list["Expense"] = relationship(
+        "Expense", back_populates="category", lazy="raise_on_sql"
+    )
     total: float = Column(Float, default=0.0, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

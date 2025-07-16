@@ -1,5 +1,6 @@
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.expression import select
 
 from app.crud.base import CRUDBase
@@ -8,6 +9,18 @@ from app.schemas.category import CategoryCreate, CategoryUpdate
 
 
 class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
+    async def get_multi(
+        self, db: AsyncSession, *, skip: int = 0, limit: int = 100
+    ) -> list[Category]:
+        result = await db.execute(
+            select(self.model)
+            .order_by(Category.name)
+            .options(selectinload(self.model.subcategories))
+            .offset(skip)
+            .limit(limit)
+        )
+        return result.scalars().all()
+
     async def create_with_owner(
         self, db: AsyncSession, *, obj_in: CategoryCreate, owner_id: int
     ) -> Category:
@@ -25,6 +38,7 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
             select(self.model)
             .filter(Category.owner_id == owner_id)
             .order_by(Category.name)
+            .options(selectinload(self.model.subcategories))
             .offset(skip)
             .limit(limit)
         )
