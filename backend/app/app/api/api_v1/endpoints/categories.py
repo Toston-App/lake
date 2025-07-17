@@ -56,7 +56,7 @@ async def read_category(
     """
     Get category by ID.
     """
-    category = await crud.category.get(db=db, id=id)
+    category = await crud.category.get(db=db, id=id, owner_id=current_user.id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
     if not crud.user.is_superuser(current_user) and (

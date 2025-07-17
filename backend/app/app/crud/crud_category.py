@@ -37,7 +37,13 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
         db.add(db_obj)
         await db.commit()
         await db.refresh(db_obj)
-        return db_obj
+        # Eagerly load subcategories after creation
+        result = await db.execute(
+            select(self.model)
+            .filter_by(id=db_obj.id)
+            .options(selectinload(self.model.subcategories))
+        )
+        return result.scalars().one()
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
