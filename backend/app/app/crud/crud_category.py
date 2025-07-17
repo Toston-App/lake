@@ -9,10 +9,10 @@ from app.schemas.category import CategoryCreate, CategoryUpdate
 
 
 class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
-    async def get(self, db: AsyncSession, id: int) -> Category | None:
+    async def get(self, db: AsyncSession, owner_id: int, id: int) -> Category | None:
         result = await db.execute(
             select(self.model)
-            .filter(self.model.id == id)
+            .filter(Category.owner_id == owner_id, Category.id == id)
             .options(selectinload(self.model.subcategories))
         )
         return result.scalars().first()

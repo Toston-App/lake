@@ -167,7 +167,7 @@ async def get_categories(ctx: RunContext[Deps]) -> List[AgentCategory]:
         ctx: The runtime context
     """
     categories = await crud_category.get_multi_by_owner(db=ctx.deps.db, owner_id=ctx.deps.owner_id)
-    return [AgentCategory.from_orm(c) for c in categories]
+    return [AgentCategory.model_validate(c) for c in categories]
 
 
 @agent.tool
@@ -179,10 +179,10 @@ async def get_category(ctx: RunContext[Deps], id: int) -> AgentCategory:
         id: The ID of the category to get
     """
     try:
-        category_model = await crud_category.get(db=ctx.deps.db, id=id)
+        category_model = await crud_category.get(db=ctx.deps.db, id=id, owner_id=ctx.deps.owner_id)
         if not category_model:
             raise HTTPException(status_code=404, detail="Category not found")
-        return AgentCategory.from_orm(category_model)
+        return AgentCategory.model_validate(category_model)
     except Exception as e:
         print("🚀 ~ Exception in get_category:", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -199,7 +199,7 @@ async def get_subcategory(ctx: RunContext[Deps], id: int) -> AgentSubcategory:
         subcategory_model = await crud_subcategory.get(db=ctx.deps.db, id=id)
         if not subcategory_model:
             raise HTTPException(status_code=404, detail="Subcategory not found")
-        return AgentSubcategory.from_orm(subcategory_model)
+        return AgentSubcategory.model_validate(subcategory_model)
     except Exception as e:
         print("🚀 ~ Exception in get_subcategory:", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -247,6 +247,8 @@ async def stream_chat(
 
         session_id = request.id
         # Extract text from the parts array of the last message
+        # to use with vercel sdk v5
+        # user_prompt = request.messages[-1].parts[0].text
         user_prompt = request.messages[-1].content
 
         history = await get_message_history(current_user.id, session_id)

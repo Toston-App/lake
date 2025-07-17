@@ -184,7 +184,7 @@ async def get_multi_by_owner_with_filters(
                 .where(Expense.id.in_(expense_ids))
             )).scalars().all()
             for e in expenses:
-                final_results[('expense', e.id)] = ExpenseTransaction.from_orm(e)
+                final_results[('expense', e.id)] = ExpenseTransaction.model_validate(e)
 
         if income_ids:
             incomes = (await db.execute(
@@ -197,7 +197,7 @@ async def get_multi_by_owner_with_filters(
                 .where(Income.id.in_(income_ids))
             )).scalars().all()
             for i in incomes:
-                final_results[('income', i.id)] = IncomeTransaction.from_orm(i)
+                final_results[('income', i.id)] = IncomeTransaction.model_validate(i)
 
         if transfer_ids:
             transfers = (await db.execute(
@@ -209,7 +209,7 @@ async def get_multi_by_owner_with_filters(
                 .where(Transfer.id.in_(transfer_ids))
             )).scalars().all()
             for t in transfers:
-                final_results[('transfer', t.id)] = TransferTransaction.from_orm(t)
+                final_results[('transfer', t.id)] = TransferTransaction.model_validate(t)
 
         # Sort the final hydrated objects based on the order from our paginated query
         return [final_results[(r.type, r.id)] for r in paginated_results]
