@@ -46,6 +46,13 @@ class Subcategory(SubcategoryInDBBase):
         from_attributes = True
 
 
+# Properties to return to AI agent
+class AgentSubcategory(SubcategoryBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
 
 # Properties properties stored in DB
 class SubcategoryInDB(SubcategoryInDBBase):

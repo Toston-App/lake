@@ -20,32 +20,9 @@ from app.crud.crud_subcategory import subcategory as crud_subcategory
 from app.api.api_v1.endpoints.transactions import read_transactions
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 from app.schemas.transaction import Transaction
+from app.schemas.category import AgentCategory
+from app.schemas.subcategory import AgentSubcategory
 from pydantic import BaseModel
-
-
-class AgentSubcategory(BaseModel):
-    id: int
-    name: Optional[str] = None
-    description: Optional[str] = None
-    icon: Optional[str] = None
-    is_default: bool = False
-
-    class Config:
-        from_attributes = True
-
-
-class AgentCategory(BaseModel):
-    id: int
-    name: Optional[str] = None
-    description: Optional[str] = None
-    color: Optional[str] = None
-    icon: Optional[str] = None
-    is_default: bool = False
-    is_income: bool = False
-    subcategories: List["AgentSubcategory"] = []
-
-    class Config:
-        from_attributes = True
 
 
 from app.models.expense import Expense

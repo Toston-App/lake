@@ -4,7 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, validator
 
-from .subcategory import Subcategory  # noqa: F401
+from .subcategory import AgentSubcategory, Subcategory  # noqa: F401
 
 
 # Shared properties
@@ -60,6 +60,16 @@ class Category(CategoryInDBBase):
 
     class Config:
         from_attributes = True
+
+
+# Properties to return to AI agent
+class AgentCategory(CategoryBase):
+    id: int
+    subcategories: list[AgentSubcategory] = []
+
+    class Config:
+        from_attributes = True
+
 
 # Properties properties stored in DB
 class CategoryInDB(CategoryInDBBase):
