@@ -97,121 +97,125 @@ async def all_querys(
 async def get_all_data(
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
-    date: Date | str = None,
-    to: Date | None = None,
+    date: str = None,
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Massive data retrieval for the dashboard.
     """
+    start_date: Date | None = None
+    end_date: Date | None = None
+    results = None
+
     if date_filter_type == DateFilterType.date:
-        if type(date) == str:
+        try:
+            start_date = datetime.strptime(date, "%Y-%m-%d").date()
+            end_date = start_date
+            print("🚀 ~ start_date:", start_date)
+            print("🚀 ~ end_date:", end_date)
+            results = await all_querys(db, start_date, end_date, owner_id=current_user.id)
+        except ValueError:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
             )
 
-        results = await all_querys(db, date, date, owner_id=current_user.id)
-
-    if date_filter_type == DateFilterType.week:
-        if type(date) == str:
+    elif date_filter_type == DateFilterType.week:
+        try:
+            start_date = datetime.strptime(date, "%Y-%m-%d").date()
+            end_date = start_date + timedelta(days=6)
+            print("🚀 ~ start_date:", start_date)
+            print("🚀 ~ end_date:", end_date)
+            results = await all_querys(
+                db, start_date, end_date, "days", 6, owner_id=current_user.id
+            )
+        except ValueError:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
             )
 
-        end_date = date + timedelta(days=6)
-
-        results = await all_querys(
-            db, date, end_date, "days", 6, owner_id=current_user.id
-        )
-
-    if date_filter_type == DateFilterType.month:
-        if isinstance(date, Date):
-            raise HTTPException(
-                status_code=400, detail="Date must be a date in the format YYYY-MM"
-            )
+    elif date_filter_type == DateFilterType.month:
         try:
             start_date = datetime.strptime(date, "%Y-%m").date()
+            _, num_days = calendar.monthrange(start_date.year, start_date.month)
+            end_date = start_date + timedelta(days=num_days - 1)
+            print("🚀 ~ start_date:", start_date)
+            print("🚀 ~ end_date:", end_date)
+            results = await all_querys(
+                db, start_date, end_date, "months", 1, owner_id=current_user.id
+            )
         except ValueError:
             raise HTTPException(
-                status_code=400, detail="Date must be a date in the format YYYY-MM"
+                status_code=400, detail="Date must be in the format YYYY-MM"
             )
 
-        end_date = datetime.strptime(
-            f"{start_date.year}-{start_date.month}-{calendar.monthrange(start_date.year, start_date.month)[1]}",
-            "%Y-%m-%d",
-        ).date()
-
-        results = await all_querys(
-            db, start_date, end_date, "months", 1, owner_id=current_user.id
-        )
-
-    if date_filter_type == DateFilterType.quarter:
-        if isinstance(date, Date):
-            raise HTTPException(
-                status_code=400, detail="Date must be a date in the format QX-YYYY"
-            )
-
+    elif date_filter_type == DateFilterType.quarter:
         try:
-            year = date.split("-")[1]
-            quarterNum = int(date.split("-")[0].replace("Q", ""))
-        except ValueError:
-            raise HTTPException(
-                status_code=400, detail="Date must be a date in the format QX-YYYY"
+            year_str, quarter_str = date.split("-")
+            quarterNum = int(quarter_str.replace("Q", ""))
+            year = int(year_str)
+
+            if quarterNum < 1 or quarterNum > 4:
+                raise ValueError("Quarter must be between 1 and 4")
+
+            start_month = (quarterNum - 1) * 3 + 1
+            end_month = quarterNum * 3
+            start_date = Date(year, start_month, 1)
+            _, end_day = calendar.monthrange(year, end_month)
+            end_date = Date(year, end_month, end_day)
+            print("🚀 ~ start_date:", start_date)
+            print("🚀 ~ end_date:", end_date)
+            results = await all_querys(
+                db, start_date, end_date, "months", 3, owner_id=current_user.id
             )
 
-        if quarterNum < 1 or quarterNum > 4:
+        except (ValueError, IndexError):
             raise HTTPException(
-                status_code=400, detail="Quarter must be between 1 and 4"
+                status_code=400, detail="Date must be in the format YYYY-QX"
             )
 
-        start_date = datetime.strptime(
-            f"{year}-{(quarterNum - 1) * 3 + 1}-01", "%Y-%m-%d"
-        ).date()
-        end_date = datetime.strptime(
-            f"{year}-{quarterNum * 3}-{calendar.monthrange(int(year), quarterNum * 3)[1]}",
-            "%Y-%m-%d",
-        ).date()
-
-        results = await all_querys(
-            db, start_date, end_date, "months", 3, owner_id=current_user.id
-        )
-
-    if date_filter_type == DateFilterType.year:
-        if isinstance(date, Date) or "x" not in date or len(date.split("x")[0]) != 4:
-            raise HTTPException(
-                status_code=400, detail="Date must be a date in the format YYYYx"
-            )
-
+    elif date_filter_type == DateFilterType.year:
         try:
-            date = date.split("x")[0]
-            start_date = datetime.strptime(f"{date}-01-01", "%Y-%m-%d").date()
-            end_date = datetime.strptime(f"{date}-12-31", "%Y-%m-%d").date()
+            year = int(date)
+            start_date = Date(year, 1, 1)
+            end_date = Date(year, 12, 31)
+            print("🚀 ~ start_date:", start_date)
+            print("🚀 ~ end_date:", end_date)
+            results = await all_querys(
+                db, start_date, end_date, "days", 365, owner_id=current_user.id
+            )
+        except (ValueError, IndexError):
+            raise HTTPException(
+                status_code=400, detail="Date must be in the format YYYY"
+            )
+
+    elif date_filter_type == DateFilterType.range:
+        try:
+            start_date_str, end_date_str = date.split(":")
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            print("🚀 ~ start_date:", start_date)
+            print("🚀 ~ end_date:", end_date)
+            results = await all_querys(
+                db,
+                start_date,
+                end_date,
+                "days",
+                (end_date - start_date).days,
+                owner_id=current_user.id,
+            )
         except ValueError:
             raise HTTPException(
-                status_code=400, detail="Date must be a date in the format YYYYx"
+                status_code=400,
+                detail="Date range must be in the format YYYY-MM-DD:YYYY-MM-DD",
             )
 
-        results = await all_querys(
-            db, start_date, end_date, "days", 365, owner_id=current_user.id
-        )
-
-    if date_filter_type == DateFilterType.range:
-        if date_filter_type == DateFilterType.range and to is None:
-            raise HTTPException(status_code=400, detail="Range requires two dates")
-
-        if type(date) == str or type(to) == str:
-            raise HTTPException(
-                status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
-            )
-
-        if date > to:
+        if start_date > end_date:
             raise HTTPException(
                 status_code=400, detail="Start date must be before end date"
             )
 
-        results = await all_querys(
-            db, date, to, "days", (to - date).days, owner_id=current_user.id
-        )
+    if not results:
+        return []
 
     (
         incomes_actual,
