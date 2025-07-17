@@ -1,5 +1,6 @@
 import asyncio
 from typing import Any, Optional
+import random
 
 import httpx
 
@@ -188,3 +189,50 @@ async def typing(chat_id: str, seconds: float) -> None:
     await start_typing(chat_id=chat_id)
     await asyncio.sleep(seconds)
     await stop_typing(chat_id=chat_id)
+
+def get_random_example_message() -> str:
+    """
+    Returns a random example WhatsApp message for onboarding and help prompts, with random amount, account, category, and structure.
+    """
+    amount = random.randint(20, 2000)
+    accounts = [
+        "mi cuenta bbva", "tarjeta santander", "efectivo", "mi cuenta banamex",
+        "tarjeta HSBC", "mi cuenta de ahorro", "tarjeta BBVA", "cuenta scotiabank"
+    ]
+    categories = [
+        "restaurante", "gasolina", "supermercado", "cine", "café", "estacionamiento",
+        "ropa", "farmacia", "suscripción de Netflix", "venta de productos", "freelance", "salario"
+    ]
+    verbs = [
+        "Gasté", "Pagué", "Compré", "Ingreso de", "Recibí"
+    ]
+    structures = [
+        # Expense
+        "{verb} {amount} pesos en {category} con {account}",
+        "{verb} {amount} pesos en {category} ayer con {account}",
+        "{verb} {amount} pesos en {category}",
+        # Income
+        "{verb} {amount} pesos por {category} en {account}",
+        "{verb} {amount} pesos de mi {category} en {account}",
+        "{verb} {amount} pesos por {category}",
+    ]
+    account = random.choice(accounts)
+    category = random.choice(categories)
+    verb = random.choice(verbs)
+    structure = random.choice(structures)
+    # Adjust verb for income/expense
+    if verb in ["Ingreso de", "Recibí"]:
+        # Use only income-related structures
+        structure = random.choice([
+            "{verb} {amount} pesos por {category} en {account}",
+            "{verb} {amount} pesos de mi {category} en {account}",
+            "{verb} {amount} pesos por {category}",
+        ])
+    else:
+        # Use only expense-related structures
+        structure = random.choice([
+            "{verb} {amount} pesos en {category} con {account}",
+            "{verb} {amount} pesos en {category} ayer con {account}",
+            "{verb} {amount} pesos en {category}",
+        ])
+    return structure.format(verb=verb, amount=amount, category=category, account=account)

@@ -15,6 +15,7 @@ from app.utilities.simplifier import accounts as simplify_accounts
 from app.utilities.simplifier import categories as simplify_categories
 from app.utilities.simplifier import places as simplify_places
 from app.utilities.waha import (
+    get_random_example_message,
     react_to_message,
     send_message,
     send_poll,
@@ -50,17 +51,17 @@ async def handle_whatsapp_message(request: Request, db: AsyncSession = Depends(d
         await typing(chat_id=chat_id, seconds=random.random() * 3)
         await send_message(
             chat_id=chat_id,
-            text="""👋 ¡Hola! Aún no tienes vinculado tu número de telefono.
+            text=f"""👋 ¡Hola! Aún no tienes vinculado tu número de telefono.
 
 Vinculalo de la siguiente forma:
-1️⃣ Ingresa a: https://cleverbill.ing/dashboard/whatsapp
+1️⃣ Ingresa a: https://dashboard.cleverbill.ing/whatsapp
 
 2️⃣ Registra tu número de WhatsApp
 
 3️⃣ ¡Listo! Ahora puedes enviar tus gastos e ingresos por este chat 🚀
 
 ✍️ Envía un mensajes intentando ser lo más claro posible, por ejemplo:
-"Gasté 200 pesos en restaurante ayer con mi cuenta bbva"
+"{get_random_example_message()}"
 
 Ten en cuenta que si no eres de México, es probable que no podamos procesar tu número, mandanos un correo a support@cleverbill.ing para ayudarte 📧
 """
@@ -114,12 +115,14 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                 await react_to_message(message_id=message_id, emoji="😵‍💫")
                 await send_message(
                     chat_id=chat_id,
-                    text="""❌ No pude entender tu mensaje. Por favor, intenta ser más específico.
+                    text=f"""❌ No pude entender tu mensaje. Por favor, intenta ser más específico.
 
     Por ejemplo:
-    • "Gasté 200 pesos en restaurante ayer"
+    • "{get_random_example_message()}"
     • "Ingreso de 1500 por venta"
     • "350 pesos en gasolina con tarjeta bbva"
+
+    Recuerda que aún estamos en fase de pruebas y puede que no todo funcione perfectamente. Si tienes sugerencias, por favor envíanos un mensaje mediante Reddit o Twitter a @Cleverbilling
     """)
                 return {"status": "ok"}
 

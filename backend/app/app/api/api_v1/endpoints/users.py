@@ -82,7 +82,6 @@ async def update_user_me(
     if country is not None:
         user_in.country = country
     if phone is not None:
-        # We don't need to check if phone already exists, because we are using the phone as a hash. If two users have the same phone, they will have the same hash. Only the person who send the message with that phone will get the same hash and prob get wrong user, but we don't care about that. If user is adding his real phone, this will never happen (prob).
         try:
             phone_num = phonenumbers.parse(phone, None)
             is_valid = phonenumbers.is_valid_number(phone_num)
@@ -94,12 +93,23 @@ async def update_user_me(
                 )
 
             formatted_phone = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.E164)
+            print("🚀 ~ formatted_phone:", formatted_phone)
 
             # Ensure Mexican mobile numbers start with +521 (add '1' if missing), this to match whatsapp phone format
             if phone_num.country_code == 52 and not formatted_phone.startswith("+521"):
                 formatted_phone = "+521" + formatted_phone[3:]
 
-            user_in.phone = hash_sha256(formatted_phone)
+            phone_hash = hash_sha256(formatted_phone)
+
+            # Check if this phone hash already exists for another user
+            existing_user = await crud.user.get_by_phone(db, phone=phone_hash)
+            if existing_user and existing_user.id != current_user.id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Este número de teléfono ya está registrado por otro usuario. Si crees que esto es un error, por favor contacta al soporte.",
+                )
+
+            user_in.phone = phone_hash
         except phonenumbers.phonenumberutil.NumberParseException:
             raise HTTPException(
                 status_code=400,
