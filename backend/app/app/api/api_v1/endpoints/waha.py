@@ -54,7 +54,7 @@ async def handle_whatsapp_message(request: Request, db: AsyncSession = Depends(d
             text=f"""👋 ¡Hola! Aún no tienes vinculado tu número de telefono.
 
 Vinculalo de la siguiente forma:
-1️⃣ Ingresa a: https://cleverbill.ing/dashboard/whatsapp
+1️⃣ Ingresa a: https://dashboard.cleverbill.ing/whatsapp
 
 2️⃣ Registra tu número de WhatsApp
 
