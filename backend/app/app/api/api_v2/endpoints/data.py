@@ -111,8 +111,7 @@ async def get_all_data(
         try:
             start_date = datetime.strptime(date, "%Y-%m-%d").date()
             end_date = start_date
-            print("🚀 ~ start_date:", start_date)
-            print("🚀 ~ end_date:", end_date)
+
             results = await all_querys(db, start_date, end_date, owner_id=current_user.id)
         except ValueError:
             raise HTTPException(
@@ -123,8 +122,7 @@ async def get_all_data(
         try:
             start_date = datetime.strptime(date, "%Y-%m-%d").date()
             end_date = start_date + timedelta(days=6)
-            print("🚀 ~ start_date:", start_date)
-            print("🚀 ~ end_date:", end_date)
+
             results = await all_querys(
                 db, start_date, end_date, "days", 6, owner_id=current_user.id
             )
@@ -138,8 +136,7 @@ async def get_all_data(
             start_date = datetime.strptime(date, "%Y-%m").date()
             _, num_days = calendar.monthrange(start_date.year, start_date.month)
             end_date = start_date + timedelta(days=num_days - 1)
-            print("🚀 ~ start_date:", start_date)
-            print("🚀 ~ end_date:", end_date)
+
             results = await all_querys(
                 db, start_date, end_date, "months", 1, owner_id=current_user.id
             )
@@ -162,8 +159,7 @@ async def get_all_data(
             start_date = Date(year, start_month, 1)
             _, end_day = calendar.monthrange(year, end_month)
             end_date = Date(year, end_month, end_day)
-            print("🚀 ~ start_date:", start_date)
-            print("🚀 ~ end_date:", end_date)
+
             results = await all_querys(
                 db, start_date, end_date, "months", 3, owner_id=current_user.id
             )
@@ -178,8 +174,7 @@ async def get_all_data(
             year = int(date)
             start_date = Date(year, 1, 1)
             end_date = Date(year, 12, 31)
-            print("🚀 ~ start_date:", start_date)
-            print("🚀 ~ end_date:", end_date)
+
             results = await all_querys(
                 db, start_date, end_date, "days", 365, owner_id=current_user.id
             )
@@ -193,8 +188,7 @@ async def get_all_data(
             start_date_str, end_date_str = date.split(":")
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
             end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-            print("🚀 ~ start_date:", start_date)
-            print("🚀 ~ end_date:", end_date)
+
             results = await all_querys(
                 db,
                 start_date,
