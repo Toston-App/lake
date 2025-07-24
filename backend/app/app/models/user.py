@@ -62,6 +62,6 @@ class User(Base):
     imports: list["Import"] = relationship(
         "Import", back_populates="owner", cascade="all, delete-orphan"
     )
-    feedback: list["Feedback"] = relationship(
+    feedbacks: list["Feedback"] = relationship(
         "Feedback", back_populates="owner", cascade="all, delete-orphan"
     )
