@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .place import Place  # noqa: F401
     from .subcategory import Subcategory  # noqa: F401
     from .transfer import Transfer  # noqa: F401
+    from .feedback import Feedback  # noqa: F401
 
 
 class User(Base):
@@ -60,4 +61,7 @@ class User(Base):
     )
     imports: list["Import"] = relationship(
         "Import", back_populates="owner", cascade="all, delete-orphan"
+    )
+    feedback: list["Feedback"] = relationship(
+        "Feedback", back_populates="owner", cascade="all, delete-orphan"
     )
