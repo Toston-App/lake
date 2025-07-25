@@ -12,6 +12,7 @@ from .token import Token, TokenPayload, TokenPayloadUuid
 from .user import User, UserCreate, UserCreateUuid, UserInDB, UserUpdate
 from .imports import Import, ImportCreate, ImportInDB, ImportUpdate, DeletionResponse
 from .bulk import BulkDelete, BulkDeletionsResponse, BulkCreate, BulkCreationsResponse
+from .feedback import Feedback, FeedbackCreate
 from .transaction import (
     ExpenseTransaction,
     IncomeTransaction,

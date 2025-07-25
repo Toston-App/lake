@@ -115,6 +115,10 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str
 
+    # Feedback
+    TELEGRAM_BOT_TOKEN: str
+    TELEGRAM_OWNER_ID: str
+
     # WhatsApp Integration Settings
     WHATSAPP_ENABLED: bool = False
     WHATSAPP_ACCESS_TOKEN: str

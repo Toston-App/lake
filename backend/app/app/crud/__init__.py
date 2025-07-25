@@ -8,6 +8,7 @@ from .crud_place import place
 from .crud_item import item
 from .crud_user import user
 from .crud_import import imports
+from .crud_feedback import feedback
 
 # For a new basic set of CRUD operations you could just do
 

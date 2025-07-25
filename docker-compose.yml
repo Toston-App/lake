@@ -104,7 +104,7 @@ services:
   waha:
     restart: always
     # in macos change to waha:arm
-    image: devlikeapro/waha:latest
+    image: devlikeapro/waha
     networks:
       - app-network
     ports:
