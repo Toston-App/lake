@@ -2,7 +2,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app import crud, models, schemas
 from app.api import deps
@@ -56,13 +58,22 @@ async def read_category(
     """
     Get category by ID.
     """
-    category = await crud.category.get(db=db, id=id)
+    # load all subcategories
+    result = await db.execute(
+        select(models.Category)
+        .options(selectinload(models.Category.subcategories))
+        .filter(models.Category.id == id)
+    )
+    category = result.scalar_one_or_none()
+
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
+
     if not crud.user.is_superuser(current_user) and (
         category.owner_id != current_user.id
     ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
     return category
 
 
@@ -95,13 +106,13 @@ async def delete_category(
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Delete an category.
+    Delete a category.
     """
     category = await read_category(db=db, id=id, current_user=current_user)
 
     if category.is_income:
         raise HTTPException(status_code=400, detail="This item cannot be deleted")
 
-    category = await crud.category.remove(db=db, id=id)
+    await crud.category.remove(db=db, id=id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")

@@ -28,8 +28,15 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
         await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+
+        # Re-fetch the object with the subcategories relationship loaded
+        query = (
+            select(self.model)
+            .options(selectinload(self.model.subcategories))
+            .filter(self.model.id == db_obj.id)
+        )
+        result = await db.execute(query)
+        return result.scalar_one()
 
     async def get_multi_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
