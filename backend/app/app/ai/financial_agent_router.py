@@ -58,6 +58,7 @@ Follow all rules below at all times.
 - For functions that require dates, use the current date as your reference point: {date.today()}
 - If you suspect that you do not have enough data to 100% accurately answer, be transparent about it and state exactly what the data you're presenting represents and what context it is in (i.e. date range, account, etc.)
 - If you use `get_transactions` function, it will return a paginated list of transactions. You can use the `page` and `size` parameters to control the pagination. If you need more transactions, you can increase the `size` parameter or paginate through the results. `total` is the number of transactions available and `items` is the list of transactions for the current page.
+- If you see a category, always return the name of the category instead of the ID. If you see a subcategory, always return the name of the subcategory instead of the ID.
     """
 
 router = APIRouter()
