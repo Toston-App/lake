@@ -99,6 +99,10 @@ async def update_user_me(
             if phone_num.country_code == 52 and not formatted_phone.startswith("+521"):
                 formatted_phone = "+521" + formatted_phone[3:]
 
+            # Ensure Arg mobile numbers start with +549 (add '9' if missing), this to match whatsapp phone format
+            if phone_num.country_code == 54 and not formatted_phone.startswith("+549"):
+                formatted_phone = "+549" + formatted_phone[3:]
+
             phone_hash = hash_sha256(formatted_phone)
 
             # Check if this phone hash already exists for another user
