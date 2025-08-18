@@ -7,11 +7,6 @@
 <p align="center">
   <h1 align="center">Toston <span style="font-size: 0.7em; font-weight: normal;">(Formerly Cleverbill.ing)</span></h1>
   <h3 align="center">A free, open-source personal finance manager powered by AI</h3>
-</p>
-
-<br/>
-
-<p align="center">
   <p align="center">Follow <a href="https://twitter.com/@cleverbilling">us on Twitter (@cleverbill.ing)</a> for updates!</p>
 </p>
 
