@@ -104,4 +104,4 @@ See our [Contributing Guide](.github/CONTRIBUTING.md) for detailed setup instruc
 
 ## 🔒 Security
 
-See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+See [SECURITY.md](.github/SECURITY.md) for reporting vulnerabilities.
