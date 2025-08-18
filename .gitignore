@@ -6,10 +6,10 @@ __pycache__
 db.sqlite3
 media
 
-# Backup files # 
-*.bak 
+# Backup files #
+*.bak
 
-# If you are using PyCharm # 
+# If you are using PyCharm #
 # User-specific stuff
 .idea/**/workspace.xml
 .idea/**/tasks.xml
@@ -45,56 +45,56 @@ out/
 # JIRA plugin
 atlassian-ide-plugin.xml
 
-# Python # 
-*.py[cod] 
-*$py.class 
+# Python #
+*.py[cod]
+*$py.class
 
-# Distribution / packaging 
-backend/.Python build/ 
-backend/develop-eggs/ 
-backend/dist/ 
-backend/downloads/ 
-backend/eggs/ 
-backend/.eggs/ 
+# Distribution / packaging
+backend/.Python build/
+backend/develop-eggs/
+backend/dist/
+backend/downloads/
+backend/eggs/
+backend/.eggs/
 backend/lib/
-backend/lib64/ 
-backend/parts/ 
-backend/sdist/ 
-backend/var/ 
-backend/wheels/ 
-backend/*.egg-info/ 
-backend/.installed.cfg 
-backend/*.egg 
-backend/*.manifest 
-backend/*.spec 
+backend/lib64/
+backend/parts/
+backend/sdist/
+backend/var/
+backend/wheels/
+backend/*.egg-info/
+backend/.installed.cfg
+backend/*.egg
+backend/*.manifest
+backend/*.spec
 
-# Installer logs 
-pip-log.txt 
-pip-delete-this-directory.txt 
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Unit test / coverage reports 
-htmlcov/ 
-.tox/ 
-.coverage 
-.coverage.* 
-.cache 
-.pytest_cache/ 
-nosetests.xml 
-coverage.xml 
-*.cover 
-.hypothesis/ 
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
 
-# Jupyter Notebook 
-.ipynb_checkpoints 
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# pyenv 
-.python-version 
+# pyenv
+.python-version
 
-# celery 
-celerybeat-schedule.* 
+# celery
+celerybeat-schedule.*
 
-# SageMath parsed files 
-*.sage.py 
+# SageMath parsed files
+*.sage.py
 
 # Environments
 .env
