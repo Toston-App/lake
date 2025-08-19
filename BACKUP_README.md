@@ -1,9 +1,5 @@
 # PostgreSQL Database Backup System
 
-This document describes how the automated backup system for the PostgreSQL database works and how to configure it.
-
-## Overview
-
 The backup system uses [docker-volume-backup](https://github.com/offen/docker-volume-backup) to:
 
 1. Create regular backups of the PostgreSQL database volume
