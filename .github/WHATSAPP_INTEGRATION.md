@@ -1,7 +1,5 @@
 # WhatsApp Integration
 
-This document provides information on how to set up and use the WhatsApp integration for wallet transaction tracking.
-
 ## Overview
 
 The WhatsApp integration allows users to send transaction information via WhatsApp messages. This makes it easy to record expenses, incomes, and transfers (soon) on the go.
