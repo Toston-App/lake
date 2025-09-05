@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
+from app.utilities.redis import invalidate_user_cache
 
 router = APIRouter()
 
@@ -143,6 +144,10 @@ async def create_income(
     income = await crud.income.create_with_owner(
         db=db, obj_in=income_in, owner_id=current_user.id
     )
+    
+    # Invalidate user's cached data since a new income was created
+    await invalidate_user_cache(current_user.id)
+    
     return income
 
 
@@ -159,6 +164,10 @@ async def create_incomes_bulk(
     incomes = await crud.income.create_multi_with_owner(
         db=db, obj_list=incomes_in, owner_id=current_user.id
     )
+    
+    # Invalidate user's cached data since incomes were created
+    await invalidate_user_cache(current_user.id)
+    
     return incomes
 
 
@@ -311,6 +320,9 @@ async def update_income(
                 amount=amount_difference,
             )
 
+    # Invalidate user's cached data since income was updated
+    await invalidate_user_cache(current_user.id)
+
     return updated_income
 
 
@@ -369,6 +381,8 @@ async def delete_income(
                     )
                     await db.commit()
 
+    # Invalidate user's cached data since income was deleted
+    await invalidate_user_cache(current_user.id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
 
@@ -451,6 +465,9 @@ async def delete_incomes_bulk(
                 column="total_incomes",
                 amount=-income.amount,
             )
+
+    # Invalidate user's cached data since incomes were deleted
+    await invalidate_user_cache(current_user.id)
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_incomes)} incomes",

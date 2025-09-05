@@ -20,6 +20,7 @@ from app.process_data.process import (
     get_df,
     transaction_charts,
 )
+from app.utilities.redis import get_user_data, store_user_data
 
 router = APIRouter()
 
@@ -101,8 +102,13 @@ async def get_all_data(
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Massive data retrieval for the dashboard.
+    Massive data retrieval for the dashboard with intelligent caching.
     """
+    # Try to get cached data first
+    cached_data = await get_user_data(current_user.id, date_filter_type.value, date)
+    if cached_data:
+        return cached_data
+    
     start_date: Date | None = None
     end_date: Date | None = None
     results = None
@@ -223,7 +229,7 @@ async def get_all_data(
     ) = results
 
     if incomes_actual == [] and expenses_actual == []:
-        return {
+        empty_response = {
             "currency": current_user.country,
             "language": current_user.country,
             "accounts": jsonable_encoder(accounts),
@@ -242,6 +248,11 @@ async def get_all_data(
                 "accounts": [],
             },
         }
+        
+        # Cache the empty response as well
+        await store_user_data(current_user.id, date_filter_type.value, date, empty_response)
+        
+        return empty_response
 
     dfs = get_df(
         expenses=jsonable_encoder(expenses_actual),
@@ -282,7 +293,7 @@ async def get_all_data(
         incomes_df=dfs["incomes"], expenses_df=dfs["expenses"], transfers_df=dfs["transfers"]
     )
 
-    return {
+    response_data = {
         "currency": current_user.country,
         "language": current_user.country,
         "accounts": jsonable_encoder(accounts),
@@ -301,6 +312,11 @@ async def get_all_data(
             "accounts": account_chart,
         },
     }
+    
+    # Cache the response data for future requests
+    await store_user_data(current_user.id, date_filter_type.value, date, response_data)
+    
+    return response_data
 
 
 # @router.post("/", response_model=schemas.Expense)

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
+from app.utilities.redis import invalidate_user_cache
 
 router = APIRouter()
 
@@ -152,6 +153,10 @@ async def create_expense(
     expense = await crud.expense.create_with_owner(
         db=db, obj_in=expense_in, owner_id=current_user.id
     )
+    
+    # Invalidate user's cached data since a new expense was created
+    await invalidate_user_cache(current_user.id)
+    
     return expense
 
 
@@ -168,6 +173,10 @@ async def create_expenses_bulk(
     expenses = await crud.expense.create_multi_with_owner(
         db=db, obj_list=expenses_in, owner_id=current_user.id
     )
+    
+    # Invalidate user's cached data since expenses were created
+    await invalidate_user_cache(current_user.id)
+    
     return expenses
 
 
@@ -332,6 +341,9 @@ async def update_expense(
                 amount=amount_difference,
             )
 
+    # Invalidate user's cached data since expense was updated
+    await invalidate_user_cache(current_user.id)
+
     return updated_expense
 
 
@@ -390,6 +402,9 @@ async def delete_expense(
             column="total_expenses",
             amount=-expense.amount,
         )
+
+    # Invalidate user's cached data since expense was deleted
+    await invalidate_user_cache(current_user.id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
 
@@ -475,6 +490,9 @@ async def delete_expenses_bulk(
                 column="total_expenses",
                 amount=-expense.amount,
             )
+
+    # Invalidate user's cached data since expenses were deleted
+    await invalidate_user_cache(current_user.id)
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_expenses)} expenses",
