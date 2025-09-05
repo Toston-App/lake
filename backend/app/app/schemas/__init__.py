@@ -13,6 +13,7 @@ from .user import User, UserCreate, UserCreateUuid, UserInDB, UserUpdate
 from .imports import Import, ImportCreate, ImportInDB, ImportUpdate, DeletionResponse
 from .bulk import BulkDelete, BulkDeletionsResponse, BulkCreate, BulkCreationsResponse
 from .feedback import Feedback, FeedbackCreate
+from .goal import Goal, GoalCreate, GoalInDB, GoalUpdate, DeletionResponse, BulkDeletionResponse
 from .transaction import (
     ExpenseTransaction,
     IncomeTransaction,
