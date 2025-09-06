@@ -129,6 +129,16 @@ class WhatsAppParser:
         if transaction["amount"] <= 0:
             return False
 
+        # Additional validation for transfers
+        if transaction["type"] == "transfer":
+            # Both from_account and to_account must be found
+            if not transaction.get("from_account_id") or not transaction.get("to_account_id"):
+                return False
+            
+            # from_account and to_account cannot be the same
+            if transaction.get("from_account_id") == transaction.get("to_account_id"):
+                return False
+
         return True
 
     def convert_ai_result_to_transaction(self, ai_result: dict) -> dict:

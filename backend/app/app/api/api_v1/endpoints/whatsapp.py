@@ -154,9 +154,38 @@ Por ejemplo:
 • "Gasté 200 pesos en restaurante ayer"
 • "Ingreso de 1500 por venta"
 • "350 pesos en gasolina con tarjeta bbva"
+• "Transferir 500 de bbva a santander"
                                                 """
                                             )
                                             continue
+
+                                        # Additional validation for transfers
+                                        if transaction_data.get("type") == "transfer":
+                                            if not transaction_data.get("from_account_id") or not transaction_data.get("to_account_id"):
+                                                logger.warning(f"Transfer validation failed - missing accounts: {message_text}")
+                                                await send_text_message(
+                                                    send_to,
+                                                    """❌ Para realizar una transferencia, necesito encontrar ambas cuentas (origen y destino).
+
+Por ejemplo:
+• "Transferir 500 de bbva a santander"
+• "Pasar 1000 de efectivo a tarjeta de crédito"
+
+Asegúrate de mencionar ambas cuentas y que estén registradas en tu perfil."""
+                                                )
+                                                continue
+                                            
+                                            if transaction_data.get("from_account_id") == transaction_data.get("to_account_id"):
+                                                logger.warning(f"Transfer validation failed - same account: {message_text}")
+                                                await send_text_message(
+                                                    send_to,
+                                                    """❌ No puedes transferir dinero a la misma cuenta.
+
+Por favor, especifica dos cuentas diferentes:
+• "Transferir 500 de bbva a santander"
+• "Pasar 1000 de efectivo a tarjeta de crédito" """
+                                                )
+                                                continue
 
                                         # Cache transaction data for later confirmation
                                         transaction_id = transaction_data["id"]
