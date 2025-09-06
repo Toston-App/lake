@@ -211,10 +211,20 @@ Por ejemplo:
                                                 ]
                                             )
                                         elif transaction_data["type"] == "transfer":
-                                            logger.info("Transfer transaction detected")
-                                            await send_text_message(
+                                            await send_interactive(
                                                 send_to,
-                                                "Lo siento, aún no se pueden hacer transferencias por WhatsApp, pero estamos trabajando en ello 🚀"
+                                                f"""Confirma los datos de tu *transferencia* _({transaction_id})_:
+
+💸 *Monto:* {format_currency(transaction_data['amount'])}
+📅 *Fecha:* {transaction_data['date']}
+📝 *Descripción:* {transaction_data['description'] or 'No especificada'}
+💳 *Cuenta origen:* {transaction_data.get('from_account') or 'No especificada'}
+💳 *Cuenta destino:* {transaction_data.get('to_account') or 'No especificada'}
+                                                """,
+                                                [
+                                                    {"title": "❌ Cancelar", "id": f"cancel_{transaction_id}"},
+                                                    {"title": "✅ Confirmar", "id": f"confirm_{transaction_id}"},
+                                                ]
                                             )
 
                                     except ValueError as e:
@@ -293,6 +303,31 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     send_to,
                                                     "✅ ¡Ingreso registrado con éxito!"
                                                 )
+
+                                            elif transaction_data["type"] == "transfer":
+                                                # Create transfer
+                                                transfer_in = schemas.TransferCreate(
+                                                    amount=transaction_data["amount"],
+                                                    date=transaction_data["date"],
+                                                    from_acc=transaction_data.get("from_account_id"),
+                                                    to_acc=transaction_data.get("to_account_id"),
+                                                    description=transaction_data.get("description") or "Added via WhatsApp",
+                                                )
+
+                                                transfer = await crud.transfer.create_with_owner(
+                                                    db=db, obj_in=transfer_in, owner_id=user_id
+                                                )
+
+                                                if transfer is None:
+                                                    await send_text_message(
+                                                        send_to,
+                                                        "❌ No se pudo crear la transferencia. Verifica que las cuentas sean válidas."
+                                                    )
+                                                else:
+                                                    await send_text_message(
+                                                        send_to,
+                                                        "✅ ¡Transferencia registrada con éxito!"
+                                                    )
 
                                             # Remove from cache after processing
                                             await delete_transaction(transaction_id)
