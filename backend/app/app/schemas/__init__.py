@@ -7,6 +7,7 @@ from .income import Income, IncomeCreate, IncomeInDB, IncomeUpdate, DeletionResp
 from .expense import Expense, ExpenseCreate, ExpenseInDB, ExpenseUpdate, DeletionResponse, BulkDeletionResponse
 from .place import Place, PlaceCreate, PlaceInDB, PlaceUpdate, DeletionResponse
 from .item import Item, ItemCreate, ItemInDB, ItemUpdate, DeletionResponse
+from .goal import Goal, GoalCreate, GoalInDB, GoalUpdate, DeletionResponse
 from .msg import Msg
 from .token import Token, TokenPayload, TokenPayloadUuid
 from .user import User, UserCreate, UserCreateUuid, UserInDB, UserUpdate

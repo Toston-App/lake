@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .income import Income  # noqa: F401
     from .transfer import Transfer  # noqa: F401
     from .user import User  # noqa: F401
+    from .goal import Goal  # noqa: F401
 
 
 class AccountType(str, enum.Enum):
@@ -88,3 +89,4 @@ class Account(Base):
     )
     import_id: int = Column(Integer, ForeignKey("import.id"))
     import_source = relationship("Import", back_populates="accounts")
+    goals: list["Goal"] = relationship("Goal", back_populates="linked_account")

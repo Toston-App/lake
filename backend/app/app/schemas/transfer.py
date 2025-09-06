@@ -11,6 +11,7 @@ class TransferBase(BaseModel):
     date: Optional[date]
     from_acc: Optional[int] = None
     to_acc: Optional[int] = None
+    goal_id: Optional[int] = None
 
     # Fix the amount to 2 decimal places
     @field_validator('amount')

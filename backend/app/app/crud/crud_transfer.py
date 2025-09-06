@@ -47,6 +47,17 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
         if update_to is None:
             return None
 
+        # Update goal progress if goal_id is provided
+        if obj_in_data.get("goal_id"):
+            goal = await crud.goal.get(db=db, id=obj_in_data["goal_id"])
+            if goal and goal.owner_id == owner_id:
+                # For transfers, we consider them as income towards the goal
+                await crud.goal.update_goal_amount(
+                    db=db, goal_id=obj_in_data["goal_id"], amount=obj_in_data["amount"], is_income=True
+                )
+            else:
+                obj_in_data["goal_id"] = None
+
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
         await db.commit()
