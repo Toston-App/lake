@@ -87,7 +87,7 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
             goal = await crud.goal.get(db=db, id=obj_in_data["goal_id"])
             if goal and goal.owner_id == owner_id:
                 await crud.goal.update_goal_amount(
-                    db=db, goal_id=obj_in_data["goal_id"], amount=obj_in_data["amount"], is_income=False
+                    db=db, goal_id=obj_in_data["goal_id"], amount=obj_in_data["amount"], is_positive=False
                 )
             else:
                 obj_in_data["goal_id"] = None

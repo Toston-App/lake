@@ -13,7 +13,6 @@ class IncomeBase(BaseModel):
     subcategory_id: Optional[int] = None
     place_id: Optional[int] = None
     made_from: Optional[str] = "Web"
-    goal_id: Optional[int] = None
 
     # Fix the amount to 2 decimal places
     @field_validator('amount')

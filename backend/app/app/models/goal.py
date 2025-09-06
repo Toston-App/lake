@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from .account import Account  # noqa: F401
     from .user import User  # noqa: F401
     from .expense import Expense  # noqa: F401
-    from .income import Income  # noqa: F401
     from .transfer import Transfer  # noqa: F401
 
 
@@ -43,5 +42,4 @@ class Goal(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     expenses: list["Expense"] = relationship("Expense", back_populates="goal")
-    incomes: list["Income"] = relationship("Income", back_populates="goal")
     transfers: list["Transfer"] = relationship("Transfer", back_populates="goal")

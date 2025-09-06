@@ -51,9 +51,9 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
         if obj_in_data.get("goal_id"):
             goal = await crud.goal.get(db=db, id=obj_in_data["goal_id"])
             if goal and goal.owner_id == owner_id:
-                # For transfers, we consider them as income towards the goal
+                # For transfers, we consider them as positive contributions towards the goal
                 await crud.goal.update_goal_amount(
-                    db=db, goal_id=obj_in_data["goal_id"], amount=obj_in_data["amount"], is_income=True
+                    db=db, goal_id=obj_in_data["goal_id"], amount=obj_in_data["amount"], is_positive=True
                 )
             else:
                 obj_in_data["goal_id"] = None

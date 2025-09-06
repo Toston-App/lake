@@ -91,14 +91,14 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
         return None
 
     async def update_goal_amount(
-        self, db: AsyncSession, *, goal_id: int, amount: float, is_income: bool = True
+        self, db: AsyncSession, *, goal_id: int, amount: float, is_positive: bool = True
     ) -> Optional[Goal]:
         goal = await self.get(db=db, id=goal_id)
         if not goal:
             return None
         
-        # Update current amount (add for income, subtract for expenses)
-        if is_income:
+        # Update current amount (add for transfers, subtract for expenses)
+        if is_positive:
             goal.current_amount += amount
         else:
             goal.current_amount = max(0, goal.current_amount - amount)
