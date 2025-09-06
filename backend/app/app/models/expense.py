@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from .place import Place  # noqa: F401
     from .subcategory import Subcategory  # noqa: F401
     from .user import User  # noqa: F401
-    from .goal import Goal  # noqa: F401
 
 
 class Expense(Base):
@@ -34,5 +33,3 @@ class Expense(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     import_id: int = Column(Integer, ForeignKey("import.id"))
     made_from: str = Column(String, default="Web") # Web, WhatsApp, OCR
-    goal_id: int = Column(Integer, ForeignKey("goal.id"), nullable=True)
-    goal: "Goal" = relationship("Goal", back_populates="expenses")

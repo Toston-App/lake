@@ -97,7 +97,8 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
         if not goal:
             return None
         
-        # Update current amount (add for transfers, subtract for expenses)
+        # Update current amount (add for incomes and transfers)
+        # Only positive updates are used now, but keeping parameter for flexibility
         if is_positive:
             goal.current_amount += amount
         else:
