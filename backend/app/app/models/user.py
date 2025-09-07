@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .account import Account  # noqa: F401
     from .category import Category  # noqa: F401
     from .expense import Expense  # noqa: F401
+    from .goal import Goal  # noqa: F401
     from .imports import Import  # noqa: F401
     from .income import Income  # noqa: F401
     from .item import Item  # noqa: F401
@@ -64,4 +65,7 @@ class User(Base):
     )
     feedbacks: list["Feedback"] = relationship(
         "Feedback", back_populates="owner", cascade="all, delete-orphan"
+    )
+    goals: list["Goal"] = relationship(
+        "Goal", back_populates="owner", cascade="all, delete-orphan"
     )
