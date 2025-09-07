@@ -185,12 +185,21 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                     ]
                 )
             elif transaction_data["type"] == "transfer":
-                logger.info("Transfer transaction detected")
                 await stop_typing(chat_id=chat_id)
-                await react_to_message(message_id=message_id, emoji="😥")
-                await send_message(
+                await send_poll(
                     chat_id=chat_id,
-                    text="Lo siento, aún no se pueden hacer transferencias por WhatsApp, pero estamos trabajando en ello 🚀"
+                    text=f"""Confirma los datos de tu *transferencia* _({transaction_id})_:
+
+    💸 *Monto:* {format_currency(transaction_data['amount'])}
+    📅 *Fecha:* {transaction_data['date']}
+    📝 *Descripción:* {transaction_data['description'] or 'No especificada'}
+    💳 *Cuenta origen:* {transaction_data.get('from_account') or 'No especificada'}
+    💳 *Cuenta destino:* {transaction_data.get('to_account') or 'No especificada'}
+                    """,
+                    options=[
+                        f"✅ Confirmar ({transaction_id})",
+                        f"❌ Cancelar ({transaction_id})",
+                    ]
                 )
 
         except ValueError as e:
@@ -280,6 +289,35 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                         chat_id=chat_id,
                         text=f"✅ ¡Ingreso registrado con éxito! _({transaction_data['id']})_"
                     )
+
+                elif transaction_data["type"] == "transfer":
+                    # Create transfer
+                    transfer_in = schemas.TransferCreate(
+                        amount=transaction_data["amount"],
+                        date=transaction_data["date"],
+                        from_acc=transaction_data.get("from_account_id"),
+                        to_acc=transaction_data.get("to_account_id"),
+                        description=transaction_data.get("description") or "Added via WhatsApp",
+                    )
+
+                    transfer = await crud.transfer.create_with_owner(
+                        db=db, obj_in=transfer_in, owner_id=user_id
+                    )
+
+                    if transfer is None:
+                        await stop_typing(chat_id=chat_id)
+                        await react_to_message(message_id=transaction_data["message_to_react"], emoji="❌")
+                        await send_message(
+                            chat_id=chat_id,
+                            text="❌ No se pudo crear la transferencia. Verifica que las cuentas sean válidas."
+                        )
+                    else:
+                        await stop_typing(chat_id=chat_id)
+                        await react_to_message(message_id=transaction_data["message_to_react"], emoji="✅")
+                        await send_message(
+                            chat_id=chat_id,
+                            text=f"✅ ¡Transferencia registrada con éxito! _({transaction_data['id']})_"
+                        )
 
                 # Remove from cache after processing
                 await delete_transaction(transaction_id)

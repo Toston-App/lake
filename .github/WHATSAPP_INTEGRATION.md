@@ -2,7 +2,10 @@
 
 ## Overview
 
-The WhatsApp integration allows users to send transaction information via WhatsApp messages. This makes it easy to record expenses, incomes, and transfers (soon) on the go.
+The WhatsApp integration allows users to send transaction information via WhatsApp messages. This makes it easy to record expenses, incomes, and transfers on the go.
+
+> [!IMPORTANT]
+> Waha implementation is not fully complete. Transfers are not fully supported yet or code may be different to WhatsApp API.
 
 ## Setup Requirements
 
@@ -75,7 +78,7 @@ To set up the development webhook, follow these steps:
    ```
 2. Run the following command:
    ```
-   cloudflared tunnel --url http://localhost:9000
+   cloudflared tunnel --url http://localhost:8888
    ```
 3. Use the generated URL as your webhook URL in the Meta for Developers dashboard
 

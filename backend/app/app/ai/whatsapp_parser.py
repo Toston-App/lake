@@ -43,6 +43,8 @@ class WhatsAppParser:
         - place: Match the transaction location to the most appropriate place, using the provided list: {places}. Return the id and name ONLY if there's a clear match in the provided list, otherwise return null.
         - description: Brief description in Spanish of what the transaction was for.
         - account: Identify the payment method or account STRICTLY from the provided list: {accounts}. Only return the id and name if there's an EXACT or VERY CLOSE match (like "bbva" matching "bbva débito"). If the account mentioned is not in the provided list (like "santander" when santander isn't in the list), return null.
+        - from_account: For transfers, identify the source account from the provided list: {accounts}. Only return the id and name if there's an EXACT or VERY CLOSE match.
+        - to_account: For transfers, identify the destination account from the provided list: {accounts}. Only return the id and name if there's an EXACT or VERY CLOSE match.
         - id: Short (max 10 chars) unique identifier for the transaction with text divided by dashes
 
         Examples of incoming messages:
@@ -50,6 +52,8 @@ class WhatsAppParser:
         - "154.04 en al super despensa con bbva"
         - "ingreso 1800 nomina"
         - "cuenta nu 249 autozone"
+        - "transferir 500 de bbva a santander"
+        - "pasar 1000 de efectivo a tarjeta de credito"
 
         Do not attempt fuzzy matching for accounts or places. Only return a match if you are highly confident it's the correct one from the provided lists.
 
@@ -151,6 +155,15 @@ class WhatsAppParser:
         place_id = place.get("id") if isinstance(place, dict) else None
         place_name = place.get("name") if isinstance(place, dict) else None
 
+        # Extract from_account and to_account for transfers
+        from_account = ai_result.get("from_account", {})
+        from_account_id = from_account.get("id") if isinstance(from_account, dict) else None
+        from_account_name = from_account.get("name") if isinstance(from_account, dict) else None
+
+        to_account = ai_result.get("to_account", {})
+        to_account_id = to_account.get("id") if isinstance(to_account, dict) else None
+        to_account_name = to_account.get("name") if isinstance(to_account, dict) else None
+
         # Build the transaction object
         transaction = {
             "id": f"{tx_id}-{secrets.token_urlsafe(2)}",
@@ -165,6 +178,10 @@ class WhatsAppParser:
             "description": ai_result.get("description"),
             "account": account_name,
             "account_id": account_id,
+            "from_account": from_account_name,
+            "from_account_id": from_account_id,
+            "to_account": to_account_name,
+            "to_account_id": to_account_id,
         }
 
         # Handle date conversion
