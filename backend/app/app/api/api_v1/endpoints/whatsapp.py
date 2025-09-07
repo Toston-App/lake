@@ -146,6 +146,7 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                         # Check if parsing returned empty data
                                         if not transaction_data or "amount" not in transaction_data or transaction_data["amount"] <= 0:
                                             logger.warning(f"Failed to parse message: {message_text}")
+                                            await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="😵‍💫")
                                             await send_text_message(
                                                 send_to,
                                                 """❌ No pude entender tu mensaje. Por favor, intenta ser más específico.
@@ -154,39 +155,13 @@ Por ejemplo:
 • "Gasté 200 pesos en restaurante ayer"
 • "Ingreso de 1500 por venta"
 • "350 pesos en gasolina con tarjeta bbva"
-• "Transferir 500 de bbva a santander"
+• "Transferí 500 de bbva a santander"
                                                 """
                                             )
                                             continue
 
-                                        # Additional validation for transfers
-                                        if transaction_data.get("type") == "transfer":
-                                            if not transaction_data.get("from_account_id") or not transaction_data.get("to_account_id"):
-                                                logger.warning(f"Transfer validation failed - missing accounts: {message_text}")
-                                                await send_text_message(
-                                                    send_to,
-                                                    """❌ Para realizar una transferencia, necesito encontrar ambas cuentas (origen y destino).
-
-Por ejemplo:
-• "Transferir 500 de bbva a santander"
-• "Pasar 1000 de efectivo a tarjeta de crédito"
-
-Asegúrate de mencionar ambas cuentas y que estén registradas en tu perfil."""
-                                                )
-                                                continue
-                                            
-                                            if transaction_data.get("from_account_id") == transaction_data.get("to_account_id"):
-                                                logger.warning(f"Transfer validation failed - same account: {message_text}")
-                                                await send_text_message(
-                                                    send_to,
-                                                    """❌ No puedes transferir dinero a la misma cuenta.
-
-Por favor, especifica dos cuentas diferentes:
-• "Transferir 500 de bbva a santander"
-• "Pasar 1000 de efectivo a tarjeta de crédito" """
-                                                )
-                                                continue
-
+                                        # Save message id to react later
+                                        transaction_data["message_to_react"] = message_obj["id"]
                                         # Cache transaction data for later confirmation
                                         transaction_id = transaction_data["id"]
 
@@ -198,6 +173,7 @@ Por favor, especifica dos cuentas diferentes:
 
                                         if not store_success:
                                             logger.error(f"Failed to store transaction {transaction_id}. Check redis logs")
+                                            await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
                                             await send_text_message(
                                                 send_to,
                                                 "❌ Ocurrió un error al procesar tu mensaje. Por favor, intenta de nuevo."
@@ -240,15 +216,43 @@ Por favor, especifica dos cuentas diferentes:
                                                 ]
                                             )
                                         elif transaction_data["type"] == "transfer":
+                                            if not transaction_data.get("from_account_id") or not transaction_data.get("to_account_id"):
+                                                logger.warning(f"Transfer validation failed - missing accounts: {message_text}")
+                                                await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
+                                                await send_text_message(
+                                                    send_to,
+                                                    """❌ Para realizar una transferencia, necesitas escribir la cuenta de destino y la cuenta de origen.
+
+Por ejemplo:
+    • "Transferir 500 de bbva a santander"
+    • "Pasar 1000 de efectivo a tarjeta de crédito"
+
+Asegúrate de mencionar ambas cuentas y que estén registradas en tu perfil."""
+                                                )
+                                                continue
+
+                                            if transaction_data.get("from_account_id") == transaction_data.get("to_account_id"):
+                                                logger.warning(f"Transfer validation failed - same account: {message_text}")
+                                                await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
+                                                await send_text_message(
+                                                    send_to,
+                                                    """❌ No puedes transferir dinero a la misma cuenta.
+
+Por favor, especifica dos cuentas diferentes:
+    • "Transferir 500 de bbva a santander"
+    • "Pasar 1000 de efectivo a tarjeta de crédito" """
+                                                )
+                                                continue
+
                                             await send_interactive(
                                                 send_to,
                                                 f"""Confirma los datos de tu *transferencia* _({transaction_id})_:
 
 💸 *Monto:* {format_currency(transaction_data['amount'])}
 📅 *Fecha:* {transaction_data['date']}
-📝 *Descripción:* {transaction_data['description'] or 'No especificada'}
-💳 *Cuenta origen:* {transaction_data.get('from_account') or 'No especificada'}
-💳 *Cuenta destino:* {transaction_data.get('to_account') or 'No especificada'}
+📝 *Descripción:* {transaction_data['description'] or 'Sin descripción'}
+💳 *Cuenta origen:* {transaction_data.get('from_account')}
+💳 *Cuenta destino:* {transaction_data.get('to_account')}
                                                 """,
                                                 [
                                                     {"title": "❌ Cancelar", "id": f"cancel_{transaction_id}"},
@@ -258,6 +262,7 @@ Por favor, especifica dos cuentas diferentes:
 
                                     except ValueError as e:
                                         logger.error(f"Error parsing message: {str(e)}")
+                                        await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
                                         await send_text_message(
                                             send_to,
                                             f"""❌ Ocurrió un error al procesar tu mensaje: {str(e)}
@@ -278,6 +283,7 @@ Por favor, intenta de nuevo con un formato más claro."""
                                         cached_data = await get_transaction(transaction_id)
 
                                         if not cached_data:
+                                            await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
                                             await send_text_message(
                                                 send_to,
                                                 "❌ No se encontró la transacción a confirmar. Puede que haya expirado."
@@ -287,6 +293,7 @@ Por favor, intenta de nuevo con un formato más claro."""
 
                                         transaction_data = cached_data["data"]
                                         user_id = int(cached_data["user_id"])
+                                        message_to_react = transaction_data["message_to_react"]
 
                                         # Create transaction based on type
                                         try:
@@ -303,14 +310,23 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     made_from="WhatsApp"
                                                 )
 
-                                                await crud.expense.create_with_owner(
+                                                expesne = await crud.expense.create_with_owner(
                                                     db=db, obj_in=expense_in, owner_id=user_id
                                                 )
 
-                                                await send_text_message(
-                                                    send_to,
-                                                    "✅ ¡Gasto registrado con éxito!"
-                                                )
+                                                if expesne is None:
+                                                    logger.error(f"Failed to create expense: {transaction_data}")
+                                                    await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="❌")
+                                                    await send_text_message(
+                                                        send_to,
+                                                        "❌ No se pudo crear el gasto. Intenta de nuevo."
+                                                    )
+                                                else:
+                                                    await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="✅")
+                                                    await send_text_message(
+                                                        send_to,
+                                                        "✅ ¡Gasto registrado con éxito!"
+                                                    )
 
                                             elif transaction_data["type"] == "income":
                                                 # Create income
@@ -324,14 +340,23 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     made_from="WhatsApp"
                                                 )
 
-                                                await crud.income.create_with_owner(
+                                                income = await crud.income.create_with_owner(
                                                     db=db, obj_in=income_in, owner_id=user_id
                                                 )
 
-                                                await send_text_message(
-                                                    send_to,
-                                                    "✅ ¡Ingreso registrado con éxito!"
-                                                )
+                                                if income is None:
+                                                    logger.error(f"Failed to create income: {transaction_data}")
+                                                    await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="❌")
+                                                    await send_text_message(
+                                                        send_to,
+                                                        "❌ No se pudo crear el ingreso. Intenta de nuevo."
+                                                    )
+                                                else:
+                                                    await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="✅")
+                                                    await send_text_message(
+                                                        send_to,
+                                                        "✅ ¡Ingreso registrado con éxito!"
+                                                    )
 
                                             elif transaction_data["type"] == "transfer":
                                                 # Create transfer
@@ -348,11 +373,14 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                 )
 
                                                 if transfer is None:
+                                                    logger.error(f"Failed to create transfer: {transaction_data}")
+                                                    await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="❌")
                                                     await send_text_message(
                                                         send_to,
-                                                        "❌ No se pudo crear la transferencia. Verifica que las cuentas sean válidas."
+                                                        "❌ No se pudo crear la transferencia. Intenta de nuevo."
                                                     )
                                                 else:
+                                                    await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="✅")
                                                     await send_text_message(
                                                         send_to,
                                                         "✅ ¡Transferencia registrada con éxito!"
@@ -375,6 +403,7 @@ Por favor, intenta de nuevo con un formato más claro."""
                                         # Remove from cache if exists
                                         await delete_transaction(transaction_id)
 
+                                        await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
                                         await send_text_message(
                                             send_to,
                                             "❌ Transacción cancelada. No se ha registrado nada."
