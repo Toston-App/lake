@@ -26,7 +26,6 @@ dependencies = [
     "sqlalchemy<2.0.0,>=1.4.40",
     "python-jose[cryptography]<4.0.0,>=3.3.0",
     "asyncpg<1.0.0,>=0.27.0",
-    "pytest-asyncio<1.0.0,>=0.20.3",
     "httpx>=0.23.1,<1.0.0",
     "faker<20.0.0,>=19.3.1",
     "fuzzywuzzy>=0.18.0,<1.0.0",
@@ -45,12 +44,10 @@ description = ""
 
 [tool.uv]
 dev-dependencies = [
-    "pytest<8.0.0,>=7.4.3",
     "mypy<2.0.0,>=1.8.0",
     "ruff<1.0.0,>=0.2.2",
     "pre-commit<4.0.0,>=3.6.2",
     "types-passlib<2.0.0.0,>=1.7.7.20240106",
-    "coverage<8.0.0,>=7.4.3",
 ]
 
 [build-system]
