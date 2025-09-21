@@ -117,7 +117,7 @@ async def update_goal(
     )
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
-    
+
     goal = await crud.goal.update_with_owner(
         db=db, db_obj=goal, obj_in=goal_in, owner_id=current_user.id
     )

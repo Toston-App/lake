@@ -18,13 +18,31 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
         self, db: AsyncSession, *, obj_in: GoalCreate, owner_id: int
     ) -> Goal:
         obj_in_data = jsonable_encoder(obj_in)
-        
-        # Validate linked account ownership if provided
-        if obj_in_data.get("linked_account_id"):
-            account = await crud.account.get(db=db, id=obj_in_data["linked_account_id"])
-            if not account or account.owner_id != owner_id:
+
+        deadline = obj_in_data["deadline"]
+        if deadline:
+            try:
+                obj_in_data["deadline"] = datetime.strptime(deadline, "%Y-%m-%d").date()
+            except:
+                obj_in_data["deadline"] = None
+
+        start_date = obj_in_data["start_date"]
+        if start_date:
+            try:
+                obj_in_data["start_date"] = datetime.strptime(start_date, "%Y-%m-%d").date()
+            except:
+                obj_in_data["start_date"] = None
+
+        # Validate linked account ownership if provided (treat 0 / falsy as None)
+        if "linked_account_id" in obj_in_data:
+            raw_id = obj_in_data.get("linked_account_id")
+            if not raw_id:  # catches None, 0, False
                 obj_in_data["linked_account_id"] = None
-        
+            else:
+                account = await crud.account.get(db=db, id=raw_id)
+                if not account or account.owner_id != owner_id:
+                    obj_in_data["linked_account_id"] = None
+
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
         await db.commit()
@@ -99,25 +117,25 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
         goal = await self.get(db=db, id=goal_id)
         if not goal:
             return None
-        
+
         # Update current amount (add for incomes and transfers)
         # Only positive updates are used now, but keeping parameter for flexibility
         if is_positive:
             goal.current_amount += amount
         else:
             goal.current_amount = max(0, goal.current_amount - amount)
-        
+
         # Check if goal is completed
         if goal.current_amount >= goal.target_amount and goal.status == GoalStatus.ACTIVE:
             goal.status = GoalStatus.COMPLETED
             goal.completed_at = datetime.utcnow()
-        
+
         # Check if goal is overdue
         if goal.deadline and date.today() > goal.deadline and goal.status == GoalStatus.ACTIVE:
             goal.status = GoalStatus.OVERDUE
-        
+
         goal.updated_at = datetime.utcnow()
-        
+
         db.add(goal)
         await db.commit()
         await db.refresh(goal)
@@ -145,16 +163,16 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
             )
         )
         goals = result.scalars().all()
-        
+
         # Update status for overdue goals
         for goal in goals:
             goal.status = GoalStatus.OVERDUE
             goal.updated_at = datetime.utcnow()
             db.add(goal)
-        
+
         if goals:
             await db.commit()
-        
+
         return goals
 
     async def get_goal_progress_stats(
@@ -170,7 +188,7 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
             .filter(Goal.owner_id == owner_id)
             .group_by(Goal.status)
         )
-        
+
         stats = {}
         for row in result:
             stats[row.status] = {
@@ -178,7 +196,7 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
                 'total_current_amount': row.total_current or 0,
                 'total_target_amount': row.total_target or 0
             }
-        
+
         return stats
 
     def _update_goal_status(self, goal: Goal) -> None:

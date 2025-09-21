@@ -23,19 +23,37 @@ class GoalBase(BaseModel):
     status: Optional[GoalStatus] = GoalStatus.ACTIVE
     linked_account_id: Optional[int] = None
 
+    # Coerce datetimes / ISO strings with time to plain dates
+    @field_validator('start_date', 'deadline', mode='before')
+    @classmethod
+    def coerce_datetime_to_date(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, date) and not isinstance(v, datetime):
+            return v
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, str):
+            txt = v.strip()
+            # Remove Z timezone marker for fromisoformat compatibility
+            if txt.endswith('Z'):
+                txt = txt[:-1]
+            try:
+                if 'T' in txt:
+                    # Has time component -> parse as datetime then drop time
+                    return datetime.fromisoformat(txt).date()
+                # Pure date string
+                return date.fromisoformat(txt)
+            except ValueError:
+                raise ValueError('Invalid date/datetime format for date field')
+        raise ValueError('Unsupported type for date field')
+
     # Fix amounts to 2 decimal places
     @field_validator('target_amount', 'current_amount')
     @classmethod
     def round_amounts(cls, v: float) -> float:
         if v is not None:
             return round(v, 2)
-        return v
-
-    # Validate that amounts are non-negative
-    @validator("target_amount", "current_amount", pre=True, always=True)
-    def amounts_must_be_non_negative(cls, v):
-        if v is not None and v < 0:
-            raise ValueError("Amounts must be non-negative")
         return v
 
     # Validate that target_amount is positive
