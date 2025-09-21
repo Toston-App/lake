@@ -56,23 +56,26 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
     ) -> Goal:
         if db_obj.owner_id != owner_id:
             return None
-        
+
         obj_in_data = jsonable_encoder(obj_in)
-        
+
         # Validate linked account ownership if being updated
         if obj_in_data.get("linked_account_id"):
             account = await crud.account.get(db=db, id=obj_in_data["linked_account_id"])
             if not account or account.owner_id != owner_id:
                 obj_in_data["linked_account_id"] = None
-        
+
         # Update the object
         for field, value in obj_in_data.items():
             if value is not None:
                 setattr(db_obj, field, value)
-        
+
+        # Check and update status based on changes
+        self._update_goal_status(db_obj)
+
         # Set updated_at timestamp
         db_obj.updated_at = datetime.utcnow()
-        
+
         db.add(db_obj)
         await db.commit()
         await db.refresh(db_obj)
@@ -177,6 +180,52 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
             }
         
         return stats
+
+    def _update_goal_status(self, goal: Goal) -> None:
+        """
+        Update goal status based on current state.
+        This method checks various conditions and updates the status accordingly.
+        """
+        current_status = goal.status
+        today = date.today()
+
+        # Skip status update if goal is already closed
+        if current_status == GoalStatus.CLOSED:
+            return
+
+        # Check if goal should be marked as completed
+        if (goal.current_amount >= goal.target_amount and
+            current_status in [GoalStatus.ACTIVE, GoalStatus.OVERDUE]):
+            goal.status = GoalStatus.COMPLETED
+            goal.completed_at = datetime.utcnow()
+            return
+
+        # Check if goal should be marked as overdue
+        if (goal.deadline and
+            today > goal.deadline and
+            current_status == GoalStatus.ACTIVE and
+            goal.current_amount < goal.target_amount):
+            goal.status = GoalStatus.OVERDUE
+            return
+
+        # Check if goal should be reactivated (was overdue but deadline extended)
+        if (current_status == GoalStatus.OVERDUE and
+            goal.deadline and
+            today <= goal.deadline and
+            goal.current_amount < goal.target_amount):
+            goal.status = GoalStatus.ACTIVE
+            return
+
+        # Check if completed goal should be reactivated (target amount increased)
+        if (current_status == GoalStatus.COMPLETED and
+            goal.current_amount < goal.target_amount):
+            goal.status = GoalStatus.ACTIVE
+            goal.completed_at = None
+
+            # Check if it should actually be overdue
+            if goal.deadline and today > goal.deadline:
+                goal.status = GoalStatus.OVERDUE
+            return
 
 
 goal = CRUDGoal(Goal)
