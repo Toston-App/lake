@@ -1,6 +1,4 @@
-import calendar
-from datetime import date as Date
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -44,82 +42,7 @@ async def read_incomes(
     """
     Retrieve incomes filtered by type.
     """
-    start_date: Date | None = None
-    end_date: Date | None = None
-
-    if date_filter_type == DateFilterType.date:
-        try:
-            start_date = datetime.strptime(date, "%Y-%m-%d").date()
-            end_date = start_date
-        except ValueError:
-            raise HTTPException(
-                status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
-            )
-
-    elif date_filter_type == DateFilterType.week:
-        try:
-            start_date = datetime.strptime(date, "%Y-%m-%d").date()
-            end_date = start_date + timedelta(days=7)
-        except ValueError:
-            raise HTTPException(
-                status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
-            )
-
-    elif date_filter_type == DateFilterType.month:
-        try:
-            start_date = datetime.strptime(date, "%Y-%m").date()
-            _, num_days = calendar.monthrange(start_date.year, start_date.month)
-            end_date = start_date + timedelta(days=num_days - 1)
-        except ValueError:
-            raise HTTPException(
-                status_code=400, detail="Date must be in the format YYYY-MM"
-            )
-
-    elif date_filter_type == DateFilterType.quarter:
-        try:
-            year_str, quarter_str = date.split("-")
-            quarterNum = int(quarter_str.replace("Q", ""))
-            year = int(year_str)
-
-            if quarterNum < 1 or quarterNum > 4:
-                raise ValueError("Quarter must be between 1 and 4")
-
-            start_month = (quarterNum - 1) * 3 + 1
-            end_month = quarterNum * 3
-            start_date = Date(year, start_month, 1)
-            _, end_day = calendar.monthrange(year, end_month)
-            end_date = Date(year, end_month, end_day)
-
-        except (ValueError, IndexError):
-            raise HTTPException(
-                status_code=400, detail="Date must be in the format YYYY-QX"
-            )
-
-    elif date_filter_type == DateFilterType.year:
-        try:
-            year = int(date)
-            start_date = Date(year, 1, 1)
-            end_date = Date(year, 12, 31)
-        except (ValueError, IndexError):
-            raise HTTPException(
-                status_code=400, detail="Date must be in the format YYYY"
-            )
-
-    elif date_filter_type == DateFilterType.range:
-        try:
-            start_date_str, end_date_str = date.split(":")
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Date range must be in the format YYYY-MM-DD:YYYY-MM-DD",
-            )
-
-        if start_date > end_date:
-            raise HTTPException(
-                status_code=400, detail="Start date must be before end date"
-            )
+    start_date, end_date = deps.parse_date_filter(date_filter_type, date)
 
     if start_date and end_date:
         incomes = await crud.income.get_multi_by_date(

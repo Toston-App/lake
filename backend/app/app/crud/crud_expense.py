@@ -82,7 +82,6 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
             db=db, user_id=owner_id, is_Expense=True, amount=obj_in_data["amount"]
         )
 
-
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
         await db.commit()
