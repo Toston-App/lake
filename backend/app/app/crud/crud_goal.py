@@ -199,6 +199,48 @@ class CRUDGoal(CRUDBase[Goal, GoalCreate, GoalUpdate]):
 
         return stats
 
+    async def recalculate_goal_progress(
+        self, db: AsyncSession, *, goal_id: int
+    ) -> Optional[Goal]:
+        """
+        Recalculate goal progress by summing all linked transactions.
+        This should be called when transactions are modified or deleted.
+        """
+        from app.models.income import Income
+        from app.models.transfer import Transfer
+
+        goal = await self.get(db=db, id=goal_id)
+        if not goal:
+            return None
+
+        # Calculate total from incomes linked to this goal
+        income_result = await db.execute(
+            select(func.coalesce(func.sum(Income.amount), 0))
+            .filter(Income.goal_id == goal_id)
+        )
+        total_income = income_result.scalar() or 0
+
+        # Calculate total from transfers linked to this goal
+        transfer_result = await db.execute(
+            select(func.coalesce(func.sum(Transfer.amount), 0))
+            .filter(Transfer.goal_id == goal_id)
+        )
+        total_transfer = transfer_result.scalar() or 0
+
+        # Update goal current amount
+        goal.current_amount = total_income + total_transfer
+
+        # Update status based on new amount
+        self._update_goal_status(goal)
+
+        # Set updated_at timestamp
+        goal.updated_at = datetime.utcnow()
+
+        db.add(goal)
+        await db.commit()
+        await db.refresh(goal)
+        return goal
+
     def _update_goal_status(self, goal: Goal) -> None:
         """
         Update goal status based on current state.
