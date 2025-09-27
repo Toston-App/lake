@@ -9,6 +9,7 @@ from pydantic.networks import EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
+from app.schemas.account import Account as AccountSchema
 from app.api import deps
 from app.core import security
 from app.core.config import settings
@@ -286,3 +287,53 @@ async def delete_user(
 
     user = await crud.user.remove(db=db, id=id)
     return user
+
+
+@router.put("/me/default-account", response_model=AccountSchema)
+async def set_default_account(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    account_id: int = Body(...),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Set the default account for WhatsApp transactions.
+    """
+    try:
+        await crud.user.set_default_account(db, user_id=current_user.id, account_id=account_id)
+        # Return the account details
+        account = await crud.account.get_by_id(db, owner_id=current_user.id, id=account_id)
+        return account
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/me/default-account", response_model=AccountSchema)
+async def get_default_account(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Get the default account for WhatsApp transactions.
+    """
+    account = await crud.user.get_default_account(db, user_id=current_user.id)
+    if not account:
+        raise HTTPException(status_code=404, detail="No default account set")
+    return account
+
+
+@router.delete("/me/default-account", response_model=bool)
+async def clear_default_account(
+    *,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Clear the default account for WhatsApp transactions.
+    """
+    try:
+        await crud.user.clear_default_account(db, user_id=current_user.id)
+        return True
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

@@ -6,6 +6,7 @@ from typing import Any, Optional
 from openai import AsyncOpenAI, RateLimitError
 from pydantic import BaseModel
 
+from app.schemas.account import Account
 from app.ai.ocr import TransactionType
 from app.utilities.logger import setup_logger
 
@@ -86,7 +87,8 @@ class WhatsAppParser:
         message: str,
         categories: list[dict[str, Any]] = None,
         places: list[dict[str, Any]] = None,
-        accounts: list[dict[str, Any]] = None
+        accounts: list[dict[str, Any]] = None,
+        default_account: Optional[Account] = None
     ) -> dict[str, Any]:
         """
         Parse WhatsApp message to extract transaction information
@@ -102,7 +104,7 @@ class WhatsAppParser:
                     logger.warning(f"AI analysis produced empty result for message: {message}")
                     return {}
 
-                transaction = self.convert_ai_result_to_transaction(ai_result)
+                transaction = self.convert_ai_result_to_transaction(ai_result, default_account)
 
                 # Validate the transaction has minimal required data
                 if not self.validate_transaction(transaction):
@@ -131,7 +133,7 @@ class WhatsAppParser:
 
         return True
 
-    def convert_ai_result_to_transaction(self, ai_result: dict) -> dict:
+    def convert_ai_result_to_transaction(self, ai_result: dict, default_account: Optional[Account] = None) -> dict:
         """Convert AI analysis result to transaction format"""
         # Generate a unique transaction ID if none provided
         tx_id = ai_result.get("id", f"tx-{secrets.token_urlsafe(4)}")
@@ -140,6 +142,11 @@ class WhatsAppParser:
         account = ai_result.get("account", {})
         account_id = account.get("id") if isinstance(account, dict) else None
         account_name = account.get("name") if isinstance(account, dict) else None
+
+        # If no account was found and we have a default account, use it
+        if not account_id and default_account:
+            account_id = default_account.id
+            account_name = default_account.name
 
         # Extract category and subcategory IDs if present
         category = ai_result.get("category", {})

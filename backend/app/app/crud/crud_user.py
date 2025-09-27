@@ -12,6 +12,7 @@ from app.core.security import get_password_hash, verify_password
 from app.crud.base import CRUDBase
 from app.models.user import User
 from app.schemas.user import UserCreate, UserCreateUuid, UserUpdate
+from app.models.account import Account
 
 
 async def add_categories_to_db(db, owner_id):
@@ -144,6 +145,43 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         user = await crud.user.update(db, db_obj=user, obj_in=user_in)
 
         return user
+
+    async def set_default_account(
+        self, db: AsyncSession, *, user_id: int, account_id: int
+    ) -> User:
+        """Set the default account for WhatsApp transactions for a user"""
+        user = await self.get(db, id=user_id)
+        if not user:
+            raise ValueError("User not found")
+
+        # Verify the account belongs to the user
+        account = await crud.account.get_by_id(db, owner_id=user_id, id=account_id)
+        if not account:
+            raise ValueError("Account not found or doesn't belong to user")
+
+        user_in = UserUpdate(default_account_id=account_id)
+        return await self.update(db, db_obj=user, obj_in=user_in)
+
+    async def get_default_account(
+        self, db: AsyncSession, *, user_id: int
+    ) -> Optional[Account]:
+        """Get the default account for WhatsApp transactions for a user"""
+        user = await self.get(db, id=user_id)
+        if not user or not user.default_account_id:
+            return None
+
+        return await crud.account.get_by_id(db, owner_id=user_id, id=user.default_account_id)
+
+    async def clear_default_account(
+        self, db: AsyncSession, *, user_id: int
+    ) -> User:
+        """Clear the default account for WhatsApp transactions for a user"""
+        user = await self.get(db, id=user_id)
+        if not user:
+            raise ValueError("User not found")
+
+        user_in = UserUpdate(default_account_id=None)
+        return await self.update(db, db_obj=user, obj_in=user_in)
 
 
 user = CRUDUser(User)

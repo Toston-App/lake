@@ -77,7 +77,7 @@ class Account(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     owner_id = Column(Integer, ForeignKey("user.id"))
-    owner: "User" = relationship("User", back_populates="accounts")
+    owner: "User" = relationship("User", back_populates="accounts", foreign_keys="[Account.owner_id]")
     expenses: list["Expense"] = relationship("Expense", back_populates="account")
     incomes: list["Income"] = relationship("Income", back_populates="account")
     transfers_in: list["Transfer"] = relationship(

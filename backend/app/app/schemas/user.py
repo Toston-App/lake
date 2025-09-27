@@ -17,6 +17,8 @@ class UserBase(BaseModel):
     balance_total: Optional[float] = 0.0
     balance_income: Optional[float] = 0.0
     balance_outcome: Optional[float] = 0.0
+    # Default account for WhatsApp transactions
+    default_account_id: Optional[int] = None
 
 
 # Properties to receive via API on creation

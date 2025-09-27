@@ -18,6 +18,7 @@ from app.utilities.simplifier import places as simplify_places
 from app.utilities.whatsapp import (
     format_currency,
     send_interactive,
+    send_interactive_list,
     send_reaction,
     send_text_message,
 )
@@ -107,17 +108,62 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                     )
                                     continue
 
+                                defaultAccountMessage = "" if user.default_account_id is not None else """💡 *Tip:* También puedes escribir "*cuenta por defecto*" para configurar una cuenta predeterminada y hacer el proceso más rápido."""
+
                                 # Handle text messages
                                 if "text" in message_obj and "body" in message_obj["text"]:
                                     message_text = message_obj["text"]["body"]
                                     logger.info(f"Text message received from {phone_number}: {message_text}")
 
-                                    # Send "processing" reaction
-                                    await send_reaction(
-                                        send_to,
-                                        message_obj["id"],
-                                        "⏳"
-                                    )
+                                    # Check if user wants to set default account
+                                    if any(keyword in message_text.lower() for keyword in ["cuenta por defecto", "cuenta predeterminada", "default account", "configurar cuenta"]):
+                                        # Fetch user accounts
+                                        accounts = await crud.account.get_multi_by_owner(db=db, owner_id=user.id)
+
+                                        if not accounts:
+                                            await send_text_message(
+                                                send_to,
+                                                """❌ No tienes cuentas registradas aún.
+
+Para agregar una cuenta:
+1️⃣ Ingresa a https://cleverbill.ing/dashboard/accounts
+2️⃣ Crea una nueva cuenta
+3️⃣ Regresa aquí y escribe "cuenta por defecto" para configurarla"""
+                                            )
+                                            continue
+
+                                        # Create sections for the interactive list
+                                        account_rows = []
+                                        for account in accounts:
+                                            account_rows.append({
+                                                "id": f"set_default_{account.id}",
+                                                "title": account.name,
+                                                "description": f"{account.type.value} • {format_currency(account.current_balance)}"
+                                            })
+
+                                        sections = [{
+                                            "title": "Tus cuentas",
+                                            "rows": account_rows
+                                        }]
+
+                                        # Get current default account
+                                        current_default = await crud.user.get_default_account(db=db, user_id=user.id)
+                                        current_text = f" (Actual: {current_default.name})" if current_default else ""
+
+                                        await send_interactive_list(
+                                            send_to,
+                                            f"""🏦 *Selecciona tu cuenta por defecto{current_text}*
+
+Esta cuenta se usará automáticamente cuando no especifiques una cuenta en tus mensajes.
+
+Por ejemplo, si escribes "gasté 200 en comida", se registrará en tu cuenta por defecto.""",
+                                            "Seleccionar cuenta",
+                                            sections
+                                        )
+                                        continue
+
+                                    # Send "processing" reaction for transaction messages
+                                    await send_reaction(send_to, message_obj["id"], "⏳")
 
                                     categories_task = crud.category.get_multi_by_owner(db=db, owner_id=user.id)
                                     places_task = crud.place.get_multi_by_owner(db=db, owner_id=user.id)
@@ -134,6 +180,14 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                         categories_task,
                                     )
 
+                                    # Find the default account from the fetched accounts
+                                    default_account = None
+                                    if user.default_account_id:
+                                        default_account = next(
+                                            (account for account in accounts if account.id == user.default_account_id),
+                                            None
+                                        )
+
                                     # Parse message to extract transaction data
                                     try:
                                         transaction_data = await whatsapp_parser.parse_message(
@@ -141,6 +195,7 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                             categories=simplify_categories(categories),
                                             places=simplify_places(places),
                                             accounts=simplify_accounts(accounts),
+                                            default_account=default_account
                                         )
 
                                         # Check if parsing returned empty data
@@ -149,13 +204,15 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                             await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="😵‍💫")
                                             await send_text_message(
                                                 send_to,
-                                                """❌ No pude entender tu mensaje. Por favor, intenta ser más específico.
+                                                f"""❌ No pude entender tu mensaje. Por favor, intenta ser más específico.
 
 Por ejemplo:
 • "Gasté 200 pesos en restaurante ayer"
 • "Ingreso de 1500 por venta"
 • "350 pesos en gasolina con tarjeta bbva"
 • "Transferí 500 de bbva a santander"
+
+{defaultAccountMessage}
                                                 """
                                             )
                                             continue
@@ -192,6 +249,8 @@ Por ejemplo:
 📍 *Lugar:* {transaction_data['place'] or 'No especificado'}
 📝 *Descripción:* {transaction_data['description'] or 'No especificada'}
 💳 *Cuenta:* {transaction_data['account'] or 'No especificada'}
+
+{defaultAccountMessage}
                                                 """,
                                                 [
                                                     {"title": "❌ Cancelar", "id": f"cancel_{transaction_id}"},
@@ -209,6 +268,8 @@ Por ejemplo:
 📍 *Lugar:* {transaction_data['place'] or 'No especificado'}
 📝 *Descripción:* {transaction_data['description'] or 'No especificada'}
 💳 *Cuenta:* {transaction_data['account'] or 'No especificada'}
+
+{defaultAccountMessage}
                                                 """,
                                                 [
                                                     {"title": "❌ Cancelar", "id": f"cancel_{transaction_id}"},
@@ -408,6 +469,39 @@ Por favor, intenta de nuevo con un formato más claro."""
                                             send_to,
                                             "❌ Transacción cancelada. No se ha registrado nada."
                                         )
+
+                                # Handle list replies  
+                                elif "list_reply" in message_obj["interactive"]:
+                                    list_data = message_obj["interactive"]["list_reply"]
+                                    selection_id = list_data.get("id", "")
+                                    
+                                    if selection_id.startswith("set_default_"):
+                                        # Extract account ID from selection
+                                        account_id = int(selection_id.replace("set_default_", ""))
+                                        
+                                        try:
+                                            # Set the default account
+                                            await crud.user.set_default_account(db=db, user_id=user.id, account_id=account_id)
+                                            
+                                            # Get the account name for confirmation
+                                            account = await crud.account.get_by_id(db=db, owner_id=user.id, id=account_id)
+                                            
+                                            await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="✅")
+                                            await send_text_message(
+                                                send_to,
+                                                f"""✅ ¡Perfecto! Tu cuenta por defecto ahora es: *{account.name}*
+
+Ahora cuando envíes mensajes como "gasté 200 en comida" sin especificar cuenta, se registrará automáticamente en esta cuenta.
+
+Si quieres usar otra cuenta específica, solo menciona su nombre: "gasté 200 en comida con mi tarjeta BBVA" """
+                                            )
+                                            
+                                        except ValueError as e:
+                                            await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
+                                            await send_text_message(
+                                                send_to,
+                                                f"❌ Error al configurar la cuenta por defecto: {str(e)}"
+                                            )
 
         return {"status": "success"}
 

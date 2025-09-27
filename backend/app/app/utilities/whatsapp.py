@@ -180,3 +180,34 @@ async def send_interactive(
     }
 
     return await send_whatsapp_message(phone_number, "interactive", message_content)
+
+async def send_interactive_list(
+    phone_number: str,
+    text: str,
+    button_text: str,
+    sections: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """
+    Send a message with interactive list
+
+    Args:
+        phone_number: Recipient's phone number
+        text: Text message content
+        button_text: Text for the list button
+        sections: List of sections containing rows
+
+    Returns:
+        Response from WhatsApp API
+    """
+    message_content = {
+        "body": {
+            "text": text
+        },
+        "type": "list",
+        "action": {
+            "button": button_text,
+            "sections": sections
+        }
+    }
+
+    return await send_whatsapp_message(phone_number, "interactive", message_content)

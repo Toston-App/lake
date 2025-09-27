@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -33,6 +33,8 @@ class User(Base):
     balance_total: float = Column(Float, default=0.0)
     balance_income: float = Column(Float, default=0.0)
     balance_outcome: float = Column(Float, default=0.0)
+    # Default account for WhatsApp transactions
+    default_account_id: int = Column(Integer, ForeignKey("account.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     items: list["Item"] = relationship(
@@ -51,7 +53,7 @@ class User(Base):
         "Transfer", back_populates="owner", cascade="all, delete-orphan"
     )
     accounts: list["Account"] = relationship(
-        "Account", back_populates="owner", cascade="all, delete-orphan"
+        "Account", back_populates="owner", cascade="all, delete-orphan", foreign_keys="[Account.owner_id]"
     )
     categories: list["Category"] = relationship(
         "Category", back_populates="owner", cascade="all, delete-orphan"
