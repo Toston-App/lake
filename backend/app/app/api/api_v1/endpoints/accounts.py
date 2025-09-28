@@ -113,7 +113,11 @@ async def delete_account(
     """
     Delete an account.
     """
-    account = await read_account(db=db, id=id, current_user=current_user)
-    account = await crud.account.remove(db=db, id=id)
+    await read_account(db=db, id=id, current_user=current_user)
+
+    # Clear any default_account_id references before deleting
+    if current_user.default_account_id == id:
+        await crud.user.clear_default_account(db=db, user_id=current_user.id)
+
+    await crud.account.remove(db=db, id=id)
     return schemas.DeletionResponse(message=f"Account {id} deleted")
-    return account
