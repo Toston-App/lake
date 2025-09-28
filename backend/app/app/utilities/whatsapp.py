@@ -1,8 +1,12 @@
 from typing import Any
+import math
 
 import httpx
 
 from app.core.config import settings
+from app.utilities.logger import setup_logger
+
+logger = setup_logger("whatsapp_utilities", "whatsapp_utilities.log")
 
 
 def format_currency(
@@ -181,33 +185,81 @@ async def send_interactive(
 
     return await send_whatsapp_message(phone_number, "interactive", message_content)
 
-async def send_interactive_list(
+async def send_paginated_list(
     phone_number: str,
-    text: str,
-    button_text: str,
-    sections: list[dict[str, Any]]
-) -> dict[str, Any]:
+    title: str,
+    items: list[dict[str, str]],
+    page: int = 1,
+    items_per_page: int = 8,
+    prefix: str = "set_default_"
+) -> None:
     """
-    Send a message with interactive list
+    Send a paginated interactive list to handle WhatsApp's 10-item limit
 
     Args:
         phone_number: Recipient's phone number
-        text: Text message content
-        button_text: Text for the list button
-        sections: List of sections containing rows
-
-    Returns:
-        Response from WhatsApp API
+        title: Title for the list message
+        items: List of items with 'id', 'title', and 'description' keys
+        page: Current page number (1-based)
+        items_per_page: Number of items per page (max 10 for WhatsApp)
+        prefix: Prefix for item IDs to identify the action type
     """
+    total_items = len(items)
+    total_pages = math.ceil(total_items / items_per_page)
+
+    # Calculate pagination bounds
+    start_idx = (page - 1) * items_per_page
+    end_idx = min(start_idx + items_per_page, total_items)
+
+    # Get items for current page
+    page_items = items[start_idx:end_idx]
+
+    # Create rows for the current page
+    account_rows = []
+    for item in page_items:
+        account_rows.append({
+            "id": item["id"],
+            "title": item["title"],
+            "description": item["description"]
+        })
+
+    # Add pagination controls if needed
+    if total_pages > 1:
+        # Add navigation options at the end
+        if page > 1:
+            account_rows.append({
+                "id": f"page_prev_{prefix}{page-1}",
+                "title": f"⬅️ Página anterior ({page-1})",
+                "description": "Ver página anterior"
+            })
+
+        if page < total_pages:
+            account_rows.append({
+                "id": f"page_next_{prefix}{page+1}",
+                "title": f"➡️ Página siguiente ({page+1})",
+                "description": "Ver página siguiente"
+            })
+
+    sections = [{
+        "title": title[:24],
+        "rows": account_rows
+    }]
+
+    # Create the message content directly to avoid circular dependency
     message_content = {
         "body": {
-            "text": text
+            "text": f"""🏦 {title}
+
+Esta cuenta se usará automáticamente cuando no especifiques una cuenta en tus mensajes.
+
+Por ejemplo, si escribes "gasté 200 en comida", se registrará en tu cuenta por defecto."""
         },
         "type": "list",
         "action": {
-            "button": button_text,
+            "button": "Seleccionar cuenta",
             "sections": sections
         }
     }
 
-    return await send_whatsapp_message(phone_number, "interactive", message_content)
+    # Send the interactive list directly
+    await send_whatsapp_message(phone_number, "interactive", message_content)

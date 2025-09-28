@@ -18,7 +18,7 @@ from app.utilities.simplifier import places as simplify_places
 from app.utilities.whatsapp import (
     format_currency,
     send_interactive,
-    send_interactive_list,
+    send_paginated_list,
     send_reaction,
     send_text_message,
 )
@@ -141,24 +141,14 @@ Para agregar una cuenta:
                                                 "description": f"{account.type.value} • {format_currency(account.current_balance)}"
                                             })
 
-                                        sections = [{
-                                            "title": "Tus cuentas",
-                                            "rows": account_rows
-                                        }]
-
                                         # Get current default account
                                         current_default = await crud.user.get_default_account(db=db, user_id=user.id)
                                         current_text = f" (Actual: {current_default.name})" if current_default else ""
 
-                                        await send_interactive_list(
+                                        await send_paginated_list(
                                             send_to,
-                                            f"""🏦 *Selecciona tu cuenta por defecto{current_text}*
-
-Esta cuenta se usará automáticamente cuando no especifiques una cuenta en tus mensajes.
-
-Por ejemplo, si escribes "gasté 200 en comida", se registrará en tu cuenta por defecto.""",
-                                            "Seleccionar cuenta",
-                                            sections
+                                            f"*Selecciona tu cuenta por defecto{current_text}*",
+                                            account_rows
                                         )
                                         continue
 
@@ -470,22 +460,22 @@ Por favor, intenta de nuevo con un formato más claro."""
                                             "❌ Transacción cancelada. No se ha registrado nada."
                                         )
 
-                                # Handle list replies  
+                                # Handle list replies
                                 elif "list_reply" in message_obj["interactive"]:
                                     list_data = message_obj["interactive"]["list_reply"]
                                     selection_id = list_data.get("id", "")
-                                    
+
                                     if selection_id.startswith("set_default_"):
                                         # Extract account ID from selection
                                         account_id = int(selection_id.replace("set_default_", ""))
-                                        
+
                                         try:
                                             # Set the default account
                                             await crud.user.set_default_account(db=db, user_id=user.id, account_id=account_id)
-                                            
+
                                             # Get the account name for confirmation
                                             account = await crud.account.get_by_id(db=db, owner_id=user.id, id=account_id)
-                                            
+
                                             await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="✅")
                                             await send_text_message(
                                                 send_to,
@@ -495,12 +485,48 @@ Ahora cuando envíes mensajes como "gasté 200 en comida" sin especificar cuenta
 
 Si quieres usar otra cuenta específica, solo menciona su nombre: "gasté 200 en comida con mi tarjeta BBVA" """
                                             )
-                                            
+
                                         except ValueError as e:
                                             await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
                                             await send_text_message(
                                                 send_to,
                                                 f"❌ Error al configurar la cuenta por defecto: {str(e)}"
+                                            )
+
+                                    elif selection_id.startswith("page_prev_") or selection_id.startswith("page_next_"):
+                                        # Handle pagination navigation
+                                        try:
+                                            if selection_id.startswith("page_prev_"):
+                                                page_info = selection_id.replace("page_prev_set_default_", "")
+                                                page = int(page_info)
+                                            else:  # page_next_
+                                                page_info = selection_id.replace("page_next_set_default_", "")
+                                                page = int(page_info)
+
+                                            # Fetch user accounts again and send the requested page
+                                            accounts = await crud.account.get_multi_by_owner(db=db, owner_id=user.id)
+
+                                            if accounts:
+                                                account_rows = []
+                                                for account in accounts:
+                                                    account_rows.append({
+                                                        "id": f"set_default_{account.id}",
+                                                        "title": account.name,
+                                                        "description": f"{account.type.value} • {format_currency(account.current_balance)}"
+                                                    })
+
+                                                await send_paginated_list(
+                                                    send_to,
+                                                    f"*Selecciona tu cuenta por defecto*",
+                                                    account_rows,
+                                                    page=page
+                                                )
+
+                                        except (ValueError, IndexError) as e:
+                                            logger.error(f"Error handling pagination: {str(e)}")
+                                            await send_text_message(
+                                                send_to,
+                                                "❌ Error al navegar. Escribe 'cuenta por defecto' para intentar de nuevo."
                                             )
 
         return {"status": "success"}
