@@ -4,9 +4,6 @@ import math
 import httpx
 
 from app.core.config import settings
-from app.utilities.logger import setup_logger
-
-logger = setup_logger("whatsapp_utilities", "whatsapp_utilities.log")
 
 
 def format_currency(
