@@ -9,6 +9,7 @@ from app.db.base_class import Base
 if TYPE_CHECKING:
     from .account import Account  # noqa: F401
     from .user import User  # noqa: F401
+    from .goal import Goal  # noqa: F401
 
 
 class Transfer(Base):
@@ -28,3 +29,5 @@ class Transfer(Base):
     owner: "User" = relationship("User", back_populates="transfers")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    goal_id: int = Column(Integer, ForeignKey("goal.id"), nullable=True)
+    goal: "Goal" = relationship("Goal", back_populates="transfers")

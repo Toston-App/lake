@@ -19,3 +19,4 @@ from .transaction import (
     Transaction,
     TransferTransaction,
 )
+from .goal import Goal, GoalCreate, GoalInDB, GoalUpdate, DeletionResponse

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .subcategory import Subcategory  # noqa: F401
     from .transfer import Transfer  # noqa: F401
     from .feedback import Feedback  # noqa: F401
+    from .goal import Goal  # noqa: F401
 
 
 class User(Base):
@@ -66,4 +67,7 @@ class User(Base):
     )
     feedbacks: list["Feedback"] = relationship(
         "Feedback", back_populates="owner", cascade="all, delete-orphan"
+    )
+    goals: list["Goal"] = relationship(
+        "Goal", back_populates="owner", cascade="all, delete-orphan"
     )

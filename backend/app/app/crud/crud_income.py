@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import Date, and_, asc, cast
@@ -80,6 +81,17 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
             db=db, user_id=owner_id, is_Expense=False, amount=obj_in_data["amount"]
         )
 
+        # Update goal progress if goal_id is provided
+        if obj_in_data.get("goal_id"):
+            goal = await crud.goal.get(db=db, id=obj_in_data["goal_id"])
+            if goal and goal.owner_id == owner_id:
+                await crud.goal.update_goal_amount(
+                    db=db, goal_id=obj_in_data["goal_id"], amount=obj_in_data["amount"], is_positive=True
+                )
+            else:
+                obj_in_data["goal_id"] = None
+
+
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
         await db.commit()
@@ -136,6 +148,208 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         result = await db.execute(query)
 
         return result.scalars().all()
+
+    async def update_with_owner(
+        self, db: AsyncSession, *, db_obj: Income, obj_in: IncomeUpdate, owner_id: int
+    ) -> Income:
+        if db_obj.owner_id != owner_id:
+            return None
+
+        old_amount = db_obj.amount
+        old_goal_id = db_obj.goal_id
+        old_account_id = db_obj.account_id
+        old_subcategory_id = db_obj.subcategory_id
+
+        obj_in_data = jsonable_encoder(obj_in)
+
+        # Convert date string to datetime object
+        if "date" in obj_in_data and obj_in_data["date"]:
+            try:
+                obj_in_data["date"] = datetime.strptime(obj_in_data["date"], "%Y-%m-%d").date()
+            except:
+                obj_in_data["date"] = None
+
+        # Update object fields
+        for field, value in obj_in_data.items():
+            if value is not None:
+                setattr(db_obj, field, value)
+
+        new_amount = db_obj.amount
+        new_goal_id = db_obj.goal_id
+        new_account_id = db_obj.account_id
+        new_subcategory_id = db_obj.subcategory_id
+
+        # Handle account balance changes
+        if old_account_id != new_account_id or old_amount != new_amount:
+            if old_account_id:
+                # Remove old amount from old account
+                await crud.account.update_by_id_and_field(
+                    db=db,
+                    owner_id=owner_id,
+                    id=old_account_id,
+                    column="total_incomes",
+                    amount=-old_amount,
+                )
+
+            if new_account_id:
+                # Add new amount to new account
+                account_update = await crud.account.update_by_id_and_field(
+                    db=db,
+                    owner_id=owner_id,
+                    id=new_account_id,
+                    column="total_incomes",
+                    amount=new_amount,
+                )
+                if account_update is None:
+                    db_obj.account_id = None
+
+        # Handle subcategory changes
+        if old_subcategory_id != new_subcategory_id or old_amount != new_amount:
+            if old_subcategory_id:
+                # Remove old amount from old subcategory
+                old_subcategory = await crud.subcategory.get(db=db, id=old_subcategory_id)
+                if old_subcategory:
+                    await db.execute(
+                        updateDb(old_subcategory.__class__)
+                        .where(old_subcategory.__class__.id == old_subcategory.id)
+                        .values(total=old_subcategory.total - old_amount)
+                        .execution_options(synchronize_session="fetch")
+                    )
+                    await db.commit()
+
+                    # Update category total
+                    if old_subcategory.category_id:
+                        category = await crud.category.get(db=db, id=old_subcategory.category_id)
+                        if category:
+                            await db.execute(
+                                updateDb(category.__class__)
+                                .where(category.__class__.id == category.id)
+                                .values(total=category.total - old_amount)
+                                .execution_options(synchronize_session="fetch")
+                            )
+                            await db.commit()
+
+            if new_subcategory_id:
+                # Add new amount to new subcategory
+                new_subcategory = await crud.subcategory.get(db=db, id=new_subcategory_id)
+                if new_subcategory and new_subcategory.owner_id == owner_id:
+                    await db.execute(
+                        updateDb(new_subcategory.__class__)
+                        .where(new_subcategory.__class__.id == new_subcategory.id)
+                        .values(total=new_subcategory.total + new_amount)
+                        .execution_options(synchronize_session="fetch")
+                    )
+                    await db.commit()
+
+                    # Update category total
+                    if new_subcategory.category_id:
+                        category = await crud.category.get(db=db, id=new_subcategory.category_id)
+                        if category:
+                            await db.execute(
+                                updateDb(category.__class__)
+                                .where(category.__class__.id == category.id)
+                                .values(total=category.total + new_amount)
+                                .execution_options(synchronize_session="fetch")
+                            )
+                            await db.commit()
+                else:
+                    db_obj.subcategory_id = None
+
+        # Handle user balance changes
+        if old_amount != new_amount:
+            balance_diff = new_amount - old_amount
+            await crud.user.update_balance(
+                db=db, user_id=owner_id, is_Expense=False, amount=balance_diff
+            )
+
+        # Handle goal updates - recalculate affected goals
+        goals_to_recalculate = set()
+        if old_goal_id:
+            goals_to_recalculate.add(old_goal_id)
+        if new_goal_id:
+            # Validate new goal ownership
+            goal = await crud.goal.get(db=db, id=new_goal_id)
+            if goal and goal.owner_id == owner_id:
+                goals_to_recalculate.add(new_goal_id)
+            else:
+                db_obj.goal_id = None
+
+        db.add(db_obj)
+        await db.commit()
+        await db.refresh(db_obj)
+
+        # Recalculate goal progress for affected goals
+        for goal_id in goals_to_recalculate:
+            await crud.goal.recalculate_goal_progress(db=db, goal_id=goal_id)
+
+        return db_obj
+
+    async def remove_with_owner(
+        self, db: AsyncSession, *, income_id: int, owner_id: int
+    ) -> Optional[Income]:
+        result = await db.execute(
+            select(self.model)
+            .filter(and_(Income.owner_id == owner_id, Income.id == income_id))
+        )
+        db_obj = result.scalars().first()
+
+        if not db_obj:
+            return None
+
+        # Store values before deletion for cleanup
+        old_amount = db_obj.amount
+        old_goal_id = db_obj.goal_id
+        old_account_id = db_obj.account_id
+        old_subcategory_id = db_obj.subcategory_id
+
+        # Update account balance
+        if old_account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                owner_id=owner_id,
+                id=old_account_id,
+                column="total_incomes",
+                amount=-old_amount,
+            )
+
+        # Update subcategory totals
+        if old_subcategory_id:
+            subcategory = await crud.subcategory.get(db=db, id=old_subcategory_id)
+            if subcategory:
+                await db.execute(
+                    updateDb(subcategory.__class__)
+                    .where(subcategory.__class__.id == subcategory.id)
+                    .values(total=subcategory.total - old_amount)
+                    .execution_options(synchronize_session="fetch")
+                )
+                await db.commit()
+
+                # Update category total
+                if subcategory.category_id:
+                    category = await crud.category.get(db=db, id=subcategory.category_id)
+                    if category:
+                        await db.execute(
+                            updateDb(category.__class__)
+                            .where(category.__class__.id == category.id)
+                            .values(total=category.total - old_amount)
+                            .execution_options(synchronize_session="fetch")
+                        )
+                        await db.commit()
+
+        # Update user balance
+        await crud.user.update_balance(
+            db=db, user_id=owner_id, is_Expense=False, amount=-old_amount
+        )
+
+        # Delete the income
+        await db.delete(db_obj)
+        await db.commit()
+
+        # Recalculate goal progress if it was linked to a goal
+        if old_goal_id:
+            await crud.goal.recalculate_goal_progress(db=db, goal_id=old_goal_id)
+
+        return db_obj
 
 
 income = CRUDIncome(Income)
