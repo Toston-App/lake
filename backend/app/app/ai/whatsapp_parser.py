@@ -40,7 +40,7 @@ class WhatsAppParser:
         - amount: Extract the numerical amount as a float
         - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({date.today()})
         - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
-        - subcategory: Match to an appropriate subcategory based on the category. Respond with the id and name of the subcategory or null if not applicable.
+        - subcategory: **CRITICAL** - The subcategory MUST belong to the selected category. Each category has a list of subcategories. You can ONLY choose a subcategory from the "subcategories" array of the selected category. If the selected category doesn't have an appropriate subcategory in its list, return null. Respond with the id and name of the subcategory or null.
         - place: Match the transaction location to the most appropriate place, using the provided list: {places}. Return the id and name ONLY if there's a clear match in the provided list, otherwise return null.
         - description: Brief description in Spanish of what the transaction was for.
         - account: Identify the payment method or account STRICTLY from the provided list: {accounts}. Only return the id and name if there's an EXACT or VERY CLOSE match (like "bbva" matching "bbva débito"). If the account mentioned is not in the provided list (like "santander" when santander isn't in the list), return null.
@@ -55,6 +55,11 @@ class WhatsAppParser:
         - "cuenta nu 249 autozone"
         - "transferir 500 de bbva a santander"
         - "pasar 1000 de efectivo a tarjeta de credito"
+
+        IMPORTANT: When selecting a subcategory, verify it exists in the selected category's subcategories array. For example:
+        - If you select category "Compras" with id 5, you can only choose subcategories that appear in categories[where id=5].subcategories
+        - If you select category "Alimentación" with id 3, you can only choose subcategories from categories[where id=3].subcategories
+        - Never mix subcategories from different categories
 
         Do not attempt fuzzy matching for accounts or places. Only return a match if you are highly confident it's the correct one from the provided lists.
 
@@ -111,6 +116,21 @@ class WhatsAppParser:
                     logger.warning(f"Parsed transaction failed validation: {transaction}")
                     return {}
 
+                # Validate subcategory belongs to category
+                if not self.validate_subcategory_belongs_to_category(
+                    transaction.get("category_id"),
+                    transaction.get("subcategory_id"),
+                    categories or []
+                ):
+                    logger.warning(
+                        f"Subcategory {transaction.get('subcategory_id')} "
+                        f"does not belong to category {transaction.get('category_id')}. "
+                        f"Removing subcategory from transaction."
+                    )
+                    # Remove the invalid subcategory but keep the transaction
+                    transaction["subcategory_id"] = None
+                    transaction["subcategory"] = None
+
                 return transaction
             else:
                 logger.error("No OpenAI client available for message parsing")
@@ -132,6 +152,39 @@ class WhatsAppParser:
             return False
 
         return True
+
+    def validate_subcategory_belongs_to_category(
+        self, category_id: int | None, subcategory_id: int | None, categories: list[dict[str, Any]]
+    ) -> bool:
+        """
+        Validate that a subcategory belongs to the specified category
+
+        Args:
+            category_id: The category ID
+            subcategory_id: The subcategory ID to validate
+            categories: List of categories with their subcategories
+
+        Returns:
+            True if valid (no subcategory, or subcategory belongs to category), False otherwise
+        """
+        # If no subcategory specified, it's valid
+        if not subcategory_id:
+            return False
+
+        # If subcategory is specified but no category, it's invalid
+        if not category_id:
+            return False
+
+        # Find the category in the list
+        category = next((cat for cat in categories if cat.get("id") == category_id), None)
+        if not category:
+            return False
+
+        # Check if subcategory exists in the category's subcategories
+        subcategories = category.get("subcategories", [])
+        subcategory_ids = [sub.get("id") for sub in subcategories]
+
+        return subcategory_id in subcategory_ids
 
     def convert_ai_result_to_transaction(self, ai_result: dict, default_account: Optional[Account] = None) -> dict:
         """Convert AI analysis result to transaction format"""
