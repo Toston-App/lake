@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import update as updateDb
+from sqlalchemy import update as updateDb, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
@@ -431,50 +431,74 @@ async def delete_expenses_bulk(
     if not valid_ids:
         raise HTTPException(status_code=404, detail="No valid expenses found")
 
-    # Update category and subcategory totals before deleting
+    # Batch update category and subcategory totals before deleting
+    category_updates = {}
+    subcategory_updates = {}
+    
     for expense in expenses_to_delete:
-        # Update category total if it exists
         if expense.category_id:
-            category = await crud.category.get(db=db, id=expense.category_id)
-
-            if category:
+            category_updates[expense.category_id] = category_updates.get(expense.category_id, 0) + expense.amount
+        if expense.subcategory_id:
+            subcategory_updates[expense.subcategory_id] = subcategory_updates.get(expense.subcategory_id, 0) + expense.amount
+    
+    # Batch fetch categories and subcategories
+    if category_updates:
+        category_results = await db.execute(
+            select(models.Category).filter(models.Category.id.in_(category_updates.keys()))
+        )
+        categories_dict = {cat.id: cat for cat in category_results.scalars().all()}
+        
+        for category_id, amount_to_subtract in category_updates.items():
+            if category_id in categories_dict:
+                category = categories_dict[category_id]
                 await db.execute(
                     updateDb(category.__class__)
                     .where(category.__class__.id == category.id)
-                    .values(total=category.total - expense.amount)
+                    .values(total=category.total - amount_to_subtract)
                     .execution_options(synchronize_session="fetch")
                 )
-                await db.commit()
-
-        # Update subcategory total if it exists
-        if expense.subcategory_id:
-            subcategory = await crud.subcategory.get(db=db, id=expense.subcategory_id)
-
-            if subcategory:
+    
+    if subcategory_updates:
+        subcategory_results = await db.execute(
+            select(models.Subcategory).filter(models.Subcategory.id.in_(subcategory_updates.keys()))
+        )
+        subcategories_dict = {sub.id: sub for sub in subcategory_results.scalars().all()}
+        
+        for subcategory_id, amount_to_subtract in subcategory_updates.items():
+            if subcategory_id in subcategories_dict:
+                subcategory = subcategories_dict[subcategory_id]
                 await db.execute(
                     updateDb(subcategory.__class__)
                     .where(subcategory.__class__.id == subcategory.id)
-                    .values(total=subcategory.total - expense.amount)
+                    .values(total=subcategory.total - amount_to_subtract)
                     .execution_options(synchronize_session="fetch")
                 )
-                await db.commit()
 
     # Now delete the expenses
     removed_expenses = await crud.expense.remove_multi(db=db, ids=valid_ids)
 
-    # Update balances
+    # Batch update balances
+    total_user_expense = sum(expense.amount for expense in removed_expenses)
+    account_updates = {}
+    
     for expense in removed_expenses:
-        await crud.user.update_balance(
-            db=db, user_id=current_user.id, is_Expense=True, amount=-expense.amount
-        )
         if expense.account_id:
-            await crud.account.update_by_id_and_field(
-                db=db,
-                owner_id=current_user.id,
-                id=expense.account_id,
-                column="total_expenses",
-                amount=-expense.amount,
-            )
+            account_updates[expense.account_id] = account_updates.get(expense.account_id, 0) + expense.amount
+    
+    # Update user balance once
+    await crud.user.update_balance(
+        db=db, user_id=current_user.id, is_Expense=True, amount=-total_user_expense
+    )
+    
+    # Batch update account balances
+    for account_id, amount in account_updates.items():
+        await crud.account.update_by_id_and_field(
+            db=db,
+            owner_id=current_user.id,
+            id=account_id,
+            column="total_expenses",
+            amount=-amount,
+        )
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_expenses)} expenses",

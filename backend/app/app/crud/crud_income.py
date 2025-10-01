@@ -54,7 +54,6 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
                     .values(total=subcategory.total + obj_in_data["amount"])
                     .execution_options(synchronize_session="fetch")
                 )
-                await db.commit()
 
                 # Update category total if there's a category associated with the subcategory
                 if subcategory.category_id:
@@ -67,7 +66,6 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
                             .values(total=category.total + obj_in_data["amount"])
                             .execution_options(synchronize_session="fetch")
                         )
-                        await db.commit()
 
         if obj_in_data["place_id"]:
             place = await crud.place.get(db=db, id=obj_in_data["place_id"])
@@ -86,14 +84,143 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         await db.refresh(db_obj)
         return db_obj
 
-    # refactor this to only update balance once and not for each income
     async def create_multi_with_owner(
         self, db: AsyncSession, *, obj_list: list[IncomeCreate], owner_id: int
     ) -> list[Income]:
+        if not obj_list:
+            return []
+        
+        # Pre-fetch and validate all referenced entities
+        account_ids = [obj.account_id for obj in obj_list if obj.account_id]
+        subcategory_ids = [obj.subcategory_id for obj in obj_list if obj.subcategory_id]
+        place_ids = [obj.place_id for obj in obj_list if obj.place_id]
+        
+        # Batch fetch entities
+        accounts = {}
+        subcategories = {}
+        categories = {}
+        places = {}
+        
+        if account_ids:
+            account_results = await db.execute(
+                select(crud.account.model).filter(crud.account.model.id.in_(account_ids))
+            )
+            accounts = {acc.id: acc for acc in account_results.scalars().all()}
+        
+        if subcategory_ids:
+            subcategory_results = await db.execute(
+                select(crud.subcategory.model).filter(crud.subcategory.model.id.in_(subcategory_ids))
+            )
+            subcategories = {sub.id: sub for sub in subcategory_results.scalars().all()}
+            
+            # Fetch categories for subcategories
+            category_ids = [sub.category_id for sub in subcategories.values() if sub.category_id]
+            if category_ids:
+                category_results = await db.execute(
+                    select(crud.category.model).filter(crud.category.model.id.in_(category_ids))
+                )
+                categories = {cat.id: cat for cat in category_results.scalars().all()}
+            
+        if place_ids:
+            place_results = await db.execute(
+                select(crud.place.model).filter(crud.place.model.id.in_(place_ids))
+            )
+            places = {place.id: place for place in place_results.scalars().all()}
+        
+        # Process incomes and calculate totals
         created_incomes = []
+        account_updates = {}
+        subcategory_updates = {}
+        category_updates = {}
+        total_user_income = 0
+        
         for obj_in in obj_list:
-            income = await self.create_with_owner(db, obj_in=obj_in, owner_id=owner_id)
-            created_incomes.append(income)
+            obj_in_data = jsonable_encoder(obj_in)
+
+            # Convert date string to datetime object
+            date_str = obj_in_data["date"]
+            if date_str:
+                try:
+                    obj_in_data["date"] = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except:
+                    obj_in_data["date"] = None
+
+            # Validate and accumulate account updates
+            if obj_in_data["account_id"] and obj_in_data["account_id"] in accounts:
+                account = accounts[obj_in_data["account_id"]]
+                if account.owner_id == owner_id:
+                    account_updates[obj_in_data["account_id"]] = account_updates.get(obj_in_data["account_id"], 0) + obj_in_data["amount"]
+                else:
+                    obj_in_data["account_id"] = None
+            else:
+                obj_in_data["account_id"] = None
+
+            # Validate and accumulate subcategory updates  
+            if obj_in_data["subcategory_id"] and obj_in_data["subcategory_id"] in subcategories:
+                subcategory = subcategories[obj_in_data["subcategory_id"]]
+                if subcategory.owner_id == owner_id:
+                    subcategory_updates[obj_in_data["subcategory_id"]] = subcategory_updates.get(obj_in_data["subcategory_id"], 0) + obj_in_data["amount"]
+                    # Also update category if exists
+                    if subcategory.category_id and subcategory.category_id in categories:
+                        category_updates[subcategory.category_id] = category_updates.get(subcategory.category_id, 0) + obj_in_data["amount"]
+                else:
+                    obj_in_data["subcategory_id"] = None
+            else:
+                obj_in_data["subcategory_id"] = None
+
+            # Validate place
+            if obj_in_data["place_id"] and obj_in_data["place_id"] not in places:
+                obj_in_data["place_id"] = None
+
+            total_user_income += obj_in_data["amount"]
+            
+            # Create income object
+            db_obj = self.model(**obj_in_data, owner_id=owner_id)
+            db.add(db_obj)
+            created_incomes.append(db_obj)
+
+        # Batch update accounts
+        for account_id, amount in account_updates.items():
+            await crud.account.update_by_id_and_field(
+                db=db,
+                owner_id=owner_id,
+                id=account_id,
+                column="total_incomes", 
+                amount=amount,
+            )
+
+        # Batch update subcategories
+        for subcategory_id, amount in subcategory_updates.items():
+            subcategory = subcategories[subcategory_id]
+            await db.execute(
+                updateDb(subcategory.__class__)
+                .where(subcategory.__class__.id == subcategory_id)
+                .values(total=subcategory.total + amount)
+                .execution_options(synchronize_session="fetch")
+            )
+            
+        # Batch update categories
+        for category_id, amount in category_updates.items():
+            category = categories[category_id]
+            await db.execute(
+                updateDb(category.__class__)
+                .where(category.__class__.id == category_id)
+                .values(total=category.total + amount)
+                .execution_options(synchronize_session="fetch")
+            )
+
+        # Update user balance once
+        await crud.user.update_balance(
+            db=db, user_id=owner_id, is_Expense=False, amount=total_user_income
+        )
+        
+        # Single commit for all operations
+        await db.commit()
+        
+        # Refresh all created incomes
+        for income in created_incomes:
+            await db.refresh(income)
+            
         return created_incomes
 
     async def remove_multi(self, db: AsyncSession, *, ids: list[int]) -> list[Income]:
