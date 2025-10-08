@@ -68,12 +68,17 @@ class WhatsAppParser:
 
         try:
             response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                # https://github.com/openai/openai-python/blob/v2.2.0/src/openai/types/shared/chat_model.py
+                model="gpt-5-nano",
                 response_format={"type": "json_object"},
                 messages=[
                     {
+                        "role": "system",
+                        "content": prompt
+                    },
+                    {
                         "role": "user",
-                        "content": f"{prompt}\n\nMessage to parse: \"{message}\""
+                        "content": f"Message to parse: \"{message}\""
                     }
                 ],
                 max_tokens=1000,
@@ -130,6 +135,15 @@ class WhatsAppParser:
                     # Remove the invalid subcategory but keep the transaction
                     transaction["subcategory_id"] = None
                     transaction["subcategory"] = None
+
+                # If there's a category but no subcategory, remove the category
+                if transaction.get("category_id") and not transaction.get("subcategory_id"):
+                    logger.warning(
+                        f"Category {transaction.get('category_id')} present but no subcategory. "
+                        f"Removing category to avoid incomplete categorization."
+                    )
+                    transaction["category_id"] = None
+                    transaction["category"] = None
 
                 return transaction
             else:
