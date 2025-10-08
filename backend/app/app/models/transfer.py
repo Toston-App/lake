@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -18,6 +18,7 @@ class Transfer(Base):
     description: str = Column(String, index=True)
     from_acc = Column(Integer, ForeignKey("account.id"))
     to_acc = Column(Integer, ForeignKey("account.id"))
+    is_balance_adjustment: bool = Column(Boolean, index=True, default=False, nullable=False)
     account_from: "Account" = relationship(
         "Account", foreign_keys=[from_acc], back_populates="transfers_out"
     )
