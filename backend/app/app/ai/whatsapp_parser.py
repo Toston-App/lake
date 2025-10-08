@@ -131,6 +131,15 @@ class WhatsAppParser:
                     transaction["subcategory_id"] = None
                     transaction["subcategory"] = None
 
+                # If there's a category but no subcategory, remove the category
+                if transaction.get("category_id") and not transaction.get("subcategory_id"):
+                    logger.warning(
+                        f"Category {transaction.get('category_id')} present but no subcategory. "
+                        f"Removing category to avoid incomplete categorization."
+                    )
+                    transaction["category_id"] = None
+                    transaction["category"] = None
+
                 return transaction
             else:
                 logger.error("No OpenAI client available for message parsing")
