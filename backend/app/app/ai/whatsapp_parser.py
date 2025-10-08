@@ -68,12 +68,17 @@ class WhatsAppParser:
 
         try:
             response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                # https://github.com/openai/openai-python/blob/v2.2.0/src/openai/types/shared/chat_model.py
+                model="gpt-5-nano",
                 response_format={"type": "json_object"},
                 messages=[
                     {
+                        "role": "system",
+                        "content": prompt
+                    },
+                    {
                         "role": "user",
-                        "content": f"{prompt}\n\nMessage to parse: \"{message}\""
+                        "content": f"Message to parse: \"{message}\""
                     }
                 ],
                 max_tokens=1000,
