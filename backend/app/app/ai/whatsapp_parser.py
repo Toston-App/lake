@@ -80,8 +80,7 @@ class WhatsAppParser:
                         "role": "user",
                         "content": f"Message to parse: \"{message}\""
                     }
-                ],
-                max_tokens=1000,
+                ]
             )
             return json.loads(response.choices[0].message.content)
         except RateLimitError as e:
