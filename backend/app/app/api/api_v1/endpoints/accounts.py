@@ -91,30 +91,8 @@ async def update_account(
     if name is not None:
         account_in.name = name
     if initial_balance is not None:
-        balance_difference = initial_balance - account.initial_balance
         account_in.initial_balance = initial_balance
-        account_in.current_balance += balance_difference
-        
-        # Create a transfer record to show the balance adjustment in transaction history
-        # We create it directly without using create_with_owner to avoid double-counting
-        if balance_difference != 0:
-            transfer_record = models.Transfer(
-                amount=abs(balance_difference),
-                date=datetime.now(timezone.utc).date(),
-                description=f"Balance adjustment: {'increase' if balance_difference > 0 else 'decrease'} of ${abs(balance_difference):.2f}",
-                from_acc=id,
-                to_acc=id,
-                owner_id=current_user.id,
-                is_balance_adjustment=True,
-            )
-            db.add(transfer_record)
-            
-            # Update user's total balance (net worth) to reflect the account balance change
-            user_data = jsonable_encoder(current_user)
-            user_in = schemas.UserUpdate(**user_data)
-            user_in.balance_total = (current_user.balance_total or 0.0) + balance_difference
-            user_in.updated_at = datetime.now(timezone.utc)
-            await crud.user.update(db=db, db_obj=current_user, obj_in=user_in)
+        account_in.current_balance += initial_balance - account.initial_balance
     if color is not None:
         account_in.color = color
     if type is not None:
