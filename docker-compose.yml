@@ -8,8 +8,6 @@ services:
       retries: 5
       start_period: 30s
       timeout: 10s
-    networks:
-      - app-network
     ports:
       - "5432:5432"
     volumes:
@@ -25,8 +23,6 @@ services:
   backup:
     image: offen/docker-volume-backup:latest
     restart: always
-    networks:
-      - app-network
     depends_on:
       db:
         condition: service_healthy
@@ -44,8 +40,6 @@ services:
 
   pgadmin:
     image: dpage/pgadmin4:latest
-    networks:
-      - app-network
     ports:
       - "5050:5050"
     depends_on:
@@ -69,8 +63,6 @@ services:
     build:
       context: ./backend
       dockerfile: backend.dockerfile
-    networks:
-      - app-network
     depends_on:
       db:
         condition: service_healthy
@@ -82,8 +74,6 @@ services:
   backend:
     image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"
     restart: always
-    networks:
-      - app-network
     depends_on:
       db:
         condition: service_healthy
@@ -91,13 +81,6 @@ services:
         condition: service_completed_successfully
     env_file:
       - .env
-    healthcheck:
-      test:
-        ["CMD", "curl", "-f", "http://localhost:80/api/v1/utils/health-check/"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 300s
     build:
       context: ./backend
       dockerfile: backend.dockerfile
@@ -107,8 +90,6 @@ services:
   #   restart: always
   #   # in macos change to waha:arm
   #   image: devlikeapro/waha:latest-2025.7.9
-  #   networks:
-  #     - app-network
   #   ports:
   #     - "127.0.0.1:3000:3000/tcp"
   #   depends_on:
@@ -119,8 +100,6 @@ services:
   # # used to expose the waha service to the internet
   # cloudflaretunnel:
   #   image: cloudflare/cloudflared:latest
-  #   networks:
-  #     - app-network
   #   restart: always
   #   depends_on:
   #     - waha
@@ -131,7 +110,3 @@ services:
 volumes:
   postgres_data:
   pgadmin-data:
-
-networks:
-  app-network:
-    driver: bridge
