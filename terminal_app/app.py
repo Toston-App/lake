@@ -12,7 +12,10 @@ from textual.widgets import (
     Label,
     TabbedContent,
     TabPane,
+    Input,
+    Select,
 )
+from textual.screen import ModalScreen
 from textual.reactive import reactive
 from rich.text import Text
 from api_client import TostonAPIClient
@@ -118,6 +121,153 @@ class TransactionsTable(Static):
                 )
 
 
+class CreateAccountScreen(ModalScreen):
+    """Screen for creating a new account."""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="create_account_dialog"):
+            yield Static("[bold]Create New Account[/bold]", id="dialog_title")
+            yield Input(placeholder="Account Name", id="input_account_name")
+            yield Input(placeholder="Account Type (e.g., checking, savings)", id="input_account_type")
+            yield Input(placeholder="Initial Balance", id="input_account_balance")
+            yield Input(placeholder="Color (e.g., #FF5733)", id="input_account_color")
+            with Horizontal(id="dialog_buttons"):
+                yield Button("Create", variant="primary", id="btn_create_account")
+                yield Button("Cancel", variant="default", id="btn_cancel_account")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_create_account":
+            name = self.query_one("#input_account_name", Input).value
+            acc_type = self.query_one("#input_account_type", Input).value
+            balance = self.query_one("#input_account_balance", Input).value
+            color = self.query_one("#input_account_color", Input).value
+
+            self.dismiss({
+                "name": name,
+                "type": acc_type,
+                "current_balance": float(balance) if balance else 0.0,
+                "color": color
+            })
+        else:
+            self.dismiss(None)
+
+
+class CreateExpenseScreen(ModalScreen):
+    """Screen for creating a new expense."""
+
+    def __init__(self, accounts: List[Dict], categories: List[Dict], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.accounts = accounts
+        self.categories = categories
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="create_expense_dialog"):
+            yield Static("[bold]Create New Expense[/bold]", id="dialog_title")
+            yield Input(placeholder="Description", id="input_expense_description")
+            yield Input(placeholder="Amount", id="input_expense_amount")
+            yield Input(placeholder="Date (YYYY-MM-DD)", id="input_expense_date")
+            yield Input(placeholder="Account ID", id="input_expense_account")
+            yield Input(placeholder="Category ID", id="input_expense_category")
+            with Horizontal(id="dialog_buttons"):
+                yield Button("Create", variant="primary", id="btn_create_expense")
+                yield Button("Cancel", variant="default", id="btn_cancel_expense")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_create_expense":
+            description = self.query_one("#input_expense_description", Input).value
+            amount = self.query_one("#input_expense_amount", Input).value
+            date = self.query_one("#input_expense_date", Input).value
+            account_id = self.query_one("#input_expense_account", Input).value
+            category_id = self.query_one("#input_expense_category", Input).value
+
+            self.dismiss({
+                "description": description,
+                "amount": float(amount) if amount else 0.0,
+                "date": date or datetime.now().strftime("%Y-%m-%d"),
+                "account_id": int(account_id) if account_id else None,
+                "category_id": int(category_id) if category_id else None
+            })
+        else:
+            self.dismiss(None)
+
+
+class CreateIncomeScreen(ModalScreen):
+    """Screen for creating a new income."""
+
+    def __init__(self, accounts: List[Dict], categories: List[Dict], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.accounts = accounts
+        self.categories = categories
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="create_income_dialog"):
+            yield Static("[bold]Create New Income[/bold]", id="dialog_title")
+            yield Input(placeholder="Description", id="input_income_description")
+            yield Input(placeholder="Amount", id="input_income_amount")
+            yield Input(placeholder="Date (YYYY-MM-DD)", id="input_income_date")
+            yield Input(placeholder="Account ID", id="input_income_account")
+            yield Input(placeholder="Category ID", id="input_income_category")
+            with Horizontal(id="dialog_buttons"):
+                yield Button("Create", variant="primary", id="btn_create_income")
+                yield Button("Cancel", variant="default", id="btn_cancel_income")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_create_income":
+            description = self.query_one("#input_income_description", Input).value
+            amount = self.query_one("#input_income_amount", Input).value
+            date = self.query_one("#input_income_date", Input).value
+            account_id = self.query_one("#input_income_account", Input).value
+            category_id = self.query_one("#input_income_category", Input).value
+
+            self.dismiss({
+                "description": description,
+                "amount": float(amount) if amount else 0.0,
+                "date": date or datetime.now().strftime("%Y-%m-%d"),
+                "account_id": int(account_id) if account_id else None,
+                "category_id": int(category_id) if category_id else None
+            })
+        else:
+            self.dismiss(None)
+
+
+class CreateTransferScreen(ModalScreen):
+    """Screen for creating a new transfer."""
+
+    def __init__(self, accounts: List[Dict], *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.accounts = accounts
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="create_transfer_dialog"):
+            yield Static("[bold]Create New Transfer[/bold]", id="dialog_title")
+            yield Input(placeholder="Description", id="input_transfer_description")
+            yield Input(placeholder="Amount", id="input_transfer_amount")
+            yield Input(placeholder="Date (YYYY-MM-DD)", id="input_transfer_date")
+            yield Input(placeholder="From Account ID", id="input_transfer_from")
+            yield Input(placeholder="To Account ID", id="input_transfer_to")
+            with Horizontal(id="dialog_buttons"):
+                yield Button("Create", variant="primary", id="btn_create_transfer")
+                yield Button("Cancel", variant="default", id="btn_cancel_transfer")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_create_transfer":
+            description = self.query_one("#input_transfer_description", Input).value
+            amount = self.query_one("#input_transfer_amount", Input).value
+            date = self.query_one("#input_transfer_date", Input).value
+            from_acc = self.query_one("#input_transfer_from", Input).value
+            to_acc = self.query_one("#input_transfer_to", Input).value
+
+            self.dismiss({
+                "description": description,
+                "amount": float(amount) if amount else 0.0,
+                "date": date or datetime.now().strftime("%Y-%m-%d"),
+                "from_acc": int(from_acc) if from_acc else None,
+                "to_acc": int(to_acc) if to_acc else None
+            })
+        else:
+            self.dismiss(None)
+
+
 class TostonFinanceApp(App):
     """Toston Finance Terminal Application."""
 
@@ -165,6 +315,38 @@ class TostonFinanceApp(App):
         height: 3;
         background: $panel;
     }
+
+    ModalScreen {
+        align: center middle;
+    }
+
+    #create_account_dialog, #create_expense_dialog, #create_income_dialog, #create_transfer_dialog {
+        width: 60;
+        height: auto;
+        border: thick $primary;
+        background: $panel;
+        padding: 1;
+    }
+
+    #dialog_title {
+        dock: top;
+        height: 3;
+        content-align: center middle;
+    }
+
+    Input {
+        margin: 1 0;
+    }
+
+    #dialog_buttons {
+        height: auto;
+        align: center middle;
+        margin: 1 0;
+    }
+
+    .create_button {
+        margin: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -179,6 +361,8 @@ class TostonFinanceApp(App):
         self.total_balance = 0.0
         self.total_income = 0.0
         self.total_expenses = 0.0
+        self.accounts = []
+        self.categories = []
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -197,16 +381,28 @@ class TostonFinanceApp(App):
 
         with TabbedContent():
             with TabPane("Accounts"):
-                yield AccountsTable(id="accounts_widget")
+                with Vertical():
+                    with Horizontal():
+                        yield Button("➕ New Account", id="btn_new_account", variant="success", classes="create_button")
+                    yield AccountsTable(id="accounts_widget")
 
             with TabPane("Expenses"):
-                yield TransactionsTable("expenses", id="expenses_widget")
+                with Vertical():
+                    with Horizontal():
+                        yield Button("➕ New Expense", id="btn_new_expense", variant="success", classes="create_button")
+                    yield TransactionsTable("expenses", id="expenses_widget")
 
             with TabPane("Incomes"):
-                yield TransactionsTable("incomes", id="incomes_widget")
+                with Vertical():
+                    with Horizontal():
+                        yield Button("➕ New Income", id="btn_new_income", variant="success", classes="create_button")
+                    yield TransactionsTable("incomes", id="incomes_widget")
 
             with TabPane("Transfers"):
-                yield TransactionsTable("transfers", id="transfers_widget")
+                with Vertical():
+                    with Horizontal():
+                        yield Button("➕ New Transfer", id="btn_new_transfer", variant="success", classes="create_button")
+                    yield TransactionsTable("transfers", id="transfers_widget")
 
         yield Footer()
 
@@ -253,15 +449,16 @@ class TostonFinanceApp(App):
         """Refresh all data from API."""
         self.update_status("Refreshing...")
 
-        accounts = self.api_client.get_accounts()
+        self.accounts = self.api_client.get_accounts()
+        self.categories = self.api_client.get_categories()
         expenses = self.api_client.get_expenses()
         incomes = self.api_client.get_incomes()
         transfers = self.api_client.get_transfers()
 
-        self.calculate_totals(accounts, incomes, expenses)
+        self.calculate_totals(self.accounts, incomes, expenses)
 
         accounts_widget = self.query_one("#accounts_widget", AccountsTable)
-        accounts_widget.update_data(accounts)
+        accounts_widget.update_data(self.accounts)
 
         expenses_widget = self.query_one("#expenses_widget", TransactionsTable)
         expenses_widget.update_data(expenses)
@@ -273,7 +470,7 @@ class TostonFinanceApp(App):
         transfers_widget.update_data(transfers)
 
         self.update_status(
-            f"Loaded: {len(accounts)} accounts, "
+            f"Loaded: {len(self.accounts)} accounts, "
             f"{len(expenses)} expenses, "
             f"{len(incomes)} incomes, "
             f"{len(transfers)} transfers"
@@ -287,6 +484,14 @@ class TostonFinanceApp(App):
             self.load_month_data()
         elif event.button.id == "btn_year":
             self.load_year_data()
+        elif event.button.id == "btn_new_account":
+            self.create_new_account()
+        elif event.button.id == "btn_new_expense":
+            self.create_new_expense()
+        elif event.button.id == "btn_new_income":
+            self.create_new_income()
+        elif event.button.id == "btn_new_transfer":
+            self.create_new_transfer()
 
     def load_month_data(self) -> None:
         """Load data for current month."""
@@ -335,6 +540,54 @@ class TostonFinanceApp(App):
         transfers_widget.update_data(transfers)
 
         self.update_status(f"Year {year_str}: {len(expenses)} expenses, {len(incomes)} incomes")
+
+    async def create_new_account(self) -> None:
+        """Show dialog to create a new account."""
+        result = await self.push_screen_wait(CreateAccountScreen())
+        if result:
+            self.update_status("Creating account...")
+            created = self.api_client.create_account(result)
+            if created:
+                self.update_status("Account created successfully!")
+                self.action_refresh()
+            else:
+                self.update_status("Failed to create account")
+
+    async def create_new_expense(self) -> None:
+        """Show dialog to create a new expense."""
+        result = await self.push_screen_wait(CreateExpenseScreen(self.accounts, self.categories))
+        if result:
+            self.update_status("Creating expense...")
+            created = self.api_client.create_expense(result)
+            if created:
+                self.update_status("Expense created successfully!")
+                self.action_refresh()
+            else:
+                self.update_status("Failed to create expense")
+
+    async def create_new_income(self) -> None:
+        """Show dialog to create a new income."""
+        result = await self.push_screen_wait(CreateIncomeScreen(self.accounts, self.categories))
+        if result:
+            self.update_status("Creating income...")
+            created = self.api_client.create_income(result)
+            if created:
+                self.update_status("Income created successfully!")
+                self.action_refresh()
+            else:
+                self.update_status("Failed to create income")
+
+    async def create_new_transfer(self) -> None:
+        """Show dialog to create a new transfer."""
+        result = await self.push_screen_wait(CreateTransferScreen(self.accounts))
+        if result:
+            self.update_status("Creating transfer...")
+            created = self.api_client.create_transfer(result)
+            if created:
+                self.update_status("Transfer created successfully!")
+                self.action_refresh()
+            else:
+                self.update_status("Failed to create transfer")
 
     def action_toggle_dark(self) -> None:
         """Toggle dark mode."""

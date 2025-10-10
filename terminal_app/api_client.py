@@ -146,6 +146,62 @@ class TostonAPIClient:
         except Exception:
             return None
 
+    def create_account(self, account_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new account."""
+        try:
+            response = self.client.post(
+                f"{self.base_url}/api/v1/accounts",
+                headers=self._get_headers(),
+                json=account_data
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error creating account: {e}")
+            return None
+
+    def create_expense(self, expense_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new expense."""
+        try:
+            response = self.client.post(
+                f"{self.base_url}/api/v1/expenses",
+                headers=self._get_headers(),
+                json=expense_data
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error creating expense: {e}")
+            return None
+
+    def create_income(self, income_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new income."""
+        try:
+            response = self.client.post(
+                f"{self.base_url}/api/v1/incomes",
+                headers=self._get_headers(),
+                json=income_data
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error creating income: {e}")
+            return None
+
+    def create_transfer(self, transfer_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Create a new transfer."""
+        try:
+            response = self.client.post(
+                f"{self.base_url}/api/v1/transfers",
+                headers=self._get_headers(),
+                json=transfer_data
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error creating transfer: {e}")
+            return None
+
     def close(self):
         """Close the HTTP client."""
         self.client.close()
