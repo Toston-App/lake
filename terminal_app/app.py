@@ -476,7 +476,7 @@ class TostonFinanceApp(App):
             f"{len(transfers)} transfers"
         )
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press events."""
         if event.button.id == "btn_refresh":
             self.action_refresh()
@@ -485,13 +485,13 @@ class TostonFinanceApp(App):
         elif event.button.id == "btn_year":
             self.load_year_data()
         elif event.button.id == "btn_new_account":
-            self.create_new_account()
+            await self.create_new_account()
         elif event.button.id == "btn_new_expense":
-            self.create_new_expense()
+            await self.create_new_expense()
         elif event.button.id == "btn_new_income":
-            self.create_new_income()
+            await self.create_new_income()
         elif event.button.id == "btn_new_transfer":
-            self.create_new_transfer()
+            await self.create_new_transfer()
 
     def load_month_data(self) -> None:
         """Load data for current month."""
