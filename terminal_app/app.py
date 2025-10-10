@@ -476,7 +476,7 @@ class TostonFinanceApp(App):
             f"{len(transfers)} transfers"
         )
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press events."""
         if event.button.id == "btn_refresh":
             self.action_refresh()
@@ -485,13 +485,13 @@ class TostonFinanceApp(App):
         elif event.button.id == "btn_year":
             self.load_year_data()
         elif event.button.id == "btn_new_account":
-            await self.create_new_account()
+            self.create_new_account()
         elif event.button.id == "btn_new_expense":
-            await self.create_new_expense()
+            self.create_new_expense()
         elif event.button.id == "btn_new_income":
-            await self.create_new_income()
+            self.create_new_income()
         elif event.button.id == "btn_new_transfer":
-            await self.create_new_transfer()
+            self.create_new_transfer()
 
     def load_month_data(self) -> None:
         """Load data for current month."""
@@ -541,53 +541,61 @@ class TostonFinanceApp(App):
 
         self.update_status(f"Year {year_str}: {len(expenses)} expenses, {len(incomes)} incomes")
 
-    async def create_new_account(self) -> None:
+    def create_new_account(self) -> None:
         """Show dialog to create a new account."""
-        result = await self.push_screen_wait(CreateAccountScreen())
-        if result:
-            self.update_status("Creating account...")
-            created = self.api_client.create_account(result)
-            if created:
-                self.update_status("Account created successfully!")
-                self.action_refresh()
-            else:
-                self.update_status("Failed to create account")
+        def handle_result(result):
+            if result:
+                self.update_status("Creating account...")
+                created = self.api_client.create_account(result)
+                if created:
+                    self.update_status("Account created successfully!")
+                    self.action_refresh()
+                else:
+                    self.update_status("Failed to create account")
 
-    async def create_new_expense(self) -> None:
+        self.push_screen(CreateAccountScreen(), handle_result)
+
+    def create_new_expense(self) -> None:
         """Show dialog to create a new expense."""
-        result = await self.push_screen_wait(CreateExpenseScreen(self.accounts, self.categories))
-        if result:
-            self.update_status("Creating expense...")
-            created = self.api_client.create_expense(result)
-            if created:
-                self.update_status("Expense created successfully!")
-                self.action_refresh()
-            else:
-                self.update_status("Failed to create expense")
+        def handle_result(result):
+            if result:
+                self.update_status("Creating expense...")
+                created = self.api_client.create_expense(result)
+                if created:
+                    self.update_status("Expense created successfully!")
+                    self.action_refresh()
+                else:
+                    self.update_status("Failed to create expense")
 
-    async def create_new_income(self) -> None:
+        self.push_screen(CreateExpenseScreen(self.accounts, self.categories), handle_result)
+
+    def create_new_income(self) -> None:
         """Show dialog to create a new income."""
-        result = await self.push_screen_wait(CreateIncomeScreen(self.accounts, self.categories))
-        if result:
-            self.update_status("Creating income...")
-            created = self.api_client.create_income(result)
-            if created:
-                self.update_status("Income created successfully!")
-                self.action_refresh()
-            else:
-                self.update_status("Failed to create income")
+        def handle_result(result):
+            if result:
+                self.update_status("Creating income...")
+                created = self.api_client.create_income(result)
+                if created:
+                    self.update_status("Income created successfully!")
+                    self.action_refresh()
+                else:
+                    self.update_status("Failed to create income")
 
-    async def create_new_transfer(self) -> None:
+        self.push_screen(CreateIncomeScreen(self.accounts, self.categories), handle_result)
+
+    def create_new_transfer(self) -> None:
         """Show dialog to create a new transfer."""
-        result = await self.push_screen_wait(CreateTransferScreen(self.accounts))
-        if result:
-            self.update_status("Creating transfer...")
-            created = self.api_client.create_transfer(result)
-            if created:
-                self.update_status("Transfer created successfully!")
-                self.action_refresh()
-            else:
-                self.update_status("Failed to create transfer")
+        def handle_result(result):
+            if result:
+                self.update_status("Creating transfer...")
+                created = self.api_client.create_transfer(result)
+                if created:
+                    self.update_status("Transfer created successfully!")
+                    self.action_refresh()
+                else:
+                    self.update_status("Failed to create transfer")
+
+        self.push_screen(CreateTransferScreen(self.accounts), handle_result)
 
     def action_toggle_dark(self) -> None:
         """Toggle dark mode."""
