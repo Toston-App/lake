@@ -69,5 +69,5 @@ class User(Base):
         "Feedback", back_populates="owner", cascade="all, delete-orphan"
     )
     balance_adjustments: list["BalanceAdjustment"] = relationship(
-        "BalanceAdjustment", back_populates="user", cascade="all, delete-orphan"
+        "BalanceAdjustment", back_populates="owner", cascade="all, delete-orphan"
     )

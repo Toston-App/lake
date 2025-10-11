@@ -18,21 +18,17 @@ class BalanceAdjustment(Base):
     the real balance (e.g., after reconciling with bank statements).
     """
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
-    
     # Foreign keys
     account_id: int = Column(Integer, ForeignKey("account.id"), nullable=False, index=True)
-    user_id: int = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)
-    
+    owner_id: int = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)
     # Balance information
     old_balance: float = Column(Float, nullable=False)
     new_balance: float = Column(Float, nullable=False)
     adjustment_amount: float = Column(Float, nullable=False)  # new_balance - old_balance
-    
     # Description and timestamps
     description: str = Column(Text, nullable=True)
     adjustment_date: Date = Column(Date, index=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
     # Relationships
     account: "Account" = relationship("Account", back_populates="balance_adjustments")
-    user: "User" = relationship("User", back_populates="balance_adjustments")
+    owner: "User" = relationship("User", back_populates="balance_adjustments")

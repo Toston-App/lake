@@ -21,27 +21,27 @@ class CRUDBalanceAdjustment(
         db: AsyncSession,
         *,
         obj_in: BalanceAdjustmentCreate,
-        user_id: int,
+        owner_id: int,
         old_balance: float,
     ) -> BalanceAdjustment:
         """
         Create a new balance adjustment record.
-        
+
         Args:
             db: Database session
             obj_in: Balance adjustment data (includes account_id, new_balance, description, adjustment_date)
-            user_id: ID of the user making the adjustment
+            owner_id: ID of the user making the adjustment
             old_balance: The current balance before adjustment
-            
+
         Returns:
             Created BalanceAdjustment object
         """
         obj_in_data = jsonable_encoder(obj_in)
-        
+
         # Calculate adjustment amount
         new_balance = obj_in_data["new_balance"]
         adjustment_amount = new_balance - old_balance
-        
+
         # Handle adjustment_date conversion
         adjustment_date = obj_in_data.get("adjustment_date")
         if adjustment_date is None:
@@ -52,12 +52,12 @@ class CRUDBalanceAdjustment(
                 adjustment_date = datetime.strptime(adjustment_date, "%Y-%m-%d").date()
             except (ValueError, TypeError):
                 adjustment_date = date_type.today()
-        
+
         obj_in_data["adjustment_date"] = adjustment_date
-        
+
         db_obj = self.model(
             **obj_in_data,
-            user_id=user_id,
+            owner_id=owner_id,
             old_balance=old_balance,
             adjustment_amount=adjustment_amount,
         )
@@ -76,13 +76,13 @@ class CRUDBalanceAdjustment(
     ) -> list[BalanceAdjustment]:
         """
         Get all balance adjustments for a specific account, ordered by date (newest first).
-        
+
         Args:
             db: Database session
             account_id: ID of the account
             skip: Number of records to skip
             limit: Maximum number of records to return
-            
+
         Returns:
             List of BalanceAdjustment objects
         """
@@ -99,25 +99,25 @@ class CRUDBalanceAdjustment(
         self,
         db: AsyncSession,
         *,
-        user_id: int,
+        owner_id: int,
         skip: int = 0,
         limit: int = 100,
     ) -> list[BalanceAdjustment]:
         """
         Get all balance adjustments made by a specific user, ordered by date (newest first).
-        
+
         Args:
             db: Database session
-            user_id: ID of the user
+            owner_id: ID of the user
             skip: Number of records to skip
             limit: Maximum number of records to return
-            
+
         Returns:
             List of BalanceAdjustment objects
         """
         result = await db.execute(
             select(self.model)
-            .filter(BalanceAdjustment.user_id == user_id)
+            .filter(BalanceAdjustment.owner_id == owner_id)
             .order_by(desc(BalanceAdjustment.adjustment_date), desc(BalanceAdjustment.created_at))
             .offset(skip)
             .limit(limit)

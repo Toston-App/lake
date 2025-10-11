@@ -15,7 +15,7 @@ class BalanceAdjustmentCreate(BalanceAdjustmentBase):
     account_id: int
     new_balance: float
     adjustment_date: date = Field(default_factory=date.today)
-    
+
     @validator('new_balance')
     def validate_new_balance(cls, v):
         if v is None:
@@ -32,7 +32,7 @@ class BalanceAdjustmentUpdate(BalanceAdjustmentBase):
 class BalanceAdjustmentInDBBase(BalanceAdjustmentBase):
     id: int
     account_id: int
-    user_id: int
+    owner_id: int
     old_balance: float
     new_balance: float
     adjustment_amount: float

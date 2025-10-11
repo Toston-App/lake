@@ -19,7 +19,7 @@ async def create_balance_adjustment(
 ) -> Any:
     """
     Create a new balance adjustment and update the account's current balance.
-    
+
     This endpoint:
     1. Verifies the account exists and belongs to the user
     2. Records the old balance
@@ -34,25 +34,25 @@ async def create_balance_adjustment(
         account.owner_id != current_user.id
     ):
         raise HTTPException(status_code=400, detail="Not enough permissions")
-    
+
     # Store the old balance
     old_balance = account.current_balance
-    
+
     # Create the balance adjustment record
     adjustment = await crud.balance_adjustment.create_with_user(
         db=db,
         obj_in=adjustment_in,
-        user_id=current_user.id,
+        owner_id=current_user.id,
         old_balance=old_balance,
     )
-    
+
     # Update the account's current_balance
     current_account_data = jsonable_encoder(account)
     account_update = schemas.AccountUpdate(**current_account_data)
     account_update.current_balance = adjustment_in.new_balance
-    
+
     await crud.account.update(db=db, db_obj=account, obj_in=account_update)
-    
+
     return adjustment
 
 
@@ -77,10 +77,11 @@ async def read_balance_adjustments_by_account(
         account.owner_id != current_user.id
     ):
         raise HTTPException(status_code=400, detail="Not enough permissions")
-    
+
     adjustments = await crud.balance_adjustment.get_by_account(
         db=db, account_id=account_id, skip=skip, limit=limit
     )
+
     return adjustments
 
 
@@ -97,17 +98,11 @@ async def read_balance_adjustment(
     adjustment = await crud.balance_adjustment.get(db=db, id=id)
     if not adjustment:
         raise HTTPException(status_code=404, detail="Balance adjustment not found")
-    
-    # Verify the user has access to this adjustment
-    # (either owns the account or is a superuser)
-    account = await crud.account.get(db=db, id=adjustment.account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
     if not crud.user.is_superuser(current_user) and (
-        account.owner_id != current_user.id
+        adjustment.owner_id != current_user.id
     ):
         raise HTTPException(status_code=400, detail="Not enough permissions")
-    
+
     return adjustment
 
 
@@ -130,5 +125,5 @@ async def read_balance_adjustments(
         adjustments = await crud.balance_adjustment.get_by_user(
             db=db, user_id=current_user.id, skip=skip, limit=limit
         )
-    
+
     return adjustments
