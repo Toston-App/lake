@@ -1,6 +1,7 @@
 from .crud_category import category
 from .crud_subcategory import subcategory
 from .crud_account import account
+from .crud_balance_adjustment import balance_adjustment
 from .crud_transfer import transfer
 from .crud_income import income
 from .crud_expense import expense

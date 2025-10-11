@@ -8,6 +8,7 @@ from app.db.base_class import Base
 
 if TYPE_CHECKING:
     from .account import Account  # noqa: F401
+    from .balance_adjustment import BalanceAdjustment  # noqa: F401
     from .category import Category  # noqa: F401
     from .expense import Expense  # noqa: F401
     from .imports import Import  # noqa: F401
@@ -66,4 +67,7 @@ class User(Base):
     )
     feedbacks: list["Feedback"] = relationship(
         "Feedback", back_populates="owner", cascade="all, delete-orphan"
+    )
+    balance_adjustments: list["BalanceAdjustment"] = relationship(
+        "BalanceAdjustment", back_populates="user", cascade="all, delete-orphan"
     )
