@@ -25,6 +25,7 @@ async def create_balance_adjustment(
     2. Records the old balance
     3. Creates the balance adjustment record
     4. Updates the account's current_balance to the new_balance
+    5. Updates the user's balance_total by the adjustment amount
     """
     # Get the account and verify ownership
     account = await crud.account.get(db=db, id=adjustment_in.account_id)
@@ -52,6 +53,14 @@ async def create_balance_adjustment(
     account_update.current_balance = adjustment_in.new_balance
 
     await crud.account.update(db=db, db_obj=account, obj_in=account_update)
+
+    # Update the user's balance_total by the adjustment amount
+    adjustment_amount = adjustment_in.new_balance - old_balance
+    current_user_data = jsonable_encoder(current_user)
+    user_update = schemas.UserUpdate(**current_user_data)
+    user_update.balance_total = current_user.balance_total + adjustment_amount
+
+    await crud.user.update(db=db, db_obj=current_user, obj_in=user_update)
 
     return adjustment
 
@@ -123,7 +132,7 @@ async def read_balance_adjustments(
         )
     else:
         adjustments = await crud.balance_adjustment.get_by_user(
-            db=db, user_id=current_user.id, skip=skip, limit=limit
+            db=db, owner_id=current_user.id, skip=skip, limit=limit
         )
 
     return adjustments

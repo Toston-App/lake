@@ -2,9 +2,11 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
 
+from app import crud
 from app.crud.base import CRUDBase
 from app.models.account import Account
 from app.schemas.account import AccountCreate, AccountUpdate
+from app.schemas.user import UserUpdate
 
 
 class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
@@ -20,6 +22,15 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
         db.add(db_obj)
         await db.commit()
         await db.refresh(db_obj)
+
+        # Update user's balance_total if there's an initial balance
+        if obj_in_data.get("initial_balance") and obj_in_data["initial_balance"] != 0:
+            user = await crud.user.get(db, id=owner_id)
+            user_data = jsonable_encoder(user)
+            user_in = UserUpdate(**user_data)
+            user_in.balance_total = user.balance_total + obj_in_data["initial_balance"]
+            await crud.user.update(db, db_obj=user, obj_in=user_in)
+
         return db_obj
 
     async def get_multi_by_owner(
