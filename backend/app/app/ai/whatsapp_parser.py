@@ -69,7 +69,7 @@ class WhatsAppParser:
         try:
             response = await self.client.chat.completions.create(
                 # https://github.com/openai/openai-python/blob/v2.2.0/src/openai/types/shared/chat_model.py
-                model="gpt-5-nano",
+                model="gpt-4o-mini",
                 response_format={"type": "json_object"},
                 messages=[
                     {
@@ -80,7 +80,8 @@ class WhatsAppParser:
                         "role": "user",
                         "content": f"Message to parse: \"{message}\""
                     }
-                ]
+                ],
+                max_tokens=1000
             )
             return json.loads(response.choices[0].message.content)
         except RateLimitError as e:
