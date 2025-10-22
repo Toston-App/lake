@@ -91,8 +91,18 @@ async def update_account(
     if name is not None:
         account_in.name = name
     if initial_balance is not None:
+        # Calculate the difference in initial balance
+        balance_difference = initial_balance - account.initial_balance
+
         account_in.initial_balance = initial_balance
-        account_in.current_balance += initial_balance - account.initial_balance
+        account_in.current_balance += balance_difference
+
+        # Update user's balance_total by the same difference
+        current_user_data = jsonable_encoder(current_user)
+        user_in = schemas.UserUpdate(**current_user_data)
+        user_in.balance_total = current_user.balance_total + balance_difference
+        await crud.user.update(db=db, db_obj=current_user, obj_in=user_in)
+
     if color is not None:
         account_in.color = color
     if type is not None:
