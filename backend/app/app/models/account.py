@@ -8,6 +8,7 @@ from sqlalchemy.sql import func
 from app.db.base_class import Base
 
 if TYPE_CHECKING:
+    from .balance_adjustment import BalanceAdjustment  # noqa: F401
     from .expense import Expense  # noqa: F401
     from .income import Income  # noqa: F401
     from .transfer import Transfer  # noqa: F401
@@ -85,6 +86,9 @@ class Account(Base):
     )
     transfers_out: list["Transfer"] = relationship(
         "Transfer", foreign_keys="[Transfer.from_acc]", back_populates="account_from"
+    )
+    balance_adjustments: list["BalanceAdjustment"] = relationship(
+        "BalanceAdjustment", back_populates="account", cascade="all, delete-orphan"
     )
     import_id: int = Column(Integer, ForeignKey("import.id"))
     import_source = relationship("Import", back_populates="accounts")

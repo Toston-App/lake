@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.api_v1.endpoints import (
     accounts,
     ai,
+    balance_adjustments,
     categories,
     demo_data,
     expenses,
@@ -35,6 +36,9 @@ api_router.include_router(
     transactions.router, prefix="/transactions", tags=["transactions"]
 )
 api_router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
+api_router.include_router(
+    balance_adjustments.router, prefix="/balance-adjustments", tags=["balance-adjustments"]
+)
 api_router.include_router(categories.router, prefix="/categories", tags=["categories"])
 api_router.include_router(
     subcategories.router, prefix="/subcategories", tags=["subcategories"]

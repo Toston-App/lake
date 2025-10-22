@@ -1,4 +1,5 @@
 from .account import Account
+from .balance_adjustment import BalanceAdjustment
 from .category import Category
 from .subcategory import Subcategory
 from .transfer import Transfer
