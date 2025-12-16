@@ -199,6 +199,9 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         )
 
     if date_filter_type == DateFilterType.quarter:
+        # Get the quarter from the actual data
+        current_quarter = combined_df.iloc[0]["quarter"]
+
         all_months["quarter"] = all_months["month"].map(
             {
                 "January": 1,
@@ -216,53 +219,38 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             }
         )
 
-        quarter_total = all_months.merge(
+        # Filter all_months to only include months in the current quarter
+        quarter_months = all_months[all_months["quarter"] == current_quarter].copy()
+
+        quarter_total = quarter_months.merge(
             combined_df.groupby("month", as_index=False)["amount"].sum(),
             on="month",
             how="left",
-        )
-        quarter_total = quarter_total[
-            quarter_total["quarter"] == quarter_total.iloc[0]["quarter"]
-        ].fillna(0)
-        quarter_expenses = all_months.merge(
+        ).fillna(0)
+
+        quarter_expenses = quarter_months.merge(
             combined_df[combined_df["type"] == "expense"]
             .groupby("month", as_index=False)["amount"]
             .sum(),
             on="month",
             how="left",
-        )
-        quarter_expenses = quarter_expenses[
-            quarter_expenses["quarter"] == quarter_expenses.iloc[0]["quarter"]
-        ].fillna(0)
-        quarter_incomes = all_months.merge(
+        ).fillna(0)
+
+        quarter_incomes = quarter_months.merge(
             combined_df[combined_df["type"] == "income"]
             .groupby("month", as_index=False)["amount"]
             .sum(),
             on="month",
             how="left",
-        )
-        quarter_incomes = quarter_incomes[
-            quarter_incomes["quarter"] == quarter_incomes.iloc[0]["quarter"]
-        ].fillna(0)
+        ).fillna(0)
 
         quarter_expenses["amount"] = quarter_expenses["amount"].abs()
-        all_months.loc[all_months["quarter"] == combined_df.iloc[0]["quarter"]] = (
-            all_months.loc[
-                all_months["quarter"] == combined_df.iloc[0]["quarter"]
-            ].fillna(0)
-        )
-
-        filter_quarter = quarter_total[~pd.isna(quarter_total["amount"])]
 
         return return_base(
-            xAxis=filter_quarter["month"].tolist(),
-            total=filter_quarter["amount"].tolist(),
-            expenses=quarter_expenses[~pd.isna(quarter_expenses["amount"])][
-                "amount"
-            ].tolist(),
-            incomes=quarter_incomes[~pd.isna(quarter_incomes["amount"])][
-                "amount"
-            ].tolist(),
+            xAxis=quarter_total["month"].tolist(),
+            total=quarter_total["amount"].tolist(),
+            expenses=quarter_expenses["amount"].tolist(),
+            incomes=quarter_incomes["amount"].tolist(),
             income_color=income_color,
         )
 

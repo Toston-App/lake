@@ -1,3 +1,4 @@
+import calendar
 import datetime
 
 
@@ -15,7 +16,7 @@ def get_week_range(year, week):
 
 def get_month_weeks(year, month):
     first_day = datetime.date(year, month, 1)
-    last_day = first_day + datetime.timedelta(days=32) - datetime.timedelta(days=1)
+    last_day = datetime.date(year, month, calendar.monthrange(year, month)[1])
 
     return [int(first_day.strftime("%W")), int(last_day.strftime("%W"))]
 
