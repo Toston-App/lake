@@ -28,7 +28,7 @@ class CategoryConsistency(BaseModel):
     """Category spent on most consistently across months"""
 
     category_id: int
-    category_name: str
+    category_name: Optional[str] = None
     month_count: int  # Number of months with spending in this category
     total_months: int  # Total months in the year with any spending
 
@@ -37,7 +37,7 @@ class SpendingCategoryItem(BaseModel):
     """Single category in top spending list"""
 
     category_id: int
-    category_name: str
+    category_name: Optional[str] = None
     total_amount: float
     percentage: float  # Percentage of total spending
 
