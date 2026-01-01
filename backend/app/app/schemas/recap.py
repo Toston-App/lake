@@ -28,16 +28,22 @@ class CategoryConsistency(BaseModel):
     """Category spent on most consistently across months"""
 
     category_id: int
-    category_name: Optional[str] = None
     month_count: int  # Number of months with spending in this category
     total_months: int  # Total months in the year with any spending
 
+
+class TotalTransactions(BaseModel):
+    """Total number of transactions in the year"""
+
+    income_count: int
+    expense_count: int
+    total_count: int
+    average_per_day: float
 
 class SpendingCategoryItem(BaseModel):
     """Single category in top spending list"""
 
     category_id: int
-    category_name: Optional[str] = None
     total_amount: float
     percentage: float  # Percentage of total spending
 
@@ -115,7 +121,6 @@ class IncomeSourceItem(BaseModel):
     """Single income source in ranking"""
 
     subcategory_id: int
-    subcategory_name: Optional[str] = None
     total_amount: float
     percentage: float
 
@@ -166,6 +171,7 @@ class UserRecap(BaseModel):
     top_spending_categories: Optional[TopSpendingCategories] = None
 
     # Core Analysis
+    total_transactions: Optional[TotalTransactions] = None
     largest_transactions: Optional[LargestTransactions] = None
     monthly_highlights: Optional[MonthlyHighlights] = None
     net_change: Optional[NetChange] = None
