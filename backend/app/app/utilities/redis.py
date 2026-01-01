@@ -57,3 +57,68 @@ async def delete_transaction(transaction_id: str):
     except Exception as e:
         logging.error(f"Error deleting transaction {transaction_id}: {str(e)}")
         return False
+
+# Cache categories and subcategories for 1 hour by default
+async def cache_user_categories(user_id: int, categories_data, expire_time=3600):
+    """Cache user categories and subcategories"""
+    try:
+        cache_key = f"user:{user_id}:categories"
+        await r.setex(
+            cache_key, 
+            expire_time, 
+            json.dumps(categories_data, cls=DateEncoder)
+        )
+        logging.info(f"Cached categories for user {user_id}")
+        return True
+    except Exception as e:
+        logging.error(f"Error caching categories for user {user_id}: {str(e)}")
+        return False
+
+async def get_cached_user_categories(user_id: int):
+    """Retrieve cached user categories and subcategories"""
+    try:
+        cache_key = f"user:{user_id}:categories"
+        cached_data = await r.get(cache_key)
+        if cached_data:
+            return json.loads(cached_data)
+        return None
+    except (Exception, json.JSONDecodeError) as e:
+        logging.error(f"Error retrieving cached categories for user {user_id}: {str(e)}")
+        return None
+
+async def invalidate_user_categories_cache(user_id: int):
+    """Invalidate user categories cache when data changes"""
+    try:
+        cache_key = f"user:{user_id}:categories"
+        await r.delete(cache_key)
+        logging.info(f"Invalidated categories cache for user {user_id}")
+        return True
+    except Exception as e:
+        logging.error(f"Error invalidating categories cache for user {user_id}: {str(e)}")
+        return False
+
+async def cache_category_lookup(category_ids: list[int], categories_data, expire_time=1800):
+    """Cache category lookup data for batch operations"""
+    try:
+        cache_key = f"categories:batch:{':'.join(map(str, sorted(category_ids)))}"
+        await r.setex(
+            cache_key,
+            expire_time,
+            json.dumps(categories_data, cls=DateEncoder)
+        )
+        return True
+    except Exception as e:
+        logging.error(f"Error caching category batch lookup: {str(e)}")
+        return False
+
+async def get_cached_category_lookup(category_ids: list[int]):
+    """Get cached category lookup data"""
+    try:
+        cache_key = f"categories:batch:{':'.join(map(str, sorted(category_ids)))}"
+        cached_data = await r.get(cache_key)
+        if cached_data:
+            return json.loads(cached_data)
+        return None
+    except (Exception, json.JSONDecodeError) as e:
+        logging.error(f"Error retrieving cached category batch lookup: {str(e)}")
+        return None
