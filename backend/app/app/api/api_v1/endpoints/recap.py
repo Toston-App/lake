@@ -25,7 +25,7 @@ from app.utilities.redis import (
 router = APIRouter()
 
 
-@router.get("/{year}", response_model=Any)
+@router.get("/{year}", response_model=UserRecap | RecapStatusResponse)
 async def get_user_recap(
     year: int,
     db: AsyncSession = Depends(deps.async_get_db),
@@ -61,7 +61,7 @@ async def get_user_recap(
     )
 
 
-@router.get("/{year}/status", response_model=Any)
+@router.get("/{year}/status", response_model=RecapStatusResponse)
 async def get_recap_generation_status(
     year: int,
     current_user: models.User = Depends(deps.get_current_active_user),
