@@ -1,11 +1,12 @@
 import asyncio
 import calendar
+import time
 from datetime import date as Date
 from datetime import datetime, timedelta
 from typing import Any
 
 from dateutil.relativedelta import relativedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,7 @@ from app.process_data.process import (
     get_df,
     transaction_charts,
 )
+from app.utilities.wide_events import enrich_event
 
 router = APIRouter()
 
@@ -95,6 +97,7 @@ async def all_querys(
 
 @router.get("/{date_filter_type}/{date}", response_model=Any)
 async def get_all_data(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
     date: str = None,
@@ -103,6 +106,25 @@ async def get_all_data(
     """
     Massive data retrieval for the dashboard.
     """
+    # Track overall operation start time
+    operation_start = time.time()
+    
+    # Add user and query context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "country": current_user.country,
+            "balance_total": round(float(current_user.balance_total), 2),
+        },
+        query={
+            "type": "dashboard_data",
+            "date_filter_type": date_filter_type.value,
+            "date_param": date,
+        },
+    )
+    
     start_date: Date | None = None
     end_date: Date | None = None
     results = None
@@ -112,7 +134,17 @@ async def get_all_data(
             start_date = datetime.strptime(date, "%Y-%m-%d").date()
             end_date = start_date
 
+            query_start = time.time()
             results = await all_querys(db, start_date, end_date, owner_id=current_user.id)
+            query_duration_ms = (time.time() - query_start) * 1000
+            
+            enrich_event(
+                request,
+                database={
+                    "query_duration_ms": round(query_duration_ms, 2),
+                    "query_type": "single_day",
+                },
+            )
         except ValueError:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
@@ -123,8 +155,18 @@ async def get_all_data(
             start_date = datetime.strptime(date, "%Y-%m-%d").date()
             end_date = start_date + timedelta(days=6)
 
+            query_start = time.time()
             results = await all_querys(
                 db, start_date, end_date, "days", 6, owner_id=current_user.id
+            )
+            query_duration_ms = (time.time() - query_start) * 1000
+            
+            enrich_event(
+                request,
+                database={
+                    "query_duration_ms": round(query_duration_ms, 2),
+                    "query_type": "week",
+                },
             )
         except ValueError:
             raise HTTPException(
@@ -137,8 +179,18 @@ async def get_all_data(
             _, num_days = calendar.monthrange(start_date.year, start_date.month)
             end_date = start_date + timedelta(days=num_days - 1)
 
+            query_start = time.time()
             results = await all_querys(
                 db, start_date, end_date, "months", 1, owner_id=current_user.id
+            )
+            query_duration_ms = (time.time() - query_start) * 1000
+            
+            enrich_event(
+                request,
+                database={
+                    "query_duration_ms": round(query_duration_ms, 2),
+                    "query_type": "month",
+                },
             )
         except ValueError:
             raise HTTPException(
@@ -160,8 +212,19 @@ async def get_all_data(
             _, end_day = calendar.monthrange(year, end_month)
             end_date = Date(year, end_month, end_day)
 
+            query_start = time.time()
             results = await all_querys(
                 db, start_date, end_date, "months", 3, owner_id=current_user.id
+            )
+            query_duration_ms = (time.time() - query_start) * 1000
+            
+            enrich_event(
+                request,
+                database={
+                    "query_duration_ms": round(query_duration_ms, 2),
+                    "query_type": "quarter",
+                    "quarter": quarterNum,
+                },
             )
 
         except (ValueError, IndexError):
@@ -175,8 +238,19 @@ async def get_all_data(
             start_date = Date(year, 1, 1)
             end_date = Date(year, 12, 31)
 
+            query_start = time.time()
             results = await all_querys(
                 db, start_date, end_date, "days", 365, owner_id=current_user.id
+            )
+            query_duration_ms = (time.time() - query_start) * 1000
+            
+            enrich_event(
+                request,
+                database={
+                    "query_duration_ms": round(query_duration_ms, 2),
+                    "query_type": "year",
+                    "year": year,
+                },
             )
         except (ValueError, IndexError):
             raise HTTPException(
@@ -189,6 +263,7 @@ async def get_all_data(
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
             end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
 
+            query_start = time.time()
             results = await all_querys(
                 db,
                 start_date,
@@ -196,6 +271,16 @@ async def get_all_data(
                 "days",
                 (end_date - start_date).days,
                 owner_id=current_user.id,
+            )
+            query_duration_ms = (time.time() - query_start) * 1000
+            
+            enrich_event(
+                request,
+                database={
+                    "query_duration_ms": round(query_duration_ms, 2),
+                    "query_type": "custom_range",
+                    "range_days": (end_date - start_date).days,
+                },
             )
         except ValueError:
             raise HTTPException(
@@ -223,6 +308,21 @@ async def get_all_data(
     ) = results
 
     if incomes_actual == [] and expenses_actual == []:
+        # Track empty response
+        total_duration_ms = (time.time() - operation_start) * 1000
+        
+        enrich_event(
+            request,
+            response={
+                "has_data": False,
+                "accounts_count": len(accounts),
+                "transfers_count": len(transfers),
+            },
+            performance={
+                "total_duration_ms": round(total_duration_ms, 2),
+            },
+        )
+        
         return {
             "currency": current_user.country,
             "language": current_user.country,
@@ -243,6 +343,9 @@ async def get_all_data(
             },
         }
 
+    # Measure data processing time
+    processing_start = time.time()
+    
     dfs = get_df(
         expenses=jsonable_encoder(expenses_actual),
         incomes=jsonable_encoder(incomes_actual),
@@ -281,7 +384,41 @@ async def get_all_data(
     account_chart = account_charts(
         incomes_df=dfs["incomes"], expenses_df=dfs["expenses"], transfers_df=dfs["transfers"]
     )
+    
+    processing_duration_ms = (time.time() - processing_start) * 1000
+    total_duration_ms = (time.time() - operation_start) * 1000
 
+    # Calculate totals for logging
+    total_income = sum(float(i.get("amount", 0)) for i in jsonable_encoder(incomes_actual))
+    total_expenses = sum(float(e.get("amount", 0)) for e in jsonable_encoder(expenses_actual))
+    
+    # Add comprehensive response metrics
+    enrich_event(
+        request,
+        response={
+            "has_data": True,
+            "incomes_count": len(incomes_actual),
+            "expenses_count": len(expenses_actual),
+            "transfers_count": len(transfers),
+            "accounts_count": len(accounts),
+            "places_count": len(places),
+            "categories_count": len(categories),
+            "total_income": round(total_income, 2),
+            "total_expenses": round(total_expenses, 2),
+            "net": round(total_income - total_expenses, 2),
+        },
+        performance={
+            "total_duration_ms": round(total_duration_ms, 2),
+            "processing_duration_ms": round(processing_duration_ms, 2),
+            "charts_generated": 4,
+        },
+        date_range={
+            "start": str(start_date),
+            "end": str(end_date),
+            "days": (end_date - start_date).days + 1,
+        },
+    )
+    
     return {
         "currency": current_user.country,
         "language": current_user.country,

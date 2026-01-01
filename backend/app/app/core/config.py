@@ -134,6 +134,16 @@ class Settings(BaseSettings):
     REDIS_URL: str
     REDIS_TOKEN: str
 
+    # Axiom Logging Settings
+    AXIOM_DATASET: str = "cleverbill"
+    AXIOM_API_TOKEN: Optional[str] = None
+    AXIOM_ENABLED: bool = False
+    AXIOM_SAMPLE_RATE: float = 0.05  # Sample 5% of successful requests
+    AXIOM_SLOW_REQUEST_THRESHOLD_MS: int = 2000  # Consider requests >2s as slow
+    
+    DEPLOYMENT_ID: Optional[str] = None  # For tracking deployments
+    REGION: Optional[str] = None  # e.g., "us-east-1", "eu-west-1"
+
     @field_validator("WHATSAPP_ENABLED", mode='before')
     def get_whatsapp_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
         return bool(
@@ -141,6 +151,10 @@ class Settings(BaseSettings):
             and info.data.get("WHATSAPP_PHONE_NUMBER_ID")
             and bool(info.data.get("WHATSAPP_VERIFY_TOKEN"))
         )
+    
+    @field_validator("AXIOM_ENABLED", mode='before')
+    def get_axiom_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
+        return bool(info.data.get("AXIOM_API_TOKEN"))
 
     class Config:
         case_sensitive = True

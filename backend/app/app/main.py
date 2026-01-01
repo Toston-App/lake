@@ -1,6 +1,7 @@
 import logging
 import secrets
 import random
+import os
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -12,6 +13,8 @@ from fastapi_pagination import add_pagination as PaginationProvider
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
 from app.core.config import settings
+from app.utilities.axiom import initialize_axiom, get_axiom_client
+from app.utilities.wide_events import WideEventsMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,6 +27,54 @@ app = FastAPI(
     openapi_url=None,
 )
 PaginationProvider(app)
+
+
+# Initialize Axiom logging
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    logger.info("🚀 Starting application...")
+    
+    # Initialize Axiom logging with wide events
+    if settings.AXIOM_API_TOKEN:
+        logger.info(f"📊 Initializing Axiom logging to dataset: {settings.AXIOM_DATASET}")
+        axiom_client = initialize_axiom(
+            dataset=settings.AXIOM_DATASET,
+            api_token=settings.AXIOM_API_TOKEN,
+            batch_size=100,
+            flush_interval=5.0,
+            enabled=settings.AXIOM_ENABLED,
+        )
+        await axiom_client.start()
+        logger.info("✅ Axiom logging initialized successfully")
+    else:
+        logger.warning("⚠️  Axiom API token not configured - logging will be to stdout only")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("👋 Shutting down application...")
+    
+    # Flush any remaining logs to Axiom
+    axiom_client = get_axiom_client()
+    if axiom_client:
+        logger.info("📤 Flushing remaining logs to Axiom...")
+        await axiom_client.stop()
+        logger.info("✅ Axiom client closed")
+
+
+# Add Wide Events Middleware FIRST (so it wraps all other middleware)
+app.add_middleware(
+    WideEventsMiddleware,
+    service_name=settings.PROJECT_NAME,
+    service_version="0.9.0",
+    deployment_id=settings.DEPLOYMENT_ID or os.getenv("RAILWAY_DEPLOYMENT_ID"),  # Auto-detect Railway
+    region=settings.REGION or os.getenv("RAILWAY_REGION"),
+    environment=os.getenv("ENVIRONMENT", "production"),
+    sample_rate=settings.AXIOM_SAMPLE_RATE,
+    slow_request_threshold_ms=settings.AXIOM_SLOW_REQUEST_THRESHOLD_MS,
+)
 
 @app.middleware("http")
 async def add_csp_header(request: Request, call_next):
@@ -52,12 +103,8 @@ async def add_csp_header(request: Request, call_next):
 
 security = HTTPBasic()
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logger.info(f"Request: {request.method} {request.url} from {request.headers.get('host')}")
-    response = await call_next(request)
-    logger.info(f"Response status: {response.status_code}")
-    return response
+# Note: Basic request logging is now handled by WideEventsMiddleware
+# The old log_requests middleware has been replaced with comprehensive wide events
 
 
 # Set all CORS enabled origins

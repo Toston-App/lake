@@ -1,21 +1,24 @@
 import calendar
+import time
 from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
+from app.utilities.wide_events import enrich_event
 
 router = APIRouter()
 
 
 @router.get("/getAll", response_model=list[schemas.Expense])
 async def read_expenses(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
     limit: int = 100,
@@ -24,12 +27,39 @@ async def read_expenses(
     """
     Retrieve expenses.
     """
+    # Add user context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "is_superuser": current_user.is_superuser,
+        },
+        query={
+            "type": "list_expenses",
+            "skip": skip,
+            "limit": limit,
+        },
+    )
+    
+    db_start = time.time()
     if crud.user.is_superuser(current_user):
         expenses = await crud.expense.get_multi(db, skip=skip, limit=limit)
     else:
         expenses = await crud.expense.get_multi_by_owner(
             db=db, owner_id=current_user.id, skip=skip, limit=limit
         )
+    db_duration_ms = (time.time() - db_start) * 1000
+    
+    # Add query results
+    enrich_event(
+        request,
+        database={
+            "operation": "list_expenses",
+            "duration_ms": round(db_duration_ms, 2),
+            "results_count": len(expenses),
+        },
+    )
 
     return expenses
 
@@ -44,7 +74,8 @@ class DateFilterType(str, Enum):
 
 
 @router.get("/{date_filter_type}/{date}", response_model=list[schemas.Expense])
-async def read_expenses(
+async def read_expenses_by_date(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
     date: str = None,
@@ -53,6 +84,20 @@ async def read_expenses(
     """
     Retrieve expenses filtered by type.
     """
+    # Add user and filter context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+        },
+        query={
+            "type": "filter_expenses_by_date",
+            "date_filter_type": date_filter_type.value,
+            "date_param": date,
+        },
+    )
+    
     start_date: Date | None = None
     end_date: Date | None = None
 
@@ -131,9 +176,27 @@ async def read_expenses(
             )
 
     if start_date and end_date:
+        db_start = time.time()
         expenses = await crud.expense.get_multi_by_date(
             db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date
         )
+        db_duration_ms = (time.time() - db_start) * 1000
+        
+        # Add results metrics
+        enrich_event(
+            request,
+            database={
+                "operation": "filter_expenses_by_date",
+                "duration_ms": round(db_duration_ms, 2),
+                "results_count": len(expenses),
+            },
+            date_range={
+                "start": str(start_date),
+                "end": str(end_date),
+                "days": (end_date - start_date).days + 1,
+            },
+        )
+        
         return expenses
 
     return []
@@ -142,6 +205,7 @@ async def read_expenses(
 @router.post("", response_model=schemas.Expense)
 async def create_expense(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     expense_in: schemas.ExpenseCreate,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -149,15 +213,54 @@ async def create_expense(
     """
     Create new expense.
     """
+    # Add user context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "is_superuser": current_user.is_superuser,
+        },
+        operation={
+            "type": "create_expense",
+            "source": expense_in.made_from or "api",
+        },
+    )
+    
+    # Create expense with timing
+    db_start = time.time()
     expense = await crud.expense.create_with_owner(
         db=db, obj_in=expense_in, owner_id=current_user.id
     )
+    db_duration_ms = (time.time() - db_start) * 1000
+    
+    # Add transaction details
+    enrich_event(
+        request,
+        database={
+            "operation": "create_expense",
+            "duration_ms": round(db_duration_ms, 2),
+            "success": expense is not None,
+        },
+        transaction={
+            "type": "expense",
+            "id": expense.id if expense else None,
+            "amount": float(expense_in.amount),
+            "date": str(expense_in.date) if expense_in.date else None,
+            "has_category": expense_in.category_id is not None,
+            "has_subcategory": expense_in.subcategory_id is not None,
+            "has_place": expense_in.place_id is not None,
+            "has_account": expense_in.account_id is not None,
+        },
+    )
+    
     return expense
 
 
 @router.post("/bulk", response_model=list[schemas.Expense])
 async def create_expenses_bulk(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     expenses_in: list[schemas.ExpenseCreate],
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -165,15 +268,47 @@ async def create_expenses_bulk(
     """
     Create multiple expenses at once.
     """
+    # Add user and bulk operation context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+        },
+        operation={
+            "type": "bulk_create_expenses",
+            "count": len(expenses_in),
+        },
+        bulk={
+            "item_count": len(expenses_in),
+            "total_amount": sum(float(e.amount) for e in expenses_in),
+        },
+    )
+    
+    db_start = time.time()
     expenses = await crud.expense.create_multi_with_owner(
         db=db, obj_list=expenses_in, owner_id=current_user.id
     )
+    db_duration_ms = (time.time() - db_start) * 1000
+    
+    # Add results
+    enrich_event(
+        request,
+        database={
+            "operation": "bulk_create_expenses",
+            "duration_ms": round(db_duration_ms, 2),
+            "success_count": len(expenses),
+            "avg_duration_per_item_ms": round(db_duration_ms / len(expenses_in), 2) if expenses_in else 0,
+        },
+    )
+    
     return expenses
 
 
 @router.get("/{id}", response_model=schemas.Expense)
 async def read_expense(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -181,6 +316,18 @@ async def read_expense(
     """
     Get expense by ID.
     """
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+        },
+        query={
+            "type": "get_expense_by_id",
+            "expense_id": id,
+        },
+    )
+    
     expense = await crud.expense.get(db=db, id=id)
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -194,6 +341,7 @@ async def read_expense(
 @router.put("/{id}", response_model=schemas.Expense)
 async def update_expense(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     expense_in: schemas.ExpenseUpdate,
@@ -202,7 +350,20 @@ async def update_expense(
     """
     Update an expense.
     """
-    expense = await read_expense(db=db, id=id, current_user=current_user)
+    # Add user context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+        },
+        operation={
+            "type": "update_expense",
+            "expense_id": id,
+        },
+    )
+    
+    expense = await read_expense(db=db, id=id, current_user=current_user, request=request)
 
     # TODO: Check there are changes
     # Store original values for later comparison
@@ -239,9 +400,35 @@ async def update_expense(
 
     expense_in.updated_at = datetime.now(timezone.utc)
 
+    # Track what changed
+    changes = {}
+    if expense_in.amount and expense_in.amount != original_amount:
+        changes["amount"] = {"from": float(original_amount), "to": float(expense_in.amount)}
+    if expense_in.account_id and expense_in.account_id != original_account_id:
+        changes["account_id"] = {"from": original_account_id, "to": expense_in.account_id}
+    if expense_in.category_id and expense_in.category_id != original_category_id:
+        changes["category_id"] = {"from": original_category_id, "to": expense_in.category_id}
+
     # Update the expense in the database
+    db_start = time.time()
     updated_expense = await crud.expense.update(
         db=db, db_obj=expense, obj_in=expense_in
+    )
+    db_duration_ms = (time.time() - db_start) * 1000
+    
+    # Add update metrics
+    enrich_event(
+        request,
+        database={
+            "operation": "update_expense",
+            "duration_ms": round(db_duration_ms, 2),
+            "success": updated_expense is not None,
+        },
+        transaction={
+            "id": id,
+            "changes": changes,
+            "fields_changed": len(changes),
+        },
     )
 
     # Update category and subcategory totals if amount, category_id or subcategory_id has changed
@@ -338,6 +525,7 @@ async def update_expense(
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_expense(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -345,7 +533,20 @@ async def delete_expense(
     """
     Delete an expense.
     """
-    expense = await read_expense(db=db, id=id, current_user=current_user)
+    # Add user context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+        },
+        operation={
+            "type": "delete_expense",
+            "expense_id": id,
+        },
+    )
+    
+    expense = await read_expense(db=db, id=id, current_user=current_user, request=request)
 
     # TODO: move this to crud and reutilize it in bulk deletion
     # Update category total if it exists
@@ -374,6 +575,7 @@ async def delete_expense(
             )
             await db.commit()
 
+    db_start = time.time()
     expense = await crud.expense.remove(db=db, id=id)
 
     # Remove the expense from the user's balance
@@ -390,6 +592,24 @@ async def delete_expense(
             column="total_expenses",
             amount=-expense.amount,
         )
+    
+    db_duration_ms = (time.time() - db_start) * 1000
+    
+    # Add deletion metrics
+    enrich_event(
+        request,
+        database={
+            "operation": "delete_expense",
+            "duration_ms": round(db_duration_ms, 2),
+            "success": True,
+        },
+        transaction={
+            "id": id,
+            "amount": float(expense.amount),
+            "had_account": expense.account_id is not None,
+            "had_category": expense.category_id is not None,
+        },
+    )
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
 
@@ -397,6 +617,7 @@ async def delete_expense(
 @router.delete("/bulk/{ids}", response_model=schemas.BulkDeletionResponse)
 async def delete_expenses_bulk(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     ids: str,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -405,12 +626,33 @@ async def delete_expenses_bulk(
     Delete multiple expenses at once.
     Format: /bulk/1,2,3
     """
+    # Add user context
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+        },
+        operation={
+            "type": "bulk_delete_expenses",
+        },
+    )
+    
     try:
         id_list = [int(id.strip()) for id in ids.split(",")]
     except ValueError:
         raise HTTPException(
             status_code=400, detail="Invalid ID format. Use comma-separated integers"
         )
+    
+    # Add bulk operation context
+    enrich_event(
+        request,
+        bulk={
+            "requested_count": len(id_list),
+            "requested_ids": id_list[:10],  # Sample first 10 IDs
+        },
+    )
 
     # Verify permissions for all expenses
     valid_ids = []
@@ -460,10 +702,13 @@ async def delete_expenses_bulk(
                 await db.commit()
 
     # Now delete the expenses
+    db_start = time.time()
     removed_expenses = await crud.expense.remove_multi(db=db, ids=valid_ids)
 
     # Update balances
+    total_amount_deleted = 0.0
     for expense in removed_expenses:
+        total_amount_deleted += float(expense.amount)
         await crud.user.update_balance(
             db=db, user_id=current_user.id, is_Expense=True, amount=-expense.amount
         )
@@ -475,6 +720,23 @@ async def delete_expenses_bulk(
                 column="total_expenses",
                 amount=-expense.amount,
             )
+    
+    db_duration_ms = (time.time() - db_start) * 1000
+    
+    # Add results
+    enrich_event(
+        request,
+        database={
+            "operation": "bulk_delete_expenses",
+            "duration_ms": round(db_duration_ms, 2),
+            "success": True,
+        },
+        bulk={
+            "deleted_count": len(removed_expenses),
+            "total_amount_deleted": total_amount_deleted,
+            "success_rate": round(len(removed_expenses) / len(id_list) * 100, 2) if id_list else 0,
+        },
+    )
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_expenses)} expenses",
