@@ -115,7 +115,7 @@ class IncomeSourceItem(BaseModel):
     """Single income source in ranking"""
 
     subcategory_id: int
-    subcategory_name: str
+    subcategory_name: Optional[str] = None
     total_amount: float
     percentage: float
 
