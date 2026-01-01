@@ -12,6 +12,7 @@ from app.api.api_v1.endpoints import (
     items,
     login,
     places,
+    recap,
     subcategories,
     transactions,
     transfers,
@@ -48,3 +49,4 @@ api_router.include_router(ai.router, prefix="/ai", tags=["ai"])
 api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])
 api_router.include_router(waha.router, prefix="/waha", tags=["whatsapp", "waha"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
+api_router.include_router(recap.router, prefix="/recap", tags=["recap"])
