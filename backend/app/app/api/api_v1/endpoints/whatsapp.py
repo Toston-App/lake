@@ -93,7 +93,6 @@ async def process_webhook(
                         if "messages" in change["value"]:
                             for message_obj in change["value"]["messages"]:
                                 sender_number = message_obj.get("from", "")
-                                print("Sender number:", sender_number)
                                 send_to = sender_number  # Reply to the same number
                                 phone_number = hash_sha256(f"+{sender_number}")
 
