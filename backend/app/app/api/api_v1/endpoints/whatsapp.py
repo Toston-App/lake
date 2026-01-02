@@ -24,7 +24,19 @@ from app.utilities.whatsapp import (
 )
 
 router = APIRouter()
-whatsapp_parser = WhatsAppParser(settings.OPENAI_API_KEY)
+
+# Parse fallback models from comma-separated string
+_fallback_models = None
+if settings.OPENROUTER_FALLBACK_MODELS:
+    _fallback_models = [m.strip() for m in settings.OPENROUTER_FALLBACK_MODELS.split(",") if m.strip()]
+
+whatsapp_parser = WhatsAppParser(
+    api_key=settings.OPENROUTER_API_KEY,
+    model=settings.OPENROUTER_MODEL,
+    fallback_models=_fallback_models,
+    site_url=settings.OPENROUTER_SITE_URL,
+    app_name=settings.OPENROUTER_APP_NAME,
+)
 logger = setup_logger("whatsapp_requests", "whatsapp_requests.log")
 
 
@@ -81,6 +93,7 @@ async def process_webhook(
                         if "messages" in change["value"]:
                             for message_obj in change["value"]["messages"]:
                                 sender_number = message_obj.get("from", "")
+                                print("Sender number:", sender_number)
                                 send_to = sender_number  # Reply to the same number
                                 phone_number = hash_sha256(f"+{sender_number}")
 
