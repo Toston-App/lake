@@ -38,6 +38,7 @@ dependencies = [
     "fastapi-pagination>=0.13.3",
     "uvicorn>=0.35.0",
     "pandas>=2.3.0",
+    "yfinance>=01.0",
 ]
 name = "app"
 version = "0.1.0"

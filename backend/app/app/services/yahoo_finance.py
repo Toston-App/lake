@@ -1,0 +1,198 @@
+"""
+Yahoo Finance service for fetching stock and ETF prices.
+"""
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+
+import yfinance as yf
+
+from app.models.asset import Currency, Market
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class StockPrice:
+    """Price data returned from Yahoo Finance."""
+    symbol: str
+    price: float
+    currency: Currency
+    open_price: Optional[float] = None
+    high_price: Optional[float] = None
+    low_price: Optional[float] = None
+    previous_close: Optional[float] = None
+    volume: Optional[float] = None
+    change: Optional[float] = None
+    change_percent: Optional[float] = None
+    fetched_at: datetime = None
+    
+    def __post_init__(self):
+        if self.fetched_at is None:
+            self.fetched_at = datetime.utcnow()
+
+
+class YahooFinanceService:
+    """
+    Service for fetching stock and ETF prices from Yahoo Finance.
+    
+    Handles:
+    - US stocks (NYSE, NASDAQ): Use ticker as-is (e.g., "AAPL", "MSFT")
+    - Mexican stocks (BMV): Append ".MX" suffix (e.g., "AMXL.MX", "FEMSAUBD.MX")
+    """
+    
+    @staticmethod
+    def get_yahoo_ticker(symbol: str, market: Market) -> str:
+        """
+        Convert symbol to Yahoo Finance ticker format.
+        
+        Args:
+            symbol: The stock symbol
+            market: The market where the stock trades
+        
+        Returns:
+            Yahoo Finance compatible ticker
+        """
+        symbol = symbol.upper().strip()
+        
+        if market == Market.BMV:
+            # Mexican stocks need .MX suffix
+            if not symbol.endswith(".MX"):
+                return f"{symbol}.MX"
+        
+        # US markets (NYSE, NASDAQ) use symbol as-is
+        return symbol
+    
+    @classmethod
+    async def get_price(
+        cls, 
+        symbol: str, 
+        market: Market = Market.NYSE
+    ) -> Optional[StockPrice]:
+        """
+        Fetch current price for a stock or ETF.
+        
+        Args:
+            symbol: Stock symbol
+            market: Market where the stock trades
+        
+        Returns:
+            StockPrice object or None if fetch fails
+        """
+        yahoo_ticker = cls.get_yahoo_ticker(symbol, market)
+        
+        try:
+            ticker = yf.Ticker(yahoo_ticker)
+            info = ticker.info
+            
+            if not info or "regularMarketPrice" not in info:
+                # Try getting from history as fallback
+                hist = ticker.history(period="1d")
+                if hist.empty:
+                    logger.warning(f"No data available for {yahoo_ticker}")
+                    return None
+                
+                price = float(hist["Close"].iloc[-1])
+                return StockPrice(
+                    symbol=symbol,
+                    price=price,
+                    currency=Currency.MXN if market == Market.BMV else Currency.USD,
+                )
+            
+            # Determine currency from Yahoo Finance data
+            currency_str = info.get("currency", "USD")
+            currency = Currency.MXN if currency_str == "MXN" else Currency.USD
+            
+            price = info.get("regularMarketPrice") or info.get("currentPrice")
+            if price is None:
+                logger.warning(f"No price found for {yahoo_ticker}")
+                return None
+            
+            # Calculate change
+            previous_close = info.get("regularMarketPreviousClose")
+            change = None
+            change_percent = None
+            if previous_close and price:
+                change = price - previous_close
+                change_percent = (change / previous_close) * 100
+            
+            return StockPrice(
+                symbol=symbol,
+                price=float(price),
+                currency=currency,
+                open_price=info.get("regularMarketOpen"),
+                high_price=info.get("regularMarketDayHigh"),
+                low_price=info.get("regularMarketDayLow"),
+                previous_close=previous_close,
+                volume=info.get("regularMarketVolume"),
+                change=change,
+                change_percent=change_percent,
+            )
+            
+        except Exception as e:
+            logger.error(f"Error fetching price for {yahoo_ticker}: {e}")
+            return None
+    
+    @classmethod
+    async def get_prices_batch(
+        cls, 
+        symbols: list[tuple[str, Market]]
+    ) -> dict[str, StockPrice]:
+        """
+        Fetch prices for multiple stocks.
+        
+        Args:
+            symbols: List of (symbol, market) tuples
+        
+        Returns:
+            Dictionary mapping symbol to StockPrice
+        """
+        results = {}
+        
+        # Yahoo Finance doesn't have a great batch API for info,
+        # so we fetch one at a time (could be optimized with download)
+        for symbol, market in symbols:
+            price = await cls.get_price(symbol, market)
+            if price:
+                results[symbol] = price
+        
+        return results
+    
+    @classmethod
+    async def search_symbol(cls, query: str) -> list[dict]:
+        """
+        Search for stocks/ETFs by name or symbol.
+        
+        Note: This uses Yahoo Finance's search functionality
+        which may have rate limits.
+        """
+        try:
+            import requests
+            
+            url = "https://query2.finance.yahoo.com/v1/finance/search"
+            params = {
+                "q": query,
+                "quotesCount": 10,
+                "newsCount": 0,
+            }
+            headers = {"User-Agent": "Mozilla/5.0"}
+            
+            response = requests.get(url, params=params, headers=headers)
+            data = response.json()
+            
+            results = []
+            for quote in data.get("quotes", []):
+                results.append({
+                    "symbol": quote.get("symbol"),
+                    "name": quote.get("longname") or quote.get("shortname"),
+                    "type": quote.get("quoteType"),
+                    "exchange": quote.get("exchange"),
+                })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error searching for {query}: {e}")
+            return []
+

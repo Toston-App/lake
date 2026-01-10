@@ -11,8 +11,10 @@ if TYPE_CHECKING:
     from .balance_adjustment import BalanceAdjustment  # noqa: F401
     from .category import Category  # noqa: F401
     from .expense import Expense  # noqa: F401
+    from .holding import Holding  # noqa: F401
     from .imports import Import  # noqa: F401
     from .income import Income  # noqa: F401
+    from .investment_transaction import InvestmentTransaction  # noqa: F401
     from .item import Item  # noqa: F401
     from .place import Place  # noqa: F401
     from .subcategory import Subcategory  # noqa: F401
@@ -70,4 +72,11 @@ class User(Base):
     )
     balance_adjustments: list["BalanceAdjustment"] = relationship(
         "BalanceAdjustment", back_populates="owner", cascade="all, delete-orphan"
+    )
+    # Investment tracking
+    holdings: list["Holding"] = relationship(
+        "Holding", back_populates="owner", cascade="all, delete-orphan"
+    )
+    investment_transactions: list["InvestmentTransaction"] = relationship(
+        "InvestmentTransaction", back_populates="owner", cascade="all, delete-orphan"
     )
