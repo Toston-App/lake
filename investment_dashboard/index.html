@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Investment Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                    <path d="M2 17l10 5 10-5"/>
+                    <path d="M2 12l10 5 10-5"/>
+                </svg>
+                <span>Lake Invest</span>
+            </div>
+            <nav class="nav">
+                <a href="#" class="nav-item active" data-view="dashboard">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"/>
+                        <rect x="14" y="3" width="7" height="7"/>
+                        <rect x="14" y="14" width="7" height="7"/>
+                        <rect x="3" y="14" width="7" height="7"/>
+                    </svg>
+                    Dashboard
+                </a>
+                <a href="#" class="nav-item" data-view="assets">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 6v6l4 2"/>
+                    </svg>
+                    Assets
+                </a>
+                <a href="#" class="nav-item" data-view="holdings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                    </svg>
+                    Holdings
+                </a>
+                <a href="#" class="nav-item" data-view="transactions">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22V8"/>
+                        <path d="m5 12 7-7 7 7"/>
+                        <path d="M19 22H5"/>
+                    </svg>
+                    Transactions
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="api-status">
+                    <span class="status-dot"></span>
+                    <span id="api-status-text">Connecting...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Dashboard View -->
+            <section id="dashboard-view" class="view active">
+                <header class="view-header">
+                    <h1>Portfolio Overview</h1>
+                    <button class="btn btn-primary" onclick="refreshPrices()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M23 4v6h-6"/>
+                            <path d="M1 20v-6h6"/>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                        </svg>
+                        Refresh Prices
+                    </button>
+                </header>
+                
+                <!-- Summary Cards -->
+                <div class="summary-cards">
+                    <div class="card summary-card">
+                        <span class="card-label">Total Value (USD)</span>
+                        <span class="card-value" id="total-value-usd">$0.00</span>
+                        <span class="card-change positive" id="total-change">+0.00%</span>
+                    </div>
+                    <div class="card summary-card">
+                        <span class="card-label">Total Value (MXN)</span>
+                        <span class="card-value" id="total-value-mxn">$0.00</span>
+                    </div>
+                    <div class="card summary-card">
+                        <span class="card-label">Total Invested</span>
+                        <span class="card-value" id="total-invested">$0.00</span>
+                    </div>
+                    <div class="card summary-card">
+                        <span class="card-label">Unrealized Gain/Loss</span>
+                        <span class="card-value" id="total-gain-loss">$0.00</span>
+                    </div>
+                </div>
+
+                <!-- Allocations -->
+                <div class="allocations-grid">
+                    <div class="card">
+                        <h3>By Asset Class</h3>
+                        <div class="allocation-chart" id="allocation-class"></div>
+                    </div>
+                    <div class="card">
+                        <h3>By Currency</h3>
+                        <div class="allocation-chart" id="allocation-currency"></div>
+                    </div>
+                    <div class="card">
+                        <h3>By Market</h3>
+                        <div class="allocation-chart" id="allocation-market"></div>
+                    </div>
+                    <div class="card">
+                        <h3>Top Holdings</h3>
+                        <div class="top-holdings" id="top-holdings"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Assets View -->
+            <section id="assets-view" class="view">
+                <header class="view-header">
+                    <h1>Assets</h1>
+                    <button class="btn btn-primary" onclick="showAddAssetModal()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Add Asset
+                    </button>
+                </header>
+                
+                <div class="filters">
+                    <select id="filter-asset-class" onchange="loadAssets()">
+                        <option value="">All Classes</option>
+                        <option value="equities">Equities</option>
+                        <option value="fixed_income">Fixed Income</option>
+                        <option value="crypto">Crypto</option>
+                        <option value="funds">Funds</option>
+                    </select>
+                    <select id="filter-currency" onchange="loadAssets()">
+                        <option value="">All Currencies</option>
+                        <option value="USD">USD</option>
+                        <option value="MXN">MXN</option>
+                    </select>
+                </div>
+                
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Name</th>
+                                <th>Class</th>
+                                <th>Type</th>
+                                <th>Currency</th>
+                                <th>Market</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="assets-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Holdings View -->
+            <section id="holdings-view" class="view">
+                <header class="view-header">
+                    <h1>My Holdings</h1>
+                    <button class="btn btn-primary" onclick="showAddHoldingModal()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Add Holding
+                    </button>
+                </header>
+                
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Name</th>
+                                <th>Quantity</th>
+                                <th>Avg Cost</th>
+                                <th>Current Price</th>
+                                <th>Value (USD)</th>
+                                <th>Gain/Loss</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="holdings-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Transactions View -->
+            <section id="transactions-view" class="view">
+                <header class="view-header">
+                    <h1>Transactions</h1>
+                    <button class="btn btn-primary" onclick="showAddTransactionModal()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Record Transaction
+                    </button>
+                </header>
+                
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Symbol</th>
+                                <th>Type</th>
+                                <th>Quantity</th>
+                                <th>Price</th>
+                                <th>Total</th>
+                                <th>Fees</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactions-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-overlay" class="modal-overlay" onclick="closeModal()"></div>
+    
+    <!-- Add Asset Modal -->
+    <div id="add-asset-modal" class="modal">
+        <div class="modal-header">
+            <h2>Add New Asset</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <form id="add-asset-form" onsubmit="submitAsset(event)">
+            <div class="form-group">
+                <label for="asset-symbol">Symbol</label>
+                <input type="text" id="asset-symbol" required placeholder="e.g., AAPL, BTC, AMXL.MX">
+            </div>
+            <div class="form-group">
+                <label for="asset-name">Name</label>
+                <input type="text" id="asset-name" required placeholder="e.g., Apple Inc.">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="asset-type">Type</label>
+                    <select id="asset-type" required>
+                        <option value="stock">Stock</option>
+                        <option value="etf">ETF</option>
+                        <option value="bond">Bond</option>
+                        <option value="cetes">CETES</option>
+                        <option value="treasury">Treasury</option>
+                        <option value="cryptocurrency">Cryptocurrency</option>
+                        <option value="mutual_fund">Mutual Fund</option>
+                        <option value="index_fund">Index Fund</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="asset-currency">Currency</label>
+                    <select id="asset-currency" required>
+                        <option value="USD">USD</option>
+                        <option value="MXN">MXN</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="asset-market">Market</label>
+                    <select id="asset-market" required>
+                        <option value="NYSE">NYSE</option>
+                        <option value="NASDAQ">NASDAQ</option>
+                        <option value="BMV">BMV (Mexico)</option>
+                        <option value="CRYPTO">Crypto</option>
+                        <option value="OTC">OTC</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="asset-country">Country</label>
+                    <select id="asset-country">
+                        <option value="US">United States</option>
+                        <option value="MX">Mexico</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="asset-sector">Sector (optional)</label>
+                <input type="text" id="asset-sector" placeholder="e.g., Technology">
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Asset</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Add Holding Modal -->
+    <div id="add-holding-modal" class="modal">
+        <div class="modal-header">
+            <h2>Add Holding</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <form id="add-holding-form" onsubmit="submitHolding(event)">
+            <div class="form-group">
+                <label for="holding-asset">Asset</label>
+                <select id="holding-asset" required></select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="holding-quantity">Quantity</label>
+                    <input type="number" id="holding-quantity" step="0.000001" required placeholder="10">
+                </div>
+                <div class="form-group">
+                    <label for="holding-cost">Avg Cost Basis</label>
+                    <input type="number" id="holding-cost" step="0.01" required placeholder="150.00">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="holding-currency">Cost Currency</label>
+                <select id="holding-currency" required>
+                    <option value="USD">USD</option>
+                    <option value="MXN">MXN</option>
+                </select>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Holding</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Add Transaction Modal -->
+    <div id="add-transaction-modal" class="modal">
+        <div class="modal-header">
+            <h2>Record Transaction</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <form id="add-transaction-form" onsubmit="submitTransaction(event)">
+            <div class="form-group">
+                <label for="tx-holding">Holding</label>
+                <select id="tx-holding" required></select>
+            </div>
+            <div class="form-group">
+                <label for="tx-type">Transaction Type</label>
+                <select id="tx-type" required>
+                    <option value="buy">Buy</option>
+                    <option value="sell">Sell</option>
+                    <option value="dividend">Dividend</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="tx-quantity">Quantity</label>
+                    <input type="number" id="tx-quantity" step="0.000001" required>
+                </div>
+                <div class="form-group">
+                    <label for="tx-price">Price per Unit</label>
+                    <input type="number" id="tx-price" step="0.01" required>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="tx-currency">Currency</label>
+                    <select id="tx-currency" required>
+                        <option value="USD">USD</option>
+                        <option value="MXN">MXN</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="tx-fees">Fees</label>
+                    <input type="number" id="tx-fees" step="0.01" value="0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="tx-date">Execution Date</label>
+                <input type="datetime-local" id="tx-date" required>
+            </div>
+            <div class="form-group">
+                <label for="tx-broker">Broker (optional)</label>
+                <input type="text" id="tx-broker" placeholder="e.g., GBM, Fidelity">
+            </div>
+            <div class="form-group">
+                <label for="tx-notes">Notes (optional)</label>
+                <textarea id="tx-notes" rows="2"></textarea>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Record Transaction</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container"></div>
+
+    <script src="./app.js"></script>
+</body>
+</html>
+
