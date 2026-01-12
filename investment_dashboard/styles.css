@@ -656,6 +656,144 @@ body {
     }
 }
 
+/* Asset Search */
+.asset-search-container {
+    position: relative;
+}
+
+.search-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    max-height: 250px;
+    overflow-y: auto;
+    z-index: 10;
+    box-shadow: var(--shadow-lg);
+}
+
+.search-result-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: var(--transition);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.search-result-item:last-child {
+    border-bottom: none;
+}
+
+.search-result-item:hover {
+    background: var(--bg-hover);
+}
+
+.result-symbol {
+    font-weight: 600;
+    color: var(--accent-secondary);
+    min-width: 70px;
+}
+
+.result-name {
+    flex: 1;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.result-market {
+    font-size: 0.7rem;
+}
+
+.search-loading,
+.search-no-results,
+.search-error {
+    padding: 1rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.search-error {
+    color: var(--negative);
+}
+
+/* Selected Asset Display */
+.selected-asset {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: var(--bg-hover);
+    border: 1px solid var(--accent-primary);
+    border-radius: var(--radius-md);
+    margin-bottom: 1rem;
+}
+
+.selected-asset-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.asset-symbol {
+    font-weight: 700;
+    color: var(--accent-secondary);
+    font-size: 1.1rem;
+}
+
+.asset-name {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.asset-market {
+    font-size: 0.7rem;
+}
+
+/* Manual Entry Toggle */
+.manual-entry-toggle {
+    margin-bottom: 1rem;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+}
+
+/* Manual Asset Fields */
+.manual-asset-fields {
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    margin-bottom: 1rem;
+}
+
+/* Badge colors for markets */
+.badge-nyse { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
+.badge-nasdaq { background: rgba(236, 72, 153, 0.2); color: #ec4899; }
+.badge-bmv { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+
 /* Empty States */
 .empty-state {
     text-align: center;

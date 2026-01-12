@@ -16,9 +16,11 @@ from app.schemas.asset import (
     AssetUpdate,
     AssetWithPrice,
     AssetDeletionResponse,
+    ExternalAssetSearchResult,
 )
 from app.schemas.asset_price import CurrentPrice, PriceRefreshResponse
 from app.services.price_fetcher import PriceFetcher
+from app.services.yahoo_finance import YahooFinanceService
 
 router = APIRouter()
 
@@ -98,6 +100,67 @@ async def search_assets(
     """
     assets = await crud.asset.search_assets(db, query=q, skip=skip, limit=limit)
     return assets
+
+
+@router.get("/search-external", response_model=list[ExternalAssetSearchResult])
+async def search_external_assets(
+    current_user: models.User = Depends(deps.get_current_active_user),
+    q: str = Query(..., min_length=1, description="Search query (symbol or name)"),
+) -> Any:
+    """
+    Search for assets from external sources (Yahoo Finance).
+    
+    Searches both USA (NYSE, NASDAQ) and Mexican (BMV) markets.
+    Results include stocks and ETFs that can be added to the portfolio.
+    """
+    results = await YahooFinanceService.search_symbol(q)
+    
+    # Filter to only include stocks and ETFs from USA and Mexico exchanges
+    allowed_exchanges = {"NYQ", "NMS", "NGM", "PCX", "BTS", "MEX", "NYSE", "NASDAQ"}
+    allowed_types = {"EQUITY", "ETF"}
+    
+    filtered_results = []
+    for item in results:
+        exchange = item.get("exchange", "")
+        quote_type = item.get("type", "")
+        
+        # Include if it matches our criteria or is a Mexican stock
+        is_mexican = ".MX" in (item.get("symbol") or "")
+        is_allowed_exchange = exchange in allowed_exchanges or is_mexican
+        is_allowed_type = quote_type in allowed_types
+        
+        if is_allowed_exchange and is_allowed_type:
+            # Determine market and currency
+            if is_mexican or exchange == "MEX":
+                market = Market.BMV
+                currency = Currency.MXN
+                country = "MX"
+            elif exchange in {"NYQ", "NYSE"}:
+                market = Market.NYSE
+                currency = Currency.USD
+                country = "US"
+            else:
+                market = Market.NASDAQ
+                currency = Currency.USD
+                country = "US"
+            
+            # Determine asset type
+            asset_type = AssetType.ETF if quote_type == "ETF" else AssetType.STOCK
+            
+            # Clean up the symbol (remove .MX suffix for internal storage)
+            symbol = item.get("symbol", "").replace(".MX", "")
+            
+            filtered_results.append(ExternalAssetSearchResult(
+                symbol=symbol,
+                name=item.get("name") or symbol,
+                asset_type=asset_type,
+                market=market,
+                currency=currency,
+                country=country,
+                exchange=exchange,
+            ))
+    
+    return filtered_results
 
 
 @router.get("/{asset_id}", response_model=AssetWithPrice)

@@ -342,10 +342,75 @@
             <button class="modal-close" onclick="closeModal()">&times;</button>
         </div>
         <form id="add-transaction-form" onsubmit="submitTransaction(event)">
+            <!-- Asset Search -->
             <div class="form-group">
-                <label for="tx-holding">Holding</label>
-                <select id="tx-holding" required></select>
+                <label for="tx-asset-search">Search Asset (USA / Mexico)</label>
+                <div class="asset-search-container">
+                    <input type="text" id="tx-asset-search" 
+                           placeholder="Search by symbol or name (e.g., AAPL, AMXL)" 
+                           autocomplete="off"
+                           oninput="searchAssets(this.value)">
+                    <div id="asset-search-results" class="search-results"></div>
+                </div>
             </div>
+            
+            <!-- Selected Asset Display -->
+            <div id="selected-asset-display" class="selected-asset" style="display: none;">
+                <div class="selected-asset-info">
+                    <span id="selected-asset-symbol" class="asset-symbol"></span>
+                    <span id="selected-asset-name" class="asset-name"></span>
+                    <span id="selected-asset-market" class="asset-market badge"></span>
+                </div>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="clearSelectedAsset()">Change</button>
+            </div>
+            
+            <!-- Manual Entry Toggle -->
+            <div class="form-group manual-entry-toggle">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="tx-manual-entry" onchange="toggleManualEntry()">
+                    <span>Enter asset details manually</span>
+                </label>
+            </div>
+            
+            <!-- Manual Asset Entry Fields (hidden by default) -->
+            <div id="manual-asset-fields" class="manual-asset-fields" style="display: none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tx-symbol">Symbol</label>
+                        <input type="text" id="tx-symbol" placeholder="e.g., AAPL">
+                    </div>
+                    <div class="form-group">
+                        <label for="tx-asset-name">Name</label>
+                        <input type="text" id="tx-asset-name" placeholder="e.g., Apple Inc.">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tx-asset-type">Asset Type</label>
+                        <select id="tx-asset-type">
+                            <option value="stock">Stock</option>
+                            <option value="etf">ETF</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="tx-market">Market</label>
+                        <select id="tx-market" onchange="updateCurrencyFromMarket()">
+                            <option value="NYSE">NYSE</option>
+                            <option value="NASDAQ">NASDAQ</option>
+                            <option value="BMV">BMV (Mexico)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hidden fields to store selected asset data -->
+            <input type="hidden" id="tx-selected-symbol">
+            <input type="hidden" id="tx-selected-name">
+            <input type="hidden" id="tx-selected-type">
+            <input type="hidden" id="tx-selected-market">
+            <input type="hidden" id="tx-selected-currency">
+            <input type="hidden" id="tx-selected-country">
+
             <div class="form-group">
                 <label for="tx-type">Transaction Type</label>
                 <select id="tx-type" required>
@@ -378,7 +443,7 @@
                 </div>
             </div>
             <div class="form-group">
-                <label for="tx-date">Execution Date</label>
+                <label for="tx-date">Execution Date & Time</label>
                 <input type="datetime-local" id="tx-date" required>
             </div>
             <div class="form-group">

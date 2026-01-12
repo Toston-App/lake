@@ -6,6 +6,7 @@ from .asset import (
     AssetUpdate as InvestmentAssetUpdate,
     AssetWithPrice,
     AssetDeletionResponse,
+    ExternalAssetSearchResult,
 )
 from .asset_price import (
     AssetPrice,
@@ -43,6 +44,8 @@ from .investment_transaction import (
     InvestmentTransactionUpdate,
     InvestmentTransactionWithAsset,
     InvestmentTransactionDeletionResponse,
+    TransactionWithAssetCreate,
+    TransactionWithAssetResponse,
 )
 from .item import Item, ItemCreate, ItemInDB, ItemUpdate, DeletionResponse
 from .msg import Msg

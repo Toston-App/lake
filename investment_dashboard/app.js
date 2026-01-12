@@ -390,25 +390,147 @@ async function showAddHoldingModal() {
     }
 }
 
+// Asset search state
+let searchTimeout = null;
+let selectedAsset = null;
+
 async function showAddTransactionModal() {
-    // Load holdings for dropdown
-    try {
-        const holdings = await apiRequest('/investments/holdings');
-        const select = document.getElementById('tx-holding');
-        select.innerHTML = holdings.map(h => 
-            `<option value="${h.id}">${h.symbol} - ${h.asset_name}</option>`
-        ).join('');
-        
-        if (holdings.length === 0) {
-            showToast('Please add some holdings first', 'info');
-            return;
+    // Reset form and state
+    document.getElementById('add-transaction-form').reset();
+    document.getElementById('tx-date').value = new Date().toISOString().slice(0, 16);
+    
+    // Reset asset selection
+    selectedAsset = null;
+    document.getElementById('selected-asset-display').style.display = 'none';
+    document.getElementById('tx-asset-search').style.display = 'block';
+    document.getElementById('tx-asset-search').value = '';
+    document.getElementById('asset-search-results').innerHTML = '';
+    document.getElementById('tx-manual-entry').checked = false;
+    document.getElementById('manual-asset-fields').style.display = 'none';
+    
+    // Clear hidden fields
+    document.getElementById('tx-selected-symbol').value = '';
+    document.getElementById('tx-selected-name').value = '';
+    document.getElementById('tx-selected-type').value = '';
+    document.getElementById('tx-selected-market').value = '';
+    document.getElementById('tx-selected-currency').value = '';
+    document.getElementById('tx-selected-country').value = '';
+    
+    openModal('add-transaction-modal');
+}
+
+async function searchAssets(query) {
+    const resultsContainer = document.getElementById('asset-search-results');
+    
+    if (!query || query.length < 1) {
+        resultsContainer.innerHTML = '';
+        return;
+    }
+    
+    // Debounce search
+    if (searchTimeout) {
+        clearTimeout(searchTimeout);
+    }
+    
+    searchTimeout = setTimeout(async () => {
+        try {
+            resultsContainer.innerHTML = '<div class="search-loading">Searching...</div>';
+            
+            const results = await apiRequest(`/investments/assets/search-external?q=${encodeURIComponent(query)}`);
+            
+            if (results.length === 0) {
+                resultsContainer.innerHTML = '<div class="search-no-results">No assets found. Try manual entry.</div>';
+                return;
+            }
+            
+            resultsContainer.innerHTML = results.map(asset => `
+                <div class="search-result-item" onclick='selectAsset(${JSON.stringify(asset)})'>
+                    <span class="result-symbol">${asset.symbol}</span>
+                    <span class="result-name">${asset.name}</span>
+                    <span class="result-market badge badge-${asset.market.toLowerCase()}">${asset.market}</span>
+                </div>
+            `).join('');
+            
+        } catch (error) {
+            console.error('Asset search failed:', error);
+            resultsContainer.innerHTML = '<div class="search-error">Search failed. Try manual entry.</div>';
         }
-        
-        document.getElementById('add-transaction-form').reset();
-        document.getElementById('tx-date').value = new Date().toISOString().slice(0, 16);
-        openModal('add-transaction-modal');
-    } catch (error) {
-        showToast('Failed to load holdings', 'error');
+    }, 300);
+}
+
+function selectAsset(asset) {
+    selectedAsset = asset;
+    
+    // Update hidden fields
+    document.getElementById('tx-selected-symbol').value = asset.symbol;
+    document.getElementById('tx-selected-name').value = asset.name;
+    document.getElementById('tx-selected-type').value = asset.asset_type;
+    document.getElementById('tx-selected-market').value = asset.market;
+    document.getElementById('tx-selected-currency').value = asset.currency;
+    document.getElementById('tx-selected-country').value = asset.country;
+    
+    // Update display
+    document.getElementById('selected-asset-symbol').textContent = asset.symbol;
+    document.getElementById('selected-asset-name').textContent = asset.name;
+    document.getElementById('selected-asset-market').textContent = asset.market;
+    document.getElementById('selected-asset-market').className = `asset-market badge badge-${asset.market.toLowerCase()}`;
+    
+    // Show selected asset, hide search
+    document.getElementById('selected-asset-display').style.display = 'flex';
+    document.getElementById('tx-asset-search').style.display = 'none';
+    document.getElementById('asset-search-results').innerHTML = '';
+    
+    // Update currency based on asset
+    document.getElementById('tx-currency').value = asset.currency;
+    
+    // Hide manual entry if it was open
+    document.getElementById('tx-manual-entry').checked = false;
+    document.getElementById('manual-asset-fields').style.display = 'none';
+}
+
+function clearSelectedAsset() {
+    selectedAsset = null;
+    
+    // Clear hidden fields
+    document.getElementById('tx-selected-symbol').value = '';
+    document.getElementById('tx-selected-name').value = '';
+    document.getElementById('tx-selected-type').value = '';
+    document.getElementById('tx-selected-market').value = '';
+    document.getElementById('tx-selected-currency').value = '';
+    document.getElementById('tx-selected-country').value = '';
+    
+    // Show search, hide selected
+    document.getElementById('selected-asset-display').style.display = 'none';
+    document.getElementById('tx-asset-search').style.display = 'block';
+    document.getElementById('tx-asset-search').value = '';
+    document.getElementById('tx-asset-search').focus();
+}
+
+function toggleManualEntry() {
+    const isManual = document.getElementById('tx-manual-entry').checked;
+    const manualFields = document.getElementById('manual-asset-fields');
+    const searchContainer = document.getElementById('tx-asset-search').parentElement;
+    
+    if (isManual) {
+        manualFields.style.display = 'block';
+        document.getElementById('tx-asset-search').style.display = 'none';
+        document.getElementById('asset-search-results').innerHTML = '';
+        document.getElementById('selected-asset-display').style.display = 'none';
+        selectedAsset = null;
+    } else {
+        manualFields.style.display = 'none';
+        document.getElementById('tx-asset-search').style.display = 'block';
+    }
+}
+
+function updateCurrencyFromMarket() {
+    const market = document.getElementById('tx-market').value;
+    const currencySelect = document.getElementById('tx-currency');
+    
+    if (market === 'BMV') {
+        currencySelect.value = 'MXN';
+    } else {
+        currencySelect.value = 'USD';
     }
 }
 
@@ -476,12 +598,54 @@ async function submitHolding(event) {
 async function submitTransaction(event) {
     event.preventDefault();
     
+    const isManualEntry = document.getElementById('tx-manual-entry').checked;
+    
+    // Get asset info (from selection or manual entry)
+    let symbol, assetName, assetType, market, currency, country;
+    
+    if (isManualEntry) {
+        symbol = document.getElementById('tx-symbol').value.toUpperCase().trim();
+        assetName = document.getElementById('tx-asset-name').value || symbol;
+        assetType = document.getElementById('tx-asset-type').value;
+        market = document.getElementById('tx-market').value;
+        currency = document.getElementById('tx-currency').value;
+        country = market === 'BMV' ? 'MX' : 'US';
+    } else if (selectedAsset) {
+        symbol = selectedAsset.symbol;
+        assetName = selectedAsset.name;
+        assetType = selectedAsset.asset_type;
+        market = selectedAsset.market;
+        currency = selectedAsset.currency;
+        country = selectedAsset.country;
+    } else {
+        // Check hidden fields (for form resubmission)
+        symbol = document.getElementById('tx-selected-symbol').value;
+        if (!symbol) {
+            showToast('Please select or enter an asset', 'error');
+            return;
+        }
+        assetName = document.getElementById('tx-selected-name').value || symbol;
+        assetType = document.getElementById('tx-selected-type').value || 'stock';
+        market = document.getElementById('tx-selected-market').value || 'NYSE';
+        currency = document.getElementById('tx-selected-currency').value || 'USD';
+        country = document.getElementById('tx-selected-country').value || 'US';
+    }
+    
+    if (!symbol) {
+        showToast('Please select or enter an asset symbol', 'error');
+        return;
+    }
+    
     const data = {
-        holding_id: parseInt(document.getElementById('tx-holding').value),
+        symbol: symbol,
+        asset_name: assetName,
+        asset_type: assetType,
+        market: market,
+        currency: currency,
+        country: country,
         transaction_type: document.getElementById('tx-type').value,
         quantity: parseFloat(document.getElementById('tx-quantity').value),
         price_per_unit: parseFloat(document.getElementById('tx-price').value),
-        currency: document.getElementById('tx-currency').value,
         fees: parseFloat(document.getElementById('tx-fees').value) || 0,
         executed_at: new Date(document.getElementById('tx-date').value).toISOString(),
         broker: document.getElementById('tx-broker').value || null,
@@ -489,14 +653,24 @@ async function submitTransaction(event) {
     };
     
     try {
-        await apiRequest('/investments/transactions', {
+        const result = await apiRequest('/investments/transactions/with-asset', {
             method: 'POST',
             body: JSON.stringify(data),
         });
-        showToast('Transaction recorded successfully', 'success');
+        
+        let message = 'Transaction recorded successfully';
+        if (result.asset_created) {
+            message += ` (created new asset: ${symbol})`;
+        }
+        if (result.holding_created) {
+            message += ' with new holding';
+        }
+        
+        showToast(message, 'success');
         closeModal();
         loadTransactions();
         loadHoldings();
+        loadAssets();
         loadDashboard();
     } catch (error) {
         showToast(`Failed to record transaction: ${error.message}`, 'error');

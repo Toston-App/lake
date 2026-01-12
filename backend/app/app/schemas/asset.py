@@ -86,3 +86,14 @@ class AssetWithPrice(Asset):
 class AssetDeletionResponse(BaseModel):
     message: str
 
+
+# External asset search result (from Yahoo Finance, etc.)
+class ExternalAssetSearchResult(BaseModel):
+    symbol: str
+    name: str
+    asset_type: AssetType
+    market: Market
+    currency: Currency
+    country: str
+    exchange: Optional[str] = None
+
