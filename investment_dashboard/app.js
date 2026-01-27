@@ -1,6 +1,6 @@
 // Configuration
 const API_BASE = 'http://localhost:8888/api/v1';
-let authToken = ""; // Set your auth token here
+let authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3Njk3OTQ1NTksInVzZXIiOnsibmFtZSI6InN0cmluZyIsImVtYWlsIjoidXNlckBleGFtcGxlLmNvbSIsImNvdW50cnkiOiJzdHJpbmciLCJpZCI6MX19.iJOswWv3vcsa6cOK9F6CEZshoFU1BjRm5OMH_cZjlcI"; // Set your auth token here
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -93,6 +93,7 @@ async function checkApiConnection() {
         statusText.textContent = 'API Connected';
         
         // Load initial data
+        loadBrokersList();
         loadDashboard();
     } catch (error) {
         statusDot.classList.add('error');
@@ -109,7 +110,15 @@ async function loadDashboard() {
         const summary = await apiRequest('/investments/portfolio/summary');
         document.getElementById('total-value-usd').textContent = formatCurrency(summary.total_value_usd, 'USD');
         document.getElementById('total-value-mxn').textContent = formatCurrency(summary.total_value_mxn, 'MXN');
-        document.getElementById('total-invested').textContent = formatCurrency(summary.total_invested, 'USD');
+        
+        // Combined total invested (all investments converted to single currency)
+        document.getElementById('total-invested-combined-usd').textContent = formatCurrency(summary.total_invested_combined_usd, 'USD');
+        document.getElementById('total-invested-combined-mxn').textContent = formatCurrency(summary.total_invested_combined_mxn, 'MXN');
+        
+        // Show original currency breakdown as sub-text
+        document.getElementById('total-invested-usd-only').textContent = `USD: ${formatCurrency(summary.total_invested_usd, 'USD')}`;
+        document.getElementById('total-invested-mxn-only').textContent = `MXN: ${formatCurrency(summary.total_invested_mxn, 'MXN')}`;
+        
         document.getElementById('total-gain-loss').textContent = formatCurrency(summary.total_gain_loss, 'USD');
         
         const changeEl = document.getElementById('total-change');
@@ -120,6 +129,7 @@ async function loadDashboard() {
         loadAllocationByClass();
         loadAllocationByCurrency();
         loadAllocationByMarket();
+        loadAllocationByBroker();
         loadTopHoldings();
         
     } catch (error) {
@@ -152,6 +162,50 @@ async function loadAllocationByMarket() {
     } catch (error) {
         console.error('Failed to load allocation by market:', error);
     }
+}
+
+async function loadAllocationByBroker() {
+    try {
+        const data = await apiRequest('/investments/portfolio/allocation/by-broker');
+        renderBrokerAllocation('allocation-broker', data.allocations);
+    } catch (error) {
+        console.error('Failed to load allocation by broker:', error);
+    }
+}
+
+function renderBrokerAllocation(containerId, allocations) {
+    const container = document.getElementById(containerId);
+    
+    if (!allocations || allocations.length === 0) {
+        container.innerHTML = '<div class="empty-state">No data available</div>';
+        return;
+    }
+    
+    container.innerHTML = allocations
+        .filter(a => a.percentage > 0)
+        .map(a => {
+            const firstLetter = (a.name || a.value || 'U').charAt(0).toUpperCase();
+            const logoUrl = a.logo_url || '';
+            const brokerKey = (a.value || 'unknown').toLowerCase().replace(/[^a-z0-9]/g, '-');
+            
+            return `
+                <div class="allocation-item allocation-item-with-logo">
+                    <div class="broker-logo-wrapper-sm">
+                        <img src="${logoUrl}" 
+                             class="broker-logo-sm" 
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" 
+                             alt="">
+                        <div class="broker-logo-fallback-sm" style="${logoUrl ? 'display: none;' : 'display: flex;'}">${firstLetter}</div>
+                    </div>
+                    <span class="allocation-label">${a.name}</span>
+                    <div class="allocation-bar-container">
+                        <div class="allocation-bar alloc-broker-${brokerKey}" 
+                             style="width: ${a.percentage}%; background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));"></div>
+                    </div>
+                    <span class="allocation-value">${a.percentage.toFixed(1)}%</span>
+                </div>
+            `;
+        }).join('');
 }
 
 function renderAllocation(containerId, allocations, classPrefix) {
@@ -394,6 +448,158 @@ async function showAddHoldingModal() {
 let searchTimeout = null;
 let selectedAsset = null;
 
+// Broker state
+let brokersList = [];
+let brokersGrouped = {};
+let selectedBroker = null;
+let brokerSearchTimeout = null;
+
+// Load brokers on init
+async function loadBrokersList() {
+    try {
+        const response = await apiRequest('/brokers/grouped');
+        brokersGrouped = response.groups;
+        // Flatten for easy searching
+        brokersList = [
+            ...(response.groups.US || []),
+            ...(response.groups.Mexico || []),
+            ...(response.groups.Crypto || []),
+            ...(response.groups.International || []),
+        ];
+    } catch (error) {
+        console.error('Failed to load brokers list:', error);
+    }
+}
+
+// Search brokers (local filtering with category grouping)
+function searchBrokers(query) {
+    const resultsContainer = document.getElementById('broker-search-results');
+    
+    if (!query || query.length < 1) {
+        resultsContainer.innerHTML = '';
+        return;
+    }
+    
+    // Debounce
+    if (brokerSearchTimeout) {
+        clearTimeout(brokerSearchTimeout);
+    }
+    
+    brokerSearchTimeout = setTimeout(() => {
+        const queryLower = query.toLowerCase();
+        
+        // Filter and group results
+        const grouped = {
+            US: (brokersGrouped.US || []).filter(b => 
+                b.name.toLowerCase().includes(queryLower) || 
+                b.code.toLowerCase().includes(queryLower)
+            ),
+            Mexico: (brokersGrouped.Mexico || []).filter(b => 
+                b.name.toLowerCase().includes(queryLower) || 
+                b.code.toLowerCase().includes(queryLower)
+            ),
+            Crypto: (brokersGrouped.Crypto || []).filter(b => 
+                b.name.toLowerCase().includes(queryLower) || 
+                b.code.toLowerCase().includes(queryLower)
+            ),
+            International: (brokersGrouped.International || []).filter(b => 
+                b.name.toLowerCase().includes(queryLower) || 
+                b.code.toLowerCase().includes(queryLower)
+            ),
+        };
+        
+        const totalMatches = grouped.US.length + grouped.Mexico.length + 
+                            grouped.Crypto.length + grouped.International.length;
+        
+        if (totalMatches === 0) {
+            resultsContainer.innerHTML = '<div class="search-no-results">No brokers found</div>';
+            return;
+        }
+        
+        let html = '';
+        
+        if (grouped.US.length > 0) {
+            html += '<div class="search-group-header">United States</div>';
+            html += grouped.US.map(b => brokerResultItem(b)).join('');
+        }
+        if (grouped.Mexico.length > 0) {
+            html += '<div class="search-group-header">Mexico</div>';
+            html += grouped.Mexico.map(b => brokerResultItem(b)).join('');
+        }
+        if (grouped.Crypto.length > 0) {
+            html += '<div class="search-group-header">Crypto Exchanges</div>';
+            html += grouped.Crypto.map(b => brokerResultItem(b)).join('');
+        }
+        if (grouped.International.length > 0) {
+            html += '<div class="search-group-header">International</div>';
+            html += grouped.International.map(b => brokerResultItem(b)).join('');
+        }
+        
+        resultsContainer.innerHTML = html;
+    }, 150);
+}
+
+function brokerResultItem(broker) {
+    const firstLetter = broker.name.charAt(0).toUpperCase();
+    const brokerJson = JSON.stringify(broker).replace(/'/g, "\\'");
+    return `
+        <div class="search-result-item" onclick='selectBroker(${brokerJson})'>
+            <div class="broker-logo-wrapper-sm">
+                <img src="${broker.logo_url || ''}" 
+                     class="broker-logo-sm" 
+                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" 
+                     alt="">
+                <div class="broker-logo-fallback-sm" style="display: none;">${firstLetter}</div>
+            </div>
+            <span class="result-name">${broker.name}</span>
+            <span class="result-market badge badge-${broker.country.toLowerCase()}">${broker.country}</span>
+        </div>
+    `;
+}
+
+function selectBroker(broker) {
+    selectedBroker = broker;
+    
+    // Update hidden field
+    document.getElementById('tx-selected-broker').value = broker.code;
+    
+    // Update display
+    const logo = document.getElementById('selected-broker-logo');
+    const fallback = document.getElementById('selected-broker-fallback');
+    
+    logo.src = broker.logo_url || '';
+    logo.style.display = 'block';
+    fallback.style.display = 'none';
+    fallback.textContent = broker.name.charAt(0).toUpperCase();
+    
+    // Handle logo error
+    logo.onerror = function() {
+        this.style.display = 'none';
+        fallback.style.display = 'flex';
+    };
+    
+    document.getElementById('selected-broker-name').textContent = broker.name;
+    document.getElementById('selected-broker-country').textContent = broker.country;
+    document.getElementById('selected-broker-country').className = 
+        `asset-market badge badge-${broker.country.toLowerCase()}`;
+    
+    // Show selected, hide search
+    document.getElementById('selected-broker-display').style.display = 'flex';
+    document.getElementById('tx-broker-search').style.display = 'none';
+    document.getElementById('broker-search-results').innerHTML = '';
+}
+
+function clearSelectedBroker() {
+    selectedBroker = null;
+    document.getElementById('tx-selected-broker').value = '';
+    
+    // Show search, hide selected
+    document.getElementById('selected-broker-display').style.display = 'none';
+    document.getElementById('tx-broker-search').style.display = 'block';
+    document.getElementById('tx-broker-search').value = '';
+    document.getElementById('tx-broker-search').focus();
+}
+
 async function showAddTransactionModal() {
     // Reset form and state
     document.getElementById('add-transaction-form').reset();
@@ -407,6 +613,14 @@ async function showAddTransactionModal() {
     document.getElementById('asset-search-results').innerHTML = '';
     document.getElementById('tx-manual-entry').checked = false;
     document.getElementById('manual-asset-fields').style.display = 'none';
+    
+    // Reset broker selection
+    selectedBroker = null;
+    document.getElementById('tx-selected-broker').value = '';
+    document.getElementById('selected-broker-display').style.display = 'none';
+    document.getElementById('tx-broker-search').style.display = 'block';
+    document.getElementById('tx-broker-search').value = '';
+    document.getElementById('broker-search-results').innerHTML = '';
     
     // Clear hidden fields
     document.getElementById('tx-selected-symbol').value = '';
@@ -648,7 +862,7 @@ async function submitTransaction(event) {
         price_per_unit: parseFloat(document.getElementById('tx-price').value),
         fees: parseFloat(document.getElementById('tx-fees').value) || 0,
         executed_at: new Date(document.getElementById('tx-date').value).toISOString(),
-        broker: document.getElementById('tx-broker').value || null,
+        broker: document.getElementById('tx-selected-broker').value || null,
         notes: document.getElementById('tx-notes').value || null,
     };
     

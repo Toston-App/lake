@@ -64,6 +64,7 @@ async def log_requests(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "*",
         "https://www.cleverbill.ing",
         "https://cleverbill.ing",
         "https://api.cleverbill.ing",

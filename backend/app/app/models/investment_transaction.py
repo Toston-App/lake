@@ -7,6 +7,7 @@ from sqlalchemy.sql import func
 
 from app.db.base_class import Base
 from app.models.asset import Currency
+from app.models.broker import Broker
 
 if TYPE_CHECKING:
     from .holding import Holding
@@ -58,7 +59,7 @@ class InvestmentTransaction(Base):
     
     # Metadata
     notes: str = Column(Text, nullable=True)
-    broker: str = Column(String, nullable=True)  # e.g., "GBM", "Fidelity", "Coinbase"
+    broker: Broker = Column(Enum(Broker), nullable=True)  # Selected from predefined list
     
     # When the transaction was executed (may differ from created_at)
     executed_at = Column(DateTime(timezone=True), nullable=False)

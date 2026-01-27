@@ -3,7 +3,7 @@ Investment transaction endpoints for the Investment Dashboard.
 """
 from datetime import datetime, timezone
 from typing import Any, Optional
-
+from fastapi.encoders import jsonable_encoder
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,7 +37,7 @@ async def list_transactions(
 ) -> Any:
     """
     List all investment transactions for the current user.
-    
+
     Optional filters:
     - holding_id: Show transactions for a specific holding
     - transaction_type: BUY, SELL, DIVIDEND, SPLIT, TRANSFER_IN, TRANSFER_OUT
@@ -65,13 +65,13 @@ async def list_transactions(
             skip=skip,
             limit=limit,
         )
-    
+
     # Enrich with asset details
     result = []
     for tx in transactions:
         holding = await crud.holding.get(db, id=tx.holding_id)
         asset = await crud.asset.get(db, id=holding.asset_id) if holding else None
-        
+
         tx_data = InvestmentTransactionWithAsset(
             id=tx.id,
             owner_id=tx.owner_id,
@@ -91,7 +91,7 @@ async def list_transactions(
             asset_name=asset.name if asset else None,
         )
         result.append(tx_data)
-    
+
     return result
 
 

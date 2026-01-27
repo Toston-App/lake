@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models
 from app.api import deps
 from app.models.asset import AssetClass, AssetType, Currency, Market
+from app.models.broker import Broker, BROKER_INFO
 from app.schemas.portfolio import (
     PortfolioSummary,
     AllocationItem,
@@ -19,9 +20,11 @@ from app.schemas.portfolio import (
     AllocationByMarket,
     AllocationByType,
     AllocationByCountry,
+    AllocationByBroker,
     TopHolding,
     TopHoldingsResponse,
 )
+from app.services.currency_converter import CurrencyConverter
 
 router = APIRouter()
 
@@ -36,21 +39,33 @@ async def get_portfolio_summary(
     """
     holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
     
+    # Get exchange rate for currency conversion
+    usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
+    
     total_value_usd = 0.0
     total_value_mxn = 0.0
-    total_invested = 0.0
+    total_invested_usd = 0.0
+    total_invested_mxn = 0.0
     total_gain_loss = 0.0
     
     for holding in holdings:
         total_value_usd += holding.current_value_usd
         total_value_mxn += holding.current_value_mxn
-        total_invested += holding.total_invested
+        # Separate total_invested by cost_currency
+        if holding.cost_currency == Currency.USD:
+            total_invested_usd += holding.total_invested
+        else:
+            total_invested_mxn += holding.total_invested
         total_gain_loss += holding.unrealized_gain_loss
+    
+    # Calculate combined totals (all investments converted to single currency)
+    total_invested_combined_usd = total_invested_usd + (total_invested_mxn / usd_mxn_rate)
+    total_invested_combined_mxn = (total_invested_usd * usd_mxn_rate) + total_invested_mxn
     
     # Calculate total percentage gain/loss
     total_gain_loss_pct = 0.0
-    if total_invested > 0:
-        total_gain_loss_pct = (total_gain_loss / total_invested) * 100
+    if total_invested_combined_usd > 0:
+        total_gain_loss_pct = (total_gain_loss / total_invested_combined_usd) * 100
     
     # Count unique assets
     asset_ids = set(h.asset_id for h in holdings)
@@ -58,8 +73,10 @@ async def get_portfolio_summary(
     return PortfolioSummary(
         total_value_usd=round(total_value_usd, 2),
         total_value_mxn=round(total_value_mxn, 2),
-        total_invested=round(total_invested, 2),
-        total_invested_currency=Currency.USD,  # Assuming USD as base
+        total_invested_usd=round(total_invested_usd, 2),
+        total_invested_mxn=round(total_invested_mxn, 2),
+        total_invested_combined_usd=round(total_invested_combined_usd, 2),
+        total_invested_combined_mxn=round(total_invested_combined_mxn, 2),
         total_gain_loss=round(total_gain_loss, 2),
         total_gain_loss_pct=round(total_gain_loss_pct, 2),
         total_holdings=len(holdings),
@@ -339,6 +356,94 @@ async def get_allocation_by_country(
         ))
     
     return AllocationByCountry(
+        total_value_usd=round(total_usd, 2),
+        total_value_mxn=round(total_mxn, 2),
+        allocations=allocations,
+    )
+
+
+@router.get("/allocation/by-broker", response_model=AllocationByBroker)
+async def get_allocation_by_broker(
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Get portfolio allocation breakdown by broker.
+    
+    Aggregates holdings by the broker used for transactions.
+    If the same asset was purchased through multiple brokers,
+    each broker's portion is shown separately.
+    """
+    # Get all user's transactions to determine broker for each holding
+    transactions = await crud.investment_transaction.get_by_owner(
+        db, owner_id=current_user.id
+    )
+    
+    # Get all holdings
+    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holding_map = {h.id: h for h in holdings}
+    
+    # Group transactions by broker and holding
+    # Track which portion of each holding belongs to which broker
+    broker_holdings: dict[str, dict] = defaultdict(
+        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0, "holding_ids": set()}
+    )
+    
+    # For simplicity, we associate each holding with the broker
+    # from its most recent transaction (or most common broker)
+    holding_broker_map: dict[int, str] = {}
+    
+    for tx in transactions:
+        broker_key = tx.broker.value if tx.broker else "UNKNOWN"
+        # Associate holding with this broker
+        # (last transaction's broker wins, or we could do majority)
+        holding_broker_map[tx.holding_id] = broker_key
+    
+    # Now calculate values per broker
+    total_usd = 0.0
+    total_mxn = 0.0
+    
+    for holding in holdings:
+        broker_key = holding_broker_map.get(holding.id, "UNKNOWN")
+        broker_holdings[broker_key]["usd"] += holding.current_value_usd
+        broker_holdings[broker_key]["mxn"] += holding.current_value_mxn
+        broker_holdings[broker_key]["count"] += 1
+        broker_holdings[broker_key]["holding_ids"].add(holding.id)
+        total_usd += holding.current_value_usd
+        total_mxn += holding.current_value_mxn
+    
+    # Build allocation items
+    allocations = []
+    for broker_key, data in sorted(
+        broker_holdings.items(),
+        key=lambda x: x[1]["usd"],
+        reverse=True
+    ):
+        if data["usd"] == 0:
+            continue
+        
+        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
+        
+        # Get broker display name
+        if broker_key == "UNKNOWN":
+            name = "Unknown Broker"
+        else:
+            try:
+                broker = Broker(broker_key)
+                name = BROKER_INFO[broker].name
+            except (ValueError, KeyError):
+                name = broker_key
+        
+        allocations.append(AllocationItem(
+            name=name,
+            value=broker_key,
+            total_value_usd=round(data["usd"], 2),
+            total_value_mxn=round(data["mxn"], 2),
+            percentage=round(percentage, 2),
+            holdings_count=data["count"],
+        ))
+    
+    return AllocationByBroker(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
         allocations=allocations,

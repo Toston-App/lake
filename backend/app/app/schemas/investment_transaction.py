@@ -4,6 +4,7 @@ from typing import Optional
 from pydantic import BaseModel, validator
 
 from app.models.asset import AssetType, Currency, Market
+from app.models.broker import Broker
 from app.models.investment_transaction import TransactionType
 
 
@@ -18,7 +19,7 @@ class InvestmentTransactionBase(BaseModel):
     exchange_rate_to_usd: Optional[float] = None
     exchange_rate_to_mxn: Optional[float] = None
     notes: Optional[str] = None
-    broker: Optional[str] = None
+    broker: Optional[Broker] = None
     executed_at: Optional[datetime] = None
 
     @validator("quantity", "price_per_unit", "fees", pre=True, always=True)
@@ -119,7 +120,7 @@ class TransactionWithAssetCreate(BaseModel):
     price_per_unit: float
     fees: float = 0.0
     executed_at: datetime
-    broker: Optional[str] = None
+    broker: Optional[Broker] = None
     notes: Optional[str] = None
     
     # Optional exchange rates (auto-fetched if not provided)

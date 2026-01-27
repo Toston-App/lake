@@ -291,6 +291,12 @@ body {
     background: var(--negative-bg);
 }
 
+.card-sub {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
+}
+
 /* Allocations Grid */
 .allocations-grid {
     display: grid;
@@ -793,6 +799,137 @@ body {
 .badge-nyse { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
 .badge-nasdaq { background: rgba(236, 72, 153, 0.2); color: #ec4899; }
 .badge-bmv { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+
+/* Badge colors for broker countries */
+.badge-us { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
+.badge-mx { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+.badge-mexico { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+.badge-international { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.badge-crypto { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+
+/* Broker Search Container */
+.broker-search-container {
+    position: relative;
+}
+
+/* Broker Logo Wrappers */
+.broker-logo-wrapper {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--bg-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.broker-logo-wrapper-sm {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--bg-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+/* Broker Logos */
+.broker-logo {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 4px;
+}
+
+.broker-logo-sm {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 3px;
+}
+
+/* Broker Logo Fallback (First Letter) */
+.broker-logo-fallback {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.25rem;
+    color: var(--accent-secondary);
+    background: linear-gradient(135deg, var(--accent-glow), rgba(129, 140, 248, 0.2));
+}
+
+.broker-logo-fallback-sm {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--accent-secondary);
+    background: linear-gradient(135deg, var(--accent-glow), rgba(129, 140, 248, 0.2));
+}
+
+/* Search Group Headers */
+.search-group-header {
+    padding: 0.5rem 1rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+}
+
+/* Selected Broker Display */
+.selected-broker {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: var(--bg-hover);
+    border: 1px solid var(--accent-primary);
+    border-radius: var(--radius-md);
+    margin-bottom: 1rem;
+}
+
+.selected-broker-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.broker-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.broker-country {
+    font-size: 0.7rem;
+}
+
+/* Allocation item with logo */
+.allocation-item-with-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.allocation-item-with-logo .allocation-label {
+    width: 90px;
+}
+
+.allocation-item-with-logo .allocation-bar-container {
+    flex: 1;
+}
 
 /* Empty States */
 .empty-state {

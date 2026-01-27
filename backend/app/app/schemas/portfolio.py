@@ -11,8 +11,14 @@ class PortfolioSummary(BaseModel):
     """Overall portfolio summary with total values and performance."""
     total_value_usd: float
     total_value_mxn: float
-    total_invested: float
-    total_invested_currency: Currency
+    
+    # Total invested by original currency
+    total_invested_usd: float  # Sum of investments made in USD
+    total_invested_mxn: float  # Sum of investments made in MXN
+    
+    # Combined total invested (converted to both currencies)
+    total_invested_combined_usd: float  # All investments converted to USD
+    total_invested_combined_mxn: float  # All investments converted to MXN
     
     # Overall performance
     total_gain_loss: float
@@ -86,6 +92,14 @@ class AllocationByType(BaseModel):
 # Allocation by Country
 class AllocationByCountry(BaseModel):
     """Portfolio allocation broken down by country."""
+    total_value_usd: float
+    total_value_mxn: float
+    allocations: list[AllocationItem]
+
+
+# Allocation by Broker
+class AllocationByBroker(BaseModel):
+    """Portfolio allocation broken down by broker."""
     total_value_usd: float
     total_value_mxn: float
     allocations: list[AllocationItem]

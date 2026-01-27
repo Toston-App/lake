@@ -4,6 +4,7 @@ from app.api.api_v1.endpoints import (
     accounts,
     # ai, # Disabled OCR AI endpoint
     balance_adjustments,
+    brokers,
     categories,
     demo_data,
     expenses,
@@ -52,3 +53,4 @@ api_router.include_router(waha.router, prefix="/waha", tags=["whatsapp", "waha"]
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(recap.router, prefix="/recap", tags=["recap"])
 api_router.include_router(investments.router, prefix="/investments", tags=["investments"])
+api_router.include_router(brokers.router, prefix="/brokers", tags=["brokers"])

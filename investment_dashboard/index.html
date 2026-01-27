@@ -89,8 +89,14 @@
                         <span class="card-value" id="total-value-mxn">$0.00</span>
                     </div>
                     <div class="card summary-card">
-                        <span class="card-label">Total Invested</span>
-                        <span class="card-value" id="total-invested">$0.00</span>
+                        <span class="card-label">Total Invested (USD)</span>
+                        <span class="card-value" id="total-invested-combined-usd">$0.00</span>
+                        <span class="card-sub" id="total-invested-usd-only">USD: $0.00</span>
+                    </div>
+                    <div class="card summary-card">
+                        <span class="card-label">Total Invested (MXN)</span>
+                        <span class="card-value" id="total-invested-combined-mxn">$0.00</span>
+                        <span class="card-sub" id="total-invested-mxn-only">MXN: $0.00</span>
                     </div>
                     <div class="card summary-card">
                         <span class="card-label">Unrealized Gain/Loss</span>
@@ -111,6 +117,10 @@
                     <div class="card">
                         <h3>By Market</h3>
                         <div class="allocation-chart" id="allocation-market"></div>
+                    </div>
+                    <div class="card">
+                        <h3>By Broker</h3>
+                        <div class="allocation-chart allocation-with-logos" id="allocation-broker"></div>
                     </div>
                     <div class="card">
                         <h3>Top Holdings</h3>
@@ -447,8 +457,27 @@
                 <input type="datetime-local" id="tx-date" required>
             </div>
             <div class="form-group">
-                <label for="tx-broker">Broker (optional)</label>
-                <input type="text" id="tx-broker" placeholder="e.g., GBM, Fidelity">
+                <label for="tx-broker-search">Broker (optional)</label>
+                <div class="broker-search-container">
+                    <input type="text" 
+                           id="tx-broker-search" 
+                           placeholder="Search brokers..."
+                           autocomplete="off"
+                           oninput="searchBrokers(this.value)">
+                    <div id="broker-search-results" class="search-results"></div>
+                </div>
+                <div id="selected-broker-display" class="selected-asset" style="display: none;">
+                    <div class="selected-asset-info">
+                        <div class="broker-logo-wrapper">
+                            <img id="selected-broker-logo" class="broker-logo" src="" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                            <div id="selected-broker-fallback" class="broker-logo-fallback" style="display: none;"></div>
+                        </div>
+                        <span id="selected-broker-name" class="asset-name"></span>
+                        <span id="selected-broker-country" class="asset-market badge"></span>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="clearSelectedBroker()">Change</button>
+                </div>
+                <input type="hidden" id="tx-selected-broker" name="broker">
             </div>
             <div class="form-group">
                 <label for="tx-notes">Notes (optional)</label>
