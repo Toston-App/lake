@@ -67,8 +67,13 @@ class WhatsAppParser:
 
         prompt = f"""You are an assistant in a personal finance app. Parse the following message about a financial transaction and extract the relevant information.
 
+CRITICAL REQUIREMENTS:
+- You MUST always return a valid JSON object
+- The 'type' field is REQUIRED and MUST be one of: 'expense', 'income', or 'transfer'
+- The 'amount' field is REQUIRED and must be a positive number
+
         Rules:
-        - type: Categorize as 'expense' (default), 'income', or 'transfer'
+        - type: **REQUIRED** - MUST be one of: 'expense', 'income', or 'transfer'. Default to 'expense' if unclear. This field cannot be null or omitted.
         - amount: Extract the numerical amount as a float
         - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({date.today()})
         - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
@@ -95,7 +100,7 @@ class WhatsAppParser:
 
         Do not attempt fuzzy matching for accounts or places. Only return a match if you are highly confident it's the correct one from the provided lists.
 
-        Respond with a single valid JSON object containing all extracted fields. Use null for any fields you cannot determine.
+        Respond with a single valid JSON object containing all extracted fields. Use null for any fields you cannot determine, EXCEPT for 'type' and 'amount' which are REQUIRED and must always be present.
         """
 
         try:
@@ -278,7 +283,7 @@ class WhatsAppParser:
         # Build the transaction object
         transaction = {
             "id": f"{tx_id}-{secrets.token_urlsafe(2)}",
-            "type": ai_result.get("type", TransactionType.EXPENSE),
+            "type": ai_result.get("type") or TransactionType.EXPENSE,
             "amount": float(ai_result.get("amount", 0)),
             "category": category_name,
             "category_id": category_id,
