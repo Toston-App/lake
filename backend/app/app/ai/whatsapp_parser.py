@@ -268,7 +268,7 @@ CRITICAL REQUIREMENTS:
         if ai_result.get("from_account") or ai_result.get("to_account"):
             return "transfer"
 
-        text = f"{message} {ai_result.get('description') or ''}".lower()
+        text = f"{message or ''} {ai_result.get('description') or ''}".lower()
         if re.search(r"\b(transferir|transferencia|traspaso|pasar)\b", text):
             return "transfer"
         if re.search(
