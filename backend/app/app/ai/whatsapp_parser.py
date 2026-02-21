@@ -73,10 +73,13 @@ CRITICAL REQUIREMENTS:
 - The 'amount' field is REQUIRED and must be a positive number
 
         Rules:
-        - type: **REQUIRED** - MUST be one of: 'expense', 'income', or 'transfer'. Default to 'expense' if unclear. This field cannot be null or omitted.
+        - type: **REQUIRED** - MUST be one of: 'expense', 'income', or 'transfer'. Use these rules to determine the type:
+            * 'transfer': The message mentions moving money between accounts (keywords: "transferir", "pasar de/a", "mover de/a", "enviar de/a").
+            * 'income': The message describes money received or earned (keywords: "ingreso", "ingresé", "cobré", "cobro", "me pagaron", "nómina", "nomina", "salario", "sueldo", "venta", "vendí", "devolución", "reembolso", "me depositaron", "recibí", "ganancia", "bono", "premio", "renta cobrada", "freelance", "honorarios"). Also, if the best matching category has `is_income: True`, the type MUST be 'income'.
+            * 'expense': Everything else — money spent or paid. Default to 'expense' only if the message does not match income or transfer patterns.
         - amount: Extract the numerical amount as a float
         - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({date.today()})
-        - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
+        - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable. IMPORTANT: Each category has a field `is_income` — if the transaction type is 'income', you MUST select a category where `is_income` is True. If the transaction type is 'expense', you MUST select a category where `is_income` is False.
         - subcategory: **CRITICAL** - The subcategory MUST belong to the selected category. Each category has a list of subcategories. You can ONLY choose a subcategory from the "subcategories" array of the selected category. If the selected category doesn't have an appropriate subcategory in its list, return null. Respond with the id and name of the subcategory or null.
         - place: Match the transaction location to the most appropriate place, using the provided list: {places}. Return the id and name ONLY if there's a clear match in the provided list, otherwise return null.
         - description: Brief description in Spanish of what the transaction was for.
@@ -85,13 +88,15 @@ CRITICAL REQUIREMENTS:
         - to_account: For transfers, identify the destination account from the provided list: {accounts}. Only return the id and name if there's an EXACT or VERY CLOSE match.
         - id: Short (max 10 chars) unique identifier for the transaction with text divided by dashes
 
-        Examples of incoming messages:
-        - "2000 pesos cena de antes de ayer"
-        - "154.04 en al super despensa con bbva"
-        - "ingreso 1800 nomina"
-        - "cuenta nu 249 autozone"
-        - "transferir 500 de bbva a santander"
-        - "pasar 1000 de efectivo a tarjeta de credito"
+        Examples of incoming messages and their expected types:
+        - "2000 pesos cena de antes de ayer" -> type: "expense"
+        - "154.04 en al super despensa con bbva" -> type: "expense"
+        - "ingreso 1800 nomina" -> type: "income"
+        - "me pagaron 5000 de freelance" -> type: "income"
+        - "cobré 3000 de renta" -> type: "income"
+        - "cuenta nu 249 autozone" -> type: "expense"
+        - "transferir 500 de bbva a santander" -> type: "transfer"
+        - "pasar 1000 de efectivo a tarjeta de credito" -> type: "transfer"
 
         IMPORTANT: When selecting a subcategory, verify it exists in the selected category's subcategories array. For example:
         - If you select category "Compras" with id 5, you can only choose subcategories that appear in categories[where id=5].subcategories
@@ -158,6 +163,9 @@ CRITICAL REQUIREMENTS:
 
                 transaction = self.convert_ai_result_to_transaction(ai_result, default_account)
 
+                # Cross-check transaction type against category's is_income flag
+                transaction = self.correct_type_from_category(transaction, categories or [])
+
                 # Validate the transaction has minimal required data
                 if not self.validate_transaction(transaction):
                     logger.warning(f"Parsed transaction failed validation: {transaction}")
@@ -208,6 +216,45 @@ CRITICAL REQUIREMENTS:
             return False
 
         return True
+
+    def correct_type_from_category(
+        self, transaction: dict, categories: list[dict[str, Any]]
+    ) -> dict:
+        """
+        Cross-check the transaction type against the selected category's is_income flag.
+        If the AI picked a category with is_income=True but set type as 'expense',
+        correct the type to 'income'. Vice versa for is_income=False with type 'income'.
+        Transfers are never corrected since they don't depend on category.
+        """
+        # Don't touch transfers — they're account-to-account, not category-dependent
+        if transaction.get("type") == TransactionType.TRANSFER.value or transaction.get("type") == TransactionType.TRANSFER:
+            return transaction
+
+        category_id = transaction.get("category_id")
+        if not category_id or not categories:
+            return transaction
+
+        # Find the category in the list
+        category = next((cat for cat in categories if cat.get("id") == category_id), None)
+        if not category:
+            return transaction
+
+        is_income = category.get("is_income", False)
+
+        if is_income and transaction.get("type") != TransactionType.INCOME.value:
+            logger.info(
+                f"Correcting transaction type from '{transaction.get('type')}' to 'income' "
+                f"because category '{category.get('name')}' has is_income=True"
+            )
+            transaction["type"] = TransactionType.INCOME.value
+        elif not is_income and transaction.get("type") == TransactionType.INCOME.value:
+            logger.info(
+                f"Correcting transaction type from 'income' to 'expense' "
+                f"because category '{category.get('name')}' has is_income=False"
+            )
+            transaction["type"] = TransactionType.EXPENSE.value
+
+        return transaction
 
     def validate_subcategory_belongs_to_category(
         self, category_id: int | None, subcategory_id: int | None, categories: list[dict[str, Any]]
@@ -280,10 +327,15 @@ CRITICAL REQUIREMENTS:
         to_account_id = to_account.get("id") if isinstance(to_account, dict) else None
         to_account_name = to_account.get("name") if isinstance(to_account, dict) else None
 
+        # Validate and normalize the type field
+        raw_type = ai_result.get("type", "").strip().lower() if ai_result.get("type") else ""
+        valid_types = {t.value for t in TransactionType}
+        tx_type = raw_type if raw_type in valid_types else TransactionType.EXPENSE
+
         # Build the transaction object
         transaction = {
             "id": f"{tx_id}-{secrets.token_urlsafe(2)}",
-            "type": ai_result.get("type") or TransactionType.EXPENSE,
+            "type": tx_type,
             "amount": float(ai_result.get("amount", 0)),
             "category": category_name,
             "category_id": category_id,
