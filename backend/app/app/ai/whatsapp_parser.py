@@ -1,16 +1,19 @@
 import json
+import re
 import secrets
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from openai import AsyncOpenAI, RateLimitError
 from pydantic import BaseModel
 
-from app.schemas.account import Account
-from app.ai.ocr import TransactionType
 from app.utilities.logger import setup_logger
 
+if TYPE_CHECKING:
+    from app.schemas.account import Account
+
 logger = setup_logger("whatsapp_requests", "whatsapp_requests.log")
+DEFAULT_TRANSACTION_TYPE = "expense"
 
 class WhatsAppMessage(BaseModel):
     """Model for WhatsApp message data"""
@@ -140,7 +143,7 @@ CRITICAL REQUIREMENTS:
         categories: list[dict[str, Any]] = None,
         places: list[dict[str, Any]] = None,
         accounts: list[dict[str, Any]] = None,
-        default_account: Optional[Account] = None
+        default_account: Optional["Account"] = None
     ) -> dict[str, Any]:
         """
         Parse WhatsApp message to extract transaction information
@@ -156,7 +159,7 @@ CRITICAL REQUIREMENTS:
                     logger.warning(f"AI analysis produced empty result for message: {message}")
                     return {}
 
-                transaction = self.convert_ai_result_to_transaction(ai_result, default_account)
+                transaction = self.convert_ai_result_to_transaction(ai_result, default_account, message)
 
                 # Validate the transaction has minimal required data
                 if not self.validate_transaction(transaction):
@@ -242,7 +245,43 @@ CRITICAL REQUIREMENTS:
 
         return subcategory_id in subcategory_ids
 
-    def convert_ai_result_to_transaction(self, ai_result: dict, default_account: Optional[Account] = None) -> dict:
+    def _normalize_transaction_type(self, ai_result: dict, message: str) -> str:
+        raw_type = ai_result.get("type")
+        normalized_type = ""
+
+        if hasattr(raw_type, "value"):
+            normalized_type = str(raw_type.value).strip().lower()
+        elif isinstance(raw_type, str):
+            normalized_type = raw_type.strip().lower()
+
+        type_aliases = {
+            "expense": "expense",
+            "gasto": "expense",
+            "income": "income",
+            "ingreso": "income",
+            "transfer": "transfer",
+            "transferencia": "transfer",
+        }
+        if normalized_type in type_aliases:
+            return type_aliases[normalized_type]
+
+        if ai_result.get("from_account") or ai_result.get("to_account"):
+            return "transfer"
+
+        text = f"{message} {ai_result.get('description') or ''}".lower()
+        if re.search(r"\b(transferir|transferencia|traspaso|pasar)\b", text):
+            return "transfer"
+        if re.search(
+            r"\b(ingreso|deposito|depósito|nomina|nómina|sueldo|salario|abono|me pagaron|pago recibido)\b",
+            text,
+        ):
+            return "income"
+
+        return DEFAULT_TRANSACTION_TYPE
+
+    def convert_ai_result_to_transaction(
+        self, ai_result: dict, default_account: Optional["Account"] = None, message: str = ""
+    ) -> dict:
         """Convert AI analysis result to transaction format"""
         # Generate a unique transaction ID if none provided
         tx_id = ai_result.get("id", f"tx-{secrets.token_urlsafe(4)}")
@@ -283,7 +322,7 @@ CRITICAL REQUIREMENTS:
         # Build the transaction object
         transaction = {
             "id": f"{tx_id}-{secrets.token_urlsafe(2)}",
-            "type": ai_result.get("type") or TransactionType.EXPENSE,
+            "type": self._normalize_transaction_type(ai_result, message),
             "amount": float(ai_result.get("amount", 0)),
             "category": category_name,
             "category_id": category_id,
