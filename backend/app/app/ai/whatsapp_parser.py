@@ -20,23 +20,60 @@ class WhatsAppMessage(BaseModel):
 
 
 class WhatsAppParser:
-    """Class to parse WhatsApp messages and extract transaction data"""
+    """Class to parse WhatsApp messages and extract transaction data using OpenRouter"""
 
-    def __init__(self, api_key: str = None):
-        """Initialize the parser with OpenAI API key"""
-        self.client = AsyncOpenAI(api_key=api_key) if api_key else None
+    def __init__(
+        self,
+        api_key: str = None,
+        model: str = "openai/gpt-4o-mini",
+        fallback_models: list[str] = None,
+        site_url: str = None,
+        app_name: str = None,
+    ):
+        """
+        Initialize the parser with OpenRouter API key and model configuration
+
+        Args:
+            api_key: OpenRouter API key
+            model: Model to use (e.g., 'openai/gpt-4o-mini', 'anthropic/claude-3-haiku')
+            fallback_models: List of fallback models to try if primary model fails
+            site_url: Optional site URL for OpenRouter analytics
+            app_name: Optional app name for OpenRouter analytics
+        """
+        self.model = model
+        self.fallback_models = fallback_models
+        if api_key:
+            # Build optional headers for OpenRouter analytics
+            headers = {}
+            if site_url:
+                headers["HTTP-Referer"] = site_url
+            if app_name:
+                headers["X-Title"] = app_name
+
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://openrouter.ai/api/v1",
+                default_headers=headers if headers else None,
+            )
+        else:
+            self.client = None
 
     async def analyze_with_ai(self, message: str, categories, places, accounts) -> dict:
         """
-        Analyze WhatsApp message using OpenAI to extract transaction information
+        Analyze WhatsApp message using OpenRouter to extract transaction information
         """
         if not self.client:
-            raise ValueError("OpenAI client not initialized. Please provide an API key.")
+            raise ValueError("OpenRouter client not initialized. Please provide an API key.")
 
         prompt = f"""You are an assistant in a personal finance app. Parse the following message about a financial transaction and extract the relevant information.
 
+CRITICAL REQUIREMENTS:
+- You MUST always return a valid JSON object
+- The 'type' field is REQUIRED and MUST be one of: 'expense', 'income', or 'transfer'
+- The 'amount' field is REQUIRED and must be a positive number
+
         Rules:
-        - type: Categorize as 'expense' (default), 'income', or 'transfer'
+        - type: **REQUIRED** - MUST be one of: 'expense', 'income', or 'transfer'. This field cannot be null or omitted.
         - amount: Extract the numerical amount as a float
         - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({date.today()})
         - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
@@ -63,13 +100,17 @@ class WhatsAppParser:
 
         Do not attempt fuzzy matching for accounts or places. Only return a match if you are highly confident it's the correct one from the provided lists.
 
-        Respond with a single valid JSON object containing all extracted fields. Use null for any fields you cannot determine.
+        Respond with a single valid JSON object containing all extracted fields. Use null for any fields you cannot determine, EXCEPT for 'type' and 'amount' which are REQUIRED and must always be present.
         """
 
         try:
+            # Build extra_body with fallback models if configured
+            extra_body = None
+            if self.fallback_models:
+                extra_body = {"models": self.fallback_models}
+
             response = await self.client.chat.completions.create(
-                # https://github.com/openai/openai-python/blob/v2.2.0/src/openai/types/shared/chat_model.py
-                model="gpt-4o-mini",
+                model=self.model,
                 response_format={"type": "json_object"},
                 messages=[
                     {
@@ -81,16 +122,17 @@ class WhatsAppParser:
                         "content": f"Message to parse: \"{message}\""
                     }
                 ],
-                max_tokens=1000
+                max_tokens=1000,
+                extra_body=extra_body,
             )
             return json.loads(response.choices[0].message.content)
         except RateLimitError as e:
             if "insufficient_quota" in str(e):
-                raise ValueError("Insufficient OpenAI API credits")
-            raise ValueError("OpenAI rate limit exceeded")
+                raise ValueError("Insufficient OpenRouter API credits")
+            raise ValueError("OpenRouter rate limit exceeded")
         except Exception as e:
-            logger.error(f"Error analyzing message with OpenAI: {str(e)}")
-            raise ValueError(f"Error analyzing message with OpenAI: {str(e)}")
+            logger.error(f"Error analyzing message with OpenRouter: {str(e)}")
+            raise ValueError(f"Error analyzing message with OpenRouter: {str(e)}")
 
     async def parse_message(
         self,
@@ -110,11 +152,14 @@ class WhatsAppParser:
         try:
             if self.client:
                 ai_result = await self.analyze_with_ai(message, categories, places, accounts)
+
+                print("🚀 ~ AI Result:", ai_result)
                 if not ai_result:
                     logger.warning(f"AI analysis produced empty result for message: {message}")
                     return {}
 
                 transaction = self.convert_ai_result_to_transaction(ai_result, default_account)
+                print("🚀 ~ Parsed Transaction:", transaction)
 
                 # Validate the transaction has minimal required data
                 if not self.validate_transaction(transaction):
@@ -147,7 +192,7 @@ class WhatsAppParser:
 
                 return transaction
             else:
-                logger.error("No OpenAI client available for message parsing")
+                logger.error("No OpenRouter client available for message parsing")
                 return {}
         except Exception as ai_error:
             logger.warning(f"AI analysis failed: {str(ai_error)}")
@@ -241,7 +286,7 @@ class WhatsAppParser:
         # Build the transaction object
         transaction = {
             "id": f"{tx_id}-{secrets.token_urlsafe(2)}",
-            "type": ai_result.get("type", TransactionType.EXPENSE),
+            "type": ai_result.get("type") or TransactionType.EXPENSE,
             "amount": float(ai_result.get("amount", 0)),
             "category": category_name,
             "category_id": category_id,

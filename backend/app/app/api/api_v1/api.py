@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from app.api.api_v1.endpoints import (
     accounts,
-    ai,
+    # ai, # Disabled OCR AI endpoint
     balance_adjustments,
     categories,
     demo_data,
@@ -12,6 +12,7 @@ from app.api.api_v1.endpoints import (
     items,
     login,
     places,
+    recap,
     subcategories,
     transactions,
     transfers,
@@ -44,7 +45,8 @@ api_router.include_router(
     subcategories.router, prefix="/subcategories", tags=["subcategories"]
 )
 api_router.include_router(imports.router, prefix="/import", tags=["imports"])
-api_router.include_router(ai.router, prefix="/ai", tags=["ai"])
+# api_router.include_router(ai.router, prefix="/ai", tags=["ai"]) # Disabled OCR AI endpoint
 api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])
 api_router.include_router(waha.router, prefix="/waha", tags=["whatsapp", "waha"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
+api_router.include_router(recap.router, prefix="/recap", tags=["recap"])

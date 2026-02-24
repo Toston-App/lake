@@ -115,6 +115,13 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: str
 
+    # OpenRouter Settings (for WhatsApp AI parsing)
+    OPENROUTER_API_KEY: str
+    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
+    OPENROUTER_FALLBACK_MODELS: Optional[str] = None  # Comma-separated list of fallback models
+    OPENROUTER_SITE_URL: Optional[str] = None
+    OPENROUTER_APP_NAME: Optional[str] = None
+
     # Feedback
     TELEGRAM_BOT_TOKEN: str
     TELEGRAM_OWNER_ID: str

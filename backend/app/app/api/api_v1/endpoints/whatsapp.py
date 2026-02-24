@@ -25,7 +25,19 @@ from app.utilities.whatsapp import (
 from app.utilities.wide_events import enrich_event, mark_for_logging, timed
 
 router = APIRouter()
-whatsapp_parser = WhatsAppParser(settings.OPENAI_API_KEY)
+
+# Parse fallback models from comma-separated string
+_fallback_models = None
+if settings.OPENROUTER_FALLBACK_MODELS:
+    _fallback_models = [m.strip() for m in settings.OPENROUTER_FALLBACK_MODELS.split(",") if m.strip()]
+
+whatsapp_parser = WhatsAppParser(
+    api_key=settings.OPENROUTER_API_KEY,
+    model=settings.OPENROUTER_MODEL,
+    fallback_models=_fallback_models,
+    site_url=settings.OPENROUTER_SITE_URL,
+    app_name=settings.OPENROUTER_APP_NAME,
+)
 logger = setup_logger("whatsapp_requests", "whatsapp_requests.log")
 
 
