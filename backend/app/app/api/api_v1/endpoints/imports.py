@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fuzzywuzzy import fuzz
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,7 @@ from app import crud, models, schemas
 from app.api import deps
 from app.models.imports import ImportService
 from app.synonyms import get_synonyms
+from app.utilities.wide_events import enrich_event, mark_for_logging
 
 router = APIRouter()
 synonyms = get_synonyms()
@@ -224,6 +225,7 @@ async def import_transactions(
 
 
 async def process_import(
+    request: Request,
     db: AsyncSession,
     current_user: models.User,
     csv_file: UploadFile,
@@ -233,6 +235,17 @@ async def process_import(
     """
     Process the import and return detailed results.
     """
+    mark_for_logging(request)
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={
+            "type": "import",
+            "service": service.value,
+            "filename": csv_file.filename,
+        },
+    )
+
     if csv_file.filename == "":
         raise HTTPException(status_code=400, detail="Filename is empty")
 
@@ -300,6 +313,19 @@ async def process_import(
     )
     await crud.imports.update(db=db, db_obj=import_obj, obj_in=import_update)
 
+    enrich_event(
+        request,
+        import_results={
+            "total_rows_processed": len(df),
+            "total_imported": total_imported,
+            "expenses_imported": expenses_imported,
+            "incomes_imported": incomes_imported,
+            "accounts_created": len(accounts_with_id),
+            "sites_created": len(sites_with_id),
+            "unmatched_categories": unmatched_categories,
+        },
+    )
+
     return {
         "message": "Importación exitosa",
         "total_transactions_imported": total_imported,
@@ -314,7 +340,7 @@ async def process_import(
 
 @router.post("/bluecoins")
 async def bluecoins(
-    *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     csv_file: UploadFile = File(...),
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -331,13 +357,13 @@ async def bluecoins(
         "Account": "Account",
     }
     return await process_import(
-        db, current_user, csv_file, column_mapping, ImportService.BLUECOINS
+        request, db, current_user, csv_file, column_mapping, ImportService.BLUECOINS
     )
 
 
 @router.post("/csv")
 async def import_csv(
-    *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     csv_file: UploadFile = File(...),
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -355,5 +381,5 @@ async def import_csv(
         "Site": "Site",
     }
     return await process_import(
-        db, current_user, csv_file, column_mapping, ImportService.CSV
+        request, db, current_user, csv_file, column_mapping, ImportService.CSV
     )

@@ -1,5 +1,4 @@
 import asyncio
-import time
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
@@ -23,7 +22,7 @@ from app.utilities.whatsapp import (
     send_reaction,
     send_text_message,
 )
-from app.utilities.wide_events import enrich_event, mark_for_logging
+from app.utilities.wide_events import enrich_event, mark_for_logging, timed
 
 router = APIRouter()
 whatsapp_parser = WhatsAppParser(settings.OPENAI_API_KEY)
@@ -232,23 +231,20 @@ Para agregar una cuenta:
 
                                     # Parse message to extract transaction data
                                     try:
-                                        # Measure AI parsing time
-                                        parse_start = time.time()
-                                        transaction_data = await whatsapp_parser.parse_message(
-                                            message=message_text,
-                                            categories=simplify_categories(categories),
-                                            places=simplify_places(places),
-                                            accounts=simplify_accounts(accounts),
-                                            default_account=default_account
-                                        )
-                                        parse_duration_ms = (time.time() - parse_start) * 1000
-                                        
-                                        # Add AI parsing metrics
+                                        with timed() as t_parse:
+                                            transaction_data = await whatsapp_parser.parse_message(
+                                                message=message_text,
+                                                categories=simplify_categories(categories),
+                                                places=simplify_places(places),
+                                                accounts=simplify_accounts(accounts),
+                                                default_account=default_account
+                                            )
+
                                         enrich_event(
                                             request,
                                             ai={
                                                 "provider": "openai",
-                                                "parse_duration_ms": round(parse_duration_ms, 2),
+                                                "parse_duration_ms": t_parse.ms,
                                                 "message_length": len(message_text),
                                                 "context_items": {
                                                     "categories": len(categories),
@@ -306,21 +302,19 @@ Por ejemplo:
                                         # Cache transaction data for later confirmation
                                         transaction_id = transaction_data["id"]
 
-                                        cache_start = time.time()
-                                        store_success = await store_transaction(
-                                            transaction_id=transaction_id,
-                                            transaction_data=transaction_data,
-                                            user_id=user.id
-                                        )
-                                        cache_duration_ms = (time.time() - cache_start) * 1000
-                                        
-                                        # Add cache metrics
+                                        with timed() as t_cache:
+                                            store_success = await store_transaction(
+                                                transaction_id=transaction_id,
+                                                transaction_data=transaction_data,
+                                                user_id=user.id
+                                            )
+
                                         enrich_event(
                                             request,
                                             cache={
                                                 "operation": "store_transaction",
                                                 "success": store_success,
-                                                "duration_ms": round(cache_duration_ms, 2),
+                                                "duration_ms": t_cache.ms,
                                             },
                                         )
 
@@ -467,18 +461,16 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     made_from="WhatsApp"
                                                 )
 
-                                                db_start = time.time()
-                                                expesne = await crud.expense.create_with_owner(
-                                                    db=db, obj_in=expense_in, owner_id=user_id
-                                                )
-                                                db_duration_ms = (time.time() - db_start) * 1000
+                                                with timed() as t_db:
+                                                    expesne = await crud.expense.create_with_owner(
+                                                        db=db, obj_in=expense_in, owner_id=user_id
+                                                    )
 
-                                                # Add database and transaction metrics
                                                 enrich_event(
                                                     request,
                                                     database={
                                                         "operation": "create_expense",
-                                                        "duration_ms": round(db_duration_ms, 2),
+                                                        "duration_ms": t_db.ms,
                                                         "success": expesne is not None,
                                                     },
                                                     transaction={
@@ -515,18 +507,16 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     made_from="WhatsApp"
                                                 )
 
-                                                db_start = time.time()
-                                                income = await crud.income.create_with_owner(
-                                                    db=db, obj_in=income_in, owner_id=user_id
-                                                )
-                                                db_duration_ms = (time.time() - db_start) * 1000
+                                                with timed() as t_db:
+                                                    income = await crud.income.create_with_owner(
+                                                        db=db, obj_in=income_in, owner_id=user_id
+                                                    )
 
-                                                # Add database and transaction metrics
                                                 enrich_event(
                                                     request,
                                                     database={
                                                         "operation": "create_income",
-                                                        "duration_ms": round(db_duration_ms, 2),
+                                                        "duration_ms": t_db.ms,
                                                         "success": income is not None,
                                                     },
                                                     transaction={
@@ -561,18 +551,16 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     description=transaction_data.get("description") or "Added via WhatsApp",
                                                 )
 
-                                                db_start = time.time()
-                                                transfer = await crud.transfer.create_with_owner(
-                                                    db=db, obj_in=transfer_in, owner_id=user_id
-                                                )
-                                                db_duration_ms = (time.time() - db_start) * 1000
+                                                with timed() as t_db:
+                                                    transfer = await crud.transfer.create_with_owner(
+                                                        db=db, obj_in=transfer_in, owner_id=user_id
+                                                    )
 
-                                                # Add database and transaction metrics
                                                 enrich_event(
                                                     request,
                                                     database={
                                                         "operation": "create_transfer",
-                                                        "duration_ms": round(db_duration_ms, 2),
+                                                        "duration_ms": t_db.ms,
                                                         "success": transfer is not None,
                                                     },
                                                     transaction={

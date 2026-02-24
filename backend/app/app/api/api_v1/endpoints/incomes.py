@@ -3,19 +3,21 @@ from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
+from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
 
 
 @router.get("/getAll", response_model=list[schemas.Income])
 async def read_incomes(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
     limit: int = 100,
@@ -24,18 +26,39 @@ async def read_incomes(
     """
     Retrieve incomes.
     """
-    if crud.user.is_superuser(current_user):
-        incomes = await crud.income.get_multi(db, skip=skip, limit=limit)
-    else:
-        incomes = await crud.income.get_multi_by_owner(
-            db=db, owner_id=current_user.id, skip=skip, limit=limit
-        )
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "is_superuser": current_user.is_superuser,
+        },
+        query={"type": "list_incomes", "skip": skip, "limit": limit},
+    )
+
+    with timed() as t:
+        if crud.user.is_superuser(current_user):
+            incomes = await crud.income.get_multi(db, skip=skip, limit=limit)
+        else:
+            incomes = await crud.income.get_multi_by_owner(
+                db=db, owner_id=current_user.id, skip=skip, limit=limit
+            )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "list_incomes",
+            "duration_ms": t.ms,
+            "results_count": len(incomes),
+        },
+    )
 
     return incomes
 
 
 @router.get("/{date_filter_type}/{date}", response_model=list[schemas.Income])
-async def read_incomes(
+async def read_incomes_by_date(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
     date: str = None,
@@ -44,6 +67,16 @@ async def read_incomes(
     """
     Retrieve incomes filtered by type.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        query={
+            "type": "filter_incomes_by_date",
+            "date_filter_type": date_filter_type.value,
+            "date_param": date,
+        },
+    )
+
     start_date: Date | None = None
     end_date: Date | None = None
 
@@ -122,9 +155,25 @@ async def read_incomes(
             )
 
     if start_date and end_date:
-        incomes = await crud.income.get_multi_by_date(
-            db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date
+        with timed() as t:
+            incomes = await crud.income.get_multi_by_date(
+                db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date
+            )
+
+        enrich_event(
+            request,
+            database={
+                "operation": "filter_incomes_by_date",
+                "duration_ms": t.ms,
+                "results_count": len(incomes),
+            },
+            date_range={
+                "start": str(start_date),
+                "end": str(end_date),
+                "days": (end_date - start_date).days + 1,
+            },
         )
+
         return incomes
 
     return []
@@ -133,6 +182,7 @@ async def read_incomes(
 @router.post("", response_model=schemas.Income)
 async def create_income(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     income_in: schemas.IncomeCreate,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -140,15 +190,49 @@ async def create_income(
     """
     Create new income.
     """
-    income = await crud.income.create_with_owner(
-        db=db, obj_in=income_in, owner_id=current_user.id
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "is_superuser": current_user.is_superuser,
+        },
+        operation={
+            "type": "create_income",
+            "source": income_in.made_from or "api",
+        },
     )
+
+    with timed() as t:
+        income = await crud.income.create_with_owner(
+            db=db, obj_in=income_in, owner_id=current_user.id
+        )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "create_income",
+            "duration_ms": t.ms,
+            "success": income is not None,
+        },
+        transaction={
+            "type": "income",
+            "id": income.id if income else None,
+            "amount": float(income_in.amount),
+            "date": str(income_in.date) if income_in.date else None,
+            "has_subcategory": income_in.subcategory_id is not None,
+            "has_place": income_in.place_id is not None,
+            "has_account": income_in.account_id is not None,
+        },
+    )
+
     return income
 
 
 @router.post("/bulk", response_model=list[schemas.Income])
 async def create_incomes_bulk(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     incomes_in: list[schemas.IncomeCreate],
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -156,15 +240,38 @@ async def create_incomes_bulk(
     """
     Create multiple incomes at once.
     """
-    incomes = await crud.income.create_multi_with_owner(
-        db=db, obj_list=incomes_in, owner_id=current_user.id
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={"type": "bulk_create_incomes", "count": len(incomes_in)},
+        bulk={
+            "item_count": len(incomes_in),
+            "total_amount": sum(float(i.amount) for i in incomes_in),
+        },
     )
+
+    with timed() as t:
+        incomes = await crud.income.create_multi_with_owner(
+            db=db, obj_list=incomes_in, owner_id=current_user.id
+        )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "bulk_create_incomes",
+            "duration_ms": t.ms,
+            "success_count": len(incomes),
+            "avg_duration_per_item_ms": round(t.ms / len(incomes_in), 2) if incomes_in else 0,
+        },
+    )
+
     return incomes
 
 
 @router.get("/{id}", response_model=schemas.Income)
 async def read_income(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -172,6 +279,12 @@ async def read_income(
     """
     Get income by ID.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        query={"type": "get_income_by_id", "income_id": id},
+    )
+
     income = await crud.income.get(db=db, id=id)
     if not income:
         raise HTTPException(status_code=404, detail="Income not found")
@@ -185,6 +298,7 @@ async def read_income(
 @router.put("/{id}", response_model=schemas.Income)
 async def update_income(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     income_in: schemas.IncomeUpdate,
@@ -193,10 +307,14 @@ async def update_income(
     """
     Update an income.
     """
-    income = await read_income(db=db, id=id, current_user=current_user)
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={"type": "update_income", "income_id": id},
+    )
 
-    # TODO: Check there are changes
-    # Store original values for later comparison
+    income = await read_income(db=db, id=id, current_user=current_user, request=request)
+
     original_amount = income.amount
     original_account_id = income.account_id
     original_subcategory_id = income.subcategory_id
@@ -223,7 +341,29 @@ async def update_income(
             income_in.account_id = income.account_id
 
     income_in.updated_at = datetime.now(timezone.utc)
-    updated_income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
+
+    changes = {}
+    if income_in.amount and income_in.amount != original_amount:
+        changes["amount"] = {"from": float(original_amount), "to": float(income_in.amount)}
+    if income_in.account_id and income_in.account_id != original_account_id:
+        changes["account_id"] = {"from": original_account_id, "to": income_in.account_id}
+
+    with timed() as t:
+        updated_income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
+
+    enrich_event(
+        request,
+        database={
+            "operation": "update_income",
+            "duration_ms": t.ms,
+            "success": updated_income is not None,
+        },
+        transaction={
+            "id": id,
+            "changes": changes,
+            "fields_changed": len(changes),
+        },
+    )
 
     # Update subcategory and category totals if amount or subcategory_id has changed
     if updated_income.amount != original_amount or updated_income.subcategory_id != original_subcategory_id:
@@ -317,6 +457,7 @@ async def update_income(
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_income(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -324,23 +465,44 @@ async def delete_income(
     """
     Delete an income.
     """
-    income = await read_income(db=db, id=id, current_user=current_user)
-    income = await crud.income.remove(db=db, id=id)
-
-    # Remove the income from the user's balance
-    await crud.user.update_balance(
-        db=db, user_id=current_user.id, is_Expense=False, amount=-income.amount
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={"type": "delete_income", "income_id": id},
     )
 
-    if income.account_id:
-        # amount is negative because it's an income, and we want to subtract instead of add
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=income.account_id,
-            column="total_incomes",
-            amount=-income.amount
+    income = await read_income(db=db, id=id, current_user=current_user, request=request)
+
+    with timed() as t:
+        income = await crud.income.remove(db=db, id=id)
+
+        await crud.user.update_balance(
+            db=db, user_id=current_user.id, is_Expense=False, amount=-income.amount
         )
+
+        if income.account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                owner_id=current_user.id,
+                id=income.account_id,
+                column="total_incomes",
+                amount=-income.amount
+            )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "delete_income",
+            "duration_ms": t.ms,
+            "success": True,
+        },
+        transaction={
+            "id": id,
+            "amount": float(income.amount),
+            "had_account": income.account_id is not None,
+            "had_subcategory": income.subcategory_id is not None,
+        },
+    )
 
     # Update subcategory total and its category if they exist
     if income.subcategory_id:
@@ -376,6 +538,7 @@ async def delete_income(
 @router.delete("/bulk/{ids}", response_model=schemas.BulkDeletionResponse)
 async def delete_incomes_bulk(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     ids: str,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -384,12 +547,26 @@ async def delete_incomes_bulk(
     Delete multiple incomes at once.
     Format: /bulk/1,2,3
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={"type": "bulk_delete_incomes"},
+    )
+
     try:
         id_list = [int(id.strip()) for id in ids.split(",")]
     except ValueError:
         raise HTTPException(
             status_code=400, detail="Invalid ID format. Use comma-separated integers"
         )
+
+    enrich_event(
+        request,
+        bulk={
+            "requested_count": len(id_list),
+            "requested_ids": id_list[:10],
+        },
+    )
 
     # Collect valid incomes first
     valid_incomes = []
@@ -417,7 +594,7 @@ async def delete_incomes_bulk(
                 await db.execute(
                     updateDb(subcategory.__class__)
                     .where(subcategory.__class__.id == subcategory.id)
-                    .value(total=subcategory.total - income.amount)
+                    .values(total=subcategory.total - income.amount)
                     .execution_options(synchronize_session="fetch")
                 )
                 await db.commit()
@@ -429,28 +606,44 @@ async def delete_incomes_bulk(
                         await db.execute(
                             updateDb(category.__class__)
                             .where(category.__class__.id == category.id)
-                            .value(total=category.total - income.amount)
+                            .values(total=category.total - income.amount)
                             .execution_options(synchronize_session="fetch")
                         )
                         await db.commit()
 
-    # Only attempt to remove existing incomes
     valid_ids = [income.id for income in valid_incomes]
-    removed_incomes = await crud.income.remove_multi(db=db, ids=valid_ids)
 
-    # Update balances for successfully removed incomes
-    for income in removed_incomes:
-        await crud.user.update_balance(
-            db=db, user_id=current_user.id, is_Expense=False, amount=-income.amount
-        )
-        if income.account_id:
-            await crud.account.update_by_id_and_field(
-                db=db,
-                owner_id=current_user.id,
-                id=income.account_id,
-                column="total_incomes",
-                amount=-income.amount,
+    with timed() as t:
+        removed_incomes = await crud.income.remove_multi(db=db, ids=valid_ids)
+
+        total_amount_deleted = 0.0
+        for income in removed_incomes:
+            total_amount_deleted += float(income.amount)
+            await crud.user.update_balance(
+                db=db, user_id=current_user.id, is_Expense=False, amount=-income.amount
             )
+            if income.account_id:
+                await crud.account.update_by_id_and_field(
+                    db=db,
+                    owner_id=current_user.id,
+                    id=income.account_id,
+                    column="total_incomes",
+                    amount=-income.amount,
+                )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "bulk_delete_incomes",
+            "duration_ms": t.ms,
+            "success": True,
+        },
+        bulk={
+            "deleted_count": len(removed_incomes),
+            "total_amount_deleted": total_amount_deleted,
+            "success_rate": round(len(removed_incomes) / len(id_list) * 100, 2) if id_list else 0,
+        },
+    )
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_incomes)} incomes",

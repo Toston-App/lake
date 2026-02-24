@@ -34,7 +34,7 @@ PaginationProvider(app)
 async def startup_event():
     """Initialize services on startup"""
     logger.info("🚀 Starting application...")
-    
+
     # Initialize Axiom logging with wide events
     if settings.AXIOM_API_TOKEN:
         logger.info(f"📊 Initializing Axiom logging to dataset: {settings.AXIOM_DATASET}")
@@ -55,7 +55,7 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("👋 Shutting down application...")
-    
+
     # Flush any remaining logs to Axiom
     axiom_client = get_axiom_client()
     if axiom_client:
@@ -79,7 +79,7 @@ app.add_middleware(
 @app.middleware("http")
 async def add_csp_header(request: Request, call_next):
     response = await call_next(request)
-    
+
     csp_directives = [
         "default-src 'self'",
         "img-src 'self' data:",
@@ -95,10 +95,10 @@ async def add_csp_header(request: Request, call_next):
         "script-src-attr 'none'",
         "require-trusted-types-for 'script'"
     ]
-    
+
     csp_policy = "; ".join(csp_directives)
     response.headers["Content-Security-Policy"] = csp_policy
-    
+
     return response
 
 security = HTTPBasic()

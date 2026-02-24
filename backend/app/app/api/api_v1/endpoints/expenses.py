@@ -1,5 +1,4 @@
 import calendar
-import time
 from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -11,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
-from app.utilities.wide_events import enrich_event
+from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
 
@@ -42,21 +41,19 @@ async def read_expenses(
         },
     )
     
-    db_start = time.time()
-    if crud.user.is_superuser(current_user):
-        expenses = await crud.expense.get_multi(db, skip=skip, limit=limit)
-    else:
-        expenses = await crud.expense.get_multi_by_owner(
-            db=db, owner_id=current_user.id, skip=skip, limit=limit
-        )
-    db_duration_ms = (time.time() - db_start) * 1000
-    
-    # Add query results
+    with timed() as t:
+        if crud.user.is_superuser(current_user):
+            expenses = await crud.expense.get_multi(db, skip=skip, limit=limit)
+        else:
+            expenses = await crud.expense.get_multi_by_owner(
+                db=db, owner_id=current_user.id, skip=skip, limit=limit
+            )
+
     enrich_event(
         request,
         database={
             "operation": "list_expenses",
-            "duration_ms": round(db_duration_ms, 2),
+            "duration_ms": t.ms,
             "results_count": len(expenses),
         },
     )
@@ -176,18 +173,16 @@ async def read_expenses_by_date(
             )
 
     if start_date and end_date:
-        db_start = time.time()
-        expenses = await crud.expense.get_multi_by_date(
-            db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date
-        )
-        db_duration_ms = (time.time() - db_start) * 1000
-        
-        # Add results metrics
+        with timed() as t:
+            expenses = await crud.expense.get_multi_by_date(
+                db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date
+            )
+
         enrich_event(
             request,
             database={
                 "operation": "filter_expenses_by_date",
-                "duration_ms": round(db_duration_ms, 2),
+                "duration_ms": t.ms,
                 "results_count": len(expenses),
             },
             date_range={
@@ -196,7 +191,7 @@ async def read_expenses_by_date(
                 "days": (end_date - start_date).days + 1,
             },
         )
-        
+
         return expenses
 
     return []
@@ -226,20 +221,17 @@ async def create_expense(
             "source": expense_in.made_from or "api",
         },
     )
-    
-    # Create expense with timing
-    db_start = time.time()
-    expense = await crud.expense.create_with_owner(
-        db=db, obj_in=expense_in, owner_id=current_user.id
-    )
-    db_duration_ms = (time.time() - db_start) * 1000
-    
-    # Add transaction details
+
+    with timed() as t:
+        expense = await crud.expense.create_with_owner(
+            db=db, obj_in=expense_in, owner_id=current_user.id
+        )
+
     enrich_event(
         request,
         database={
             "operation": "create_expense",
-            "duration_ms": round(db_duration_ms, 2),
+            "duration_ms": t.ms,
             "success": expense is not None,
         },
         transaction={
@@ -253,7 +245,7 @@ async def create_expense(
             "has_account": expense_in.account_id is not None,
         },
     )
-    
+
     return expense
 
 
@@ -284,24 +276,22 @@ async def create_expenses_bulk(
             "total_amount": sum(float(e.amount) for e in expenses_in),
         },
     )
-    
-    db_start = time.time()
-    expenses = await crud.expense.create_multi_with_owner(
-        db=db, obj_list=expenses_in, owner_id=current_user.id
-    )
-    db_duration_ms = (time.time() - db_start) * 1000
-    
-    # Add results
+
+    with timed() as t:
+        expenses = await crud.expense.create_multi_with_owner(
+            db=db, obj_list=expenses_in, owner_id=current_user.id
+        )
+
     enrich_event(
         request,
         database={
             "operation": "bulk_create_expenses",
-            "duration_ms": round(db_duration_ms, 2),
+            "duration_ms": t.ms,
             "success_count": len(expenses),
-            "avg_duration_per_item_ms": round(db_duration_ms / len(expenses_in), 2) if expenses_in else 0,
+            "avg_duration_per_item_ms": round(t.ms / len(expenses_in), 2) if expenses_in else 0,
         },
     )
-    
+
     return expenses
 
 
@@ -327,7 +317,7 @@ async def read_expense(
             "expense_id": id,
         },
     )
-    
+
     expense = await crud.expense.get(db=db, id=id)
     if not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -362,7 +352,7 @@ async def update_expense(
             "expense_id": id,
         },
     )
-    
+
     expense = await read_expense(db=db, id=id, current_user=current_user, request=request)
 
     # TODO: Check there are changes
@@ -409,19 +399,16 @@ async def update_expense(
     if expense_in.category_id and expense_in.category_id != original_category_id:
         changes["category_id"] = {"from": original_category_id, "to": expense_in.category_id}
 
-    # Update the expense in the database
-    db_start = time.time()
-    updated_expense = await crud.expense.update(
-        db=db, db_obj=expense, obj_in=expense_in
-    )
-    db_duration_ms = (time.time() - db_start) * 1000
-    
-    # Add update metrics
+    with timed() as t:
+        updated_expense = await crud.expense.update(
+            db=db, db_obj=expense, obj_in=expense_in
+        )
+
     enrich_event(
         request,
         database={
             "operation": "update_expense",
-            "duration_ms": round(db_duration_ms, 2),
+            "duration_ms": t.ms,
             "success": updated_expense is not None,
         },
         transaction={
@@ -545,7 +532,7 @@ async def delete_expense(
             "expense_id": id,
         },
     )
-    
+
     expense = await read_expense(db=db, id=id, current_user=current_user, request=request)
 
     # TODO: move this to crud and reutilize it in bulk deletion
@@ -575,32 +562,27 @@ async def delete_expense(
             )
             await db.commit()
 
-    db_start = time.time()
-    expense = await crud.expense.remove(db=db, id=id)
+    with timed() as t:
+        expense = await crud.expense.remove(db=db, id=id)
 
-    # Remove the expense from the user's balance
-    await crud.user.update_balance(
-        db=db, user_id=current_user.id, is_Expense=True, amount=-expense.amount
-    )
-
-    if expense.account_id:
-        # amount is negative because it's an expense, and we want to subtract instead of add
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=expense.account_id,
-            column="total_expenses",
-            amount=-expense.amount,
+        await crud.user.update_balance(
+            db=db, user_id=current_user.id, is_Expense=True, amount=-expense.amount
         )
-    
-    db_duration_ms = (time.time() - db_start) * 1000
-    
-    # Add deletion metrics
+
+        if expense.account_id:
+            await crud.account.update_by_id_and_field(
+                db=db,
+                owner_id=current_user.id,
+                id=expense.account_id,
+                column="total_expenses",
+                amount=-expense.amount,
+            )
+
     enrich_event(
         request,
         database={
             "operation": "delete_expense",
-            "duration_ms": round(db_duration_ms, 2),
+            "duration_ms": t.ms,
             "success": True,
         },
         transaction={
@@ -637,14 +619,14 @@ async def delete_expenses_bulk(
             "type": "bulk_delete_expenses",
         },
     )
-    
+
     try:
         id_list = [int(id.strip()) for id in ids.split(",")]
     except ValueError:
         raise HTTPException(
             status_code=400, detail="Invalid ID format. Use comma-separated integers"
         )
-    
+
     # Add bulk operation context
     enrich_event(
         request,
@@ -701,34 +683,29 @@ async def delete_expenses_bulk(
                 )
                 await db.commit()
 
-    # Now delete the expenses
-    db_start = time.time()
-    removed_expenses = await crud.expense.remove_multi(db=db, ids=valid_ids)
+    with timed() as t:
+        removed_expenses = await crud.expense.remove_multi(db=db, ids=valid_ids)
 
-    # Update balances
-    total_amount_deleted = 0.0
-    for expense in removed_expenses:
-        total_amount_deleted += float(expense.amount)
-        await crud.user.update_balance(
-            db=db, user_id=current_user.id, is_Expense=True, amount=-expense.amount
-        )
-        if expense.account_id:
-            await crud.account.update_by_id_and_field(
-                db=db,
-                owner_id=current_user.id,
-                id=expense.account_id,
-                column="total_expenses",
-                amount=-expense.amount,
+        total_amount_deleted = 0.0
+        for expense in removed_expenses:
+            total_amount_deleted += float(expense.amount)
+            await crud.user.update_balance(
+                db=db, user_id=current_user.id, is_Expense=True, amount=-expense.amount
             )
-    
-    db_duration_ms = (time.time() - db_start) * 1000
-    
-    # Add results
+            if expense.account_id:
+                await crud.account.update_by_id_and_field(
+                    db=db,
+                    owner_id=current_user.id,
+                    id=expense.account_id,
+                    column="total_expenses",
+                    amount=-expense.amount,
+                )
+
     enrich_event(
         request,
         database={
             "operation": "bulk_delete_expenses",
-            "duration_ms": round(db_duration_ms, 2),
+            "duration_ms": t.ms,
             "success": True,
         },
         bulk={
