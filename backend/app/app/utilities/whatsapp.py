@@ -96,8 +96,6 @@ async def send_whatsapp_message(
             json=payload
         )
 
-        print(res.json(), "here")
-
         if res.status_code != 200:
             print("rip", res.json())
             return {"status": "error", "response": res.json()}

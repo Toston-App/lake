@@ -73,7 +73,7 @@ CRITICAL REQUIREMENTS:
 - The 'amount' field is REQUIRED and must be a positive number
 
         Rules:
-        - type: **REQUIRED** - MUST be one of: 'expense', 'income', or 'transfer'. Default to 'expense' if unclear. This field cannot be null or omitted.
+        - type: **REQUIRED** - MUST be one of: 'expense', 'income', or 'transfer'. This field cannot be null or omitted.
         - amount: Extract the numerical amount as a float
         - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({date.today()})
         - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
@@ -152,11 +152,14 @@ CRITICAL REQUIREMENTS:
         try:
             if self.client:
                 ai_result = await self.analyze_with_ai(message, categories, places, accounts)
+
+                print("🚀 ~ AI Result:", ai_result)
                 if not ai_result:
                     logger.warning(f"AI analysis produced empty result for message: {message}")
                     return {}
 
                 transaction = self.convert_ai_result_to_transaction(ai_result, default_account)
+                print("🚀 ~ Parsed Transaction:", transaction)
 
                 # Validate the transaction has minimal required data
                 if not self.validate_transaction(transaction):
