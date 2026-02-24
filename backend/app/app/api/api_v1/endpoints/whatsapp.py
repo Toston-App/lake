@@ -86,7 +86,7 @@ async def process_webhook(
     """
     # Mark this critical endpoint to always be logged (bypasses sampling)
     mark_for_logging(request)
-    
+
     # Add WhatsApp webhook context
     enrich_event(
         request,
@@ -95,7 +95,7 @@ async def process_webhook(
             "entries_count": len(callback.entry),
         },
     )
-    
+
     try:
         # Process each incoming message
         for entry in callback.entry:
@@ -179,7 +179,7 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                                 "triggered_by": "keyword_match",
                                             },
                                         )
-                                        
+
                                         # Fetch user accounts
                                         accounts = await crud.account.get_multi_by_owner(db=db, owner_id=user.id)
 
@@ -269,7 +269,7 @@ Para agregar una cuenta:
                                         # Check if parsing returned empty data
                                         if not transaction_data or "amount" not in transaction_data or transaction_data["amount"] <= 0:
                                             logger.warning(f"Failed to parse message: {message_text}")
-                                            
+
                                             # Add parsing failure context
                                             enrich_event(
                                                 request,
@@ -279,7 +279,7 @@ Para agregar una cuenta:
                                                     "action": "sent_help_message",
                                                 },
                                             )
-                                            
+
                                             await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="😵‍💫")
                                             await send_text_message(
                                                 send_to,
@@ -308,7 +308,7 @@ Por ejemplo:
                                                 "has_account": transaction_data.get("account_id") is not None,
                                             },
                                         )
-                                        
+
                                         # Save message id to react later
                                         transaction_data["message_to_react"] = message_obj["id"]
                                         # Cache transaction data for later confirmation
