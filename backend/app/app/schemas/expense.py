@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, field_validator, validator
+from pydantic import BaseModel, ConfigDict, field_validator, validator
 
 
 # Shared properties

@@ -70,7 +70,7 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
         *,
         owner_id: int,
         start_date: Date = None,
-        end_date: str = None,
+        end_date: Date = None,
     ) -> list[Transfer]:
         query = select(self.model)
 

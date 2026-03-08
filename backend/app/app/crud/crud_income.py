@@ -121,7 +121,7 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
         *,
         owner_id: int,
         start_date: Date = None,
-        end_date: str = None,
+        end_date: Date = None,
     ) -> list[Income]:
         query = select(self.model)
 

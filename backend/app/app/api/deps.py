@@ -54,7 +54,7 @@ async def get_current_user(
         try:
             if key == "foo":
                 payload = jwt.decode(token, key, algorithms=["HS256"])
-                has_email = payload.get("user").get("email")
+                has_email = payload.get("user", {}).get("email")
             else:
                 payload = jwt.decode(token, key, algorithms=[security.ALGORITHM])
                 has_email = payload.get("email")
@@ -65,7 +65,7 @@ async def get_current_user(
                 token_data = schemas.TokenPayloadUuid(**payload)
 
             break  # If decoding succeeds, exit the loop
-        except (jwt.JWTError, ValidationError) as e:
+        except (jwt.JWTError, ValidationError, AttributeError) as e:
             print("🚀 ~ jwt.JWTError:", e)
             if key == "foo":  # If this was the last attempt
                 raise HTTPException(

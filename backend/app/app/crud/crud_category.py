@@ -1,3 +1,5 @@
+from typing import cast
+
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -50,6 +52,20 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
             .limit(limit)
         )
         return result.scalars().all()
+
+    async def remove(self, db: AsyncSession, *, id: int) -> Category:
+        # Must eager-load subcategories before delete so SQLAlchemy can
+        # cascade the delete-orphan without triggering lazy="raise_on_sql".
+        result = await db.execute(
+            select(self.model)
+            .options(selectinload(self.model.subcategories))
+            .filter(self.model.id == id)
+        )
+        obj = result.scalars().first()
+        assert obj is not None
+        await db.delete(obj)
+        await db.commit()
+        return cast(Category, obj)
 
 
 category = CRUDCategory(Category)

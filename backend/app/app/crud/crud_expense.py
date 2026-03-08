@@ -122,7 +122,7 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
         *,
         owner_id: int,
         start_date: Date = None,
-        end_date: str = None,
+        end_date: Date = None,
     ) -> list[Expense]:
         query = select(self.model)
 

@@ -95,6 +95,14 @@ async def update_category(
     category_in.updated_at = datetime.now(timezone.utc)
     category = await crud.category.update(db=db, db_obj=category, obj_in=category_in)
 
+    # Re-fetch with subcategories loaded to avoid lazy-load error on response serialization
+    result = await db.execute(
+        select(models.Category)
+        .options(selectinload(models.Category.subcategories))
+        .filter(models.Category.id == id)
+    )
+    category = result.scalar_one()
+
     return category
 
 
