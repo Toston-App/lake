@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from dateutil.relativedelta import relativedelta
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +20,14 @@ from app.process_data.process import (
     get_df,
     transaction_charts,
 )
+from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
 
 
 @router.get("/getAll", response_model=list[schemas.Data])
 async def read_all_expenses(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
     limit: int = 100,
@@ -34,13 +36,21 @@ async def read_all_expenses(
     """
     Retrieve expenses.
     """
-    if crud.user.is_superuser(current_user):
-        expenses = await crud.expense.get_multi(db, skip=skip, limit=limit)
-    else:
-        expenses = await crud.expense.get_multi_by_owner(
-            db=db, owner_id=current_user.id, skip=skip, limit=limit
-        )
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        query={"type": "list_all_data", "skip": skip, "limit": limit},
+    )
 
+    with timed() as t:
+        if crud.user.is_superuser(current_user):
+            expenses = await crud.expense.get_multi(db, skip=skip, limit=limit)
+        else:
+            expenses = await crud.expense.get_multi_by_owner(
+                db=db, owner_id=current_user.id, skip=skip, limit=limit
+            )
+
+    enrich_event(request, database={"operation": "list_all_data", "duration_ms": t.ms, "results_count": len(expenses)})
     return expenses
 
 
@@ -95,6 +105,7 @@ async def all_querys(
 
 @router.get("/{date_filter_type}/{date}", response_model=Any)
 async def get_all_data(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
     date: str = None,
@@ -103,6 +114,21 @@ async def get_all_data(
     """
     Massive data retrieval for the dashboard.
     """
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "country": current_user.country,
+            "balance_total": round(float(current_user.balance_total), 2),
+        },
+        query={
+            "type": "dashboard_data",
+            "date_filter_type": date_filter_type.value,
+            "date_param": date,
+        },
+    )
+    
     start_date: Date | None = None
     end_date: Date | None = None
     results = None
@@ -112,7 +138,9 @@ async def get_all_data(
             start_date = datetime.strptime(date, "%Y-%m-%d").date()
             end_date = start_date
 
-            results = await all_querys(db, start_date, end_date, owner_id=current_user.id)
+            with timed() as t:
+                results = await all_querys(db, start_date, end_date, owner_id=current_user.id)
+            enrich_event(request, database={"query_duration_ms": t.ms, "query_type": "single_day"})
         except ValueError:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
@@ -123,9 +151,9 @@ async def get_all_data(
             start_date = datetime.strptime(date, "%Y-%m-%d").date()
             end_date = start_date + timedelta(days=6)
 
-            results = await all_querys(
-                db, start_date, end_date, "days", 6, owner_id=current_user.id
-            )
+            with timed() as t:
+                results = await all_querys(db, start_date, end_date, "days", 6, owner_id=current_user.id)
+            enrich_event(request, database={"query_duration_ms": t.ms, "query_type": "week"})
         except ValueError:
             raise HTTPException(
                 status_code=400, detail="Date must be a date in the format YYYY-MM-DD"
@@ -137,9 +165,9 @@ async def get_all_data(
             _, num_days = calendar.monthrange(start_date.year, start_date.month)
             end_date = start_date + timedelta(days=num_days - 1)
 
-            results = await all_querys(
-                db, start_date, end_date, "months", 1, owner_id=current_user.id
-            )
+            with timed() as t:
+                results = await all_querys(db, start_date, end_date, "months", 1, owner_id=current_user.id)
+            enrich_event(request, database={"query_duration_ms": t.ms, "query_type": "month"})
         except ValueError:
             raise HTTPException(
                 status_code=400, detail="Date must be in the format YYYY-MM"
@@ -160,9 +188,9 @@ async def get_all_data(
             _, end_day = calendar.monthrange(year, end_month)
             end_date = Date(year, end_month, end_day)
 
-            results = await all_querys(
-                db, start_date, end_date, "months", 3, owner_id=current_user.id
-            )
+            with timed() as t:
+                results = await all_querys(db, start_date, end_date, "months", 3, owner_id=current_user.id)
+            enrich_event(request, database={"query_duration_ms": t.ms, "query_type": "quarter", "quarter": quarterNum})
 
         except (ValueError, IndexError):
             raise HTTPException(
@@ -175,9 +203,9 @@ async def get_all_data(
             start_date = Date(year, 1, 1)
             end_date = Date(year, 12, 31)
 
-            results = await all_querys(
-                db, start_date, end_date, "days", 365, owner_id=current_user.id
-            )
+            with timed() as t:
+                results = await all_querys(db, start_date, end_date, "days", 365, owner_id=current_user.id)
+            enrich_event(request, database={"query_duration_ms": t.ms, "query_type": "year", "year": year})
         except (ValueError, IndexError):
             raise HTTPException(
                 status_code=400, detail="Date must be in the format YYYY"
@@ -189,14 +217,12 @@ async def get_all_data(
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
             end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
 
-            results = await all_querys(
-                db,
-                start_date,
-                end_date,
-                "days",
-                (end_date - start_date).days,
-                owner_id=current_user.id,
-            )
+            with timed() as t:
+                results = await all_querys(
+                    db, start_date, end_date, "days",
+                    (end_date - start_date).days, owner_id=current_user.id,
+                )
+            enrich_event(request, database={"query_duration_ms": t.ms, "query_type": "custom_range", "range_days": (end_date - start_date).days})
         except ValueError:
             raise HTTPException(
                 status_code=400,
@@ -223,6 +249,15 @@ async def get_all_data(
     ) = results
 
     if incomes_actual == [] and expenses_actual == []:
+        enrich_event(
+            request,
+            response={
+                "has_data": False,
+                "accounts_count": len(accounts),
+                "transfers_count": len(transfers),
+            },
+        )
+
         return {
             "currency": current_user.country,
             "language": current_user.country,
@@ -243,45 +278,73 @@ async def get_all_data(
             },
         }
 
-    dfs = get_df(
-        expenses=jsonable_encoder(expenses_actual),
-        incomes=jsonable_encoder(incomes_actual),
-        transfers=jsonable_encoder(transfers),
-        accounts=jsonable_encoder(accounts),
-        places=jsonable_encoder(places),
-        categories=jsonable_encoder(categories),
-    )
-    # print("🚀 ~ file: data.py:158 ~ dfs:", dfs)
-    past_dfs = get_df(
-        expenses=jsonable_encoder(expenses_past),
-        incomes=jsonable_encoder(incomes_past),
-        transfers=jsonable_encoder(transfers),
-        accounts=jsonable_encoder(accounts),
-        places=jsonable_encoder(places),
-        categories=jsonable_encoder(categories),
-    )
+    with timed() as t_processing:
+        dfs = get_df(
+            expenses=jsonable_encoder(expenses_actual),
+            incomes=jsonable_encoder(incomes_actual),
+            transfers=jsonable_encoder(transfers),
+            accounts=jsonable_encoder(accounts),
+            places=jsonable_encoder(places),
+            categories=jsonable_encoder(categories),
+        )
+        past_dfs = get_df(
+            expenses=jsonable_encoder(expenses_past),
+            incomes=jsonable_encoder(incomes_past),
+            transfers=jsonable_encoder(transfers),
+            accounts=jsonable_encoder(accounts),
+            places=jsonable_encoder(places),
+            categories=jsonable_encoder(categories),
+        )
 
-    transaction_chart = transaction_charts(
-        date_filter_type=date_filter_type,
-        expenses_df=dfs["expenses"],
-        incomes_df=dfs["incomes"],
-    )
-    categories_chart = categories_charts(
-        expenses_df=dfs["expenses"], incomes_df=dfs["incomes"]
-    )
-    past_accounts_total = accounts_total(
-        incomes_df=past_dfs["incomes"], expenses_df=past_dfs["expenses"]
-    )
-    actual_accounts_total = accounts_total(
-        incomes_df=dfs["incomes"], expenses_df=dfs["expenses"]
-    )
-    accounts_growth = account_diff(
-        past=past_accounts_total, actual=actual_accounts_total
-    )
-    account_chart = account_charts(
-        incomes_df=dfs["incomes"], expenses_df=dfs["expenses"], transfers_df=dfs["transfers"]
-    )
+        transaction_chart = transaction_charts(
+            date_filter_type=date_filter_type,
+            expenses_df=dfs["expenses"],
+            incomes_df=dfs["incomes"],
+        )
+        categories_chart = categories_charts(
+            expenses_df=dfs["expenses"], incomes_df=dfs["incomes"]
+        )
+        past_accounts_total = accounts_total(
+            incomes_df=past_dfs["incomes"], expenses_df=past_dfs["expenses"]
+        )
+        actual_accounts_total = accounts_total(
+            incomes_df=dfs["incomes"], expenses_df=dfs["expenses"]
+        )
+        accounts_growth = account_diff(
+            past=past_accounts_total, actual=actual_accounts_total
+        )
+        account_chart = account_charts(
+            incomes_df=dfs["incomes"], expenses_df=dfs["expenses"], transfers_df=dfs["transfers"]
+        )
 
+    total_income = sum(float(i.get("amount", 0)) for i in jsonable_encoder(incomes_actual))
+    total_expenses = sum(float(e.get("amount", 0)) for e in jsonable_encoder(expenses_actual))
+
+    enrich_event(
+        request,
+        response={
+            "has_data": True,
+            "incomes_count": len(incomes_actual),
+            "expenses_count": len(expenses_actual),
+            "transfers_count": len(transfers),
+            "accounts_count": len(accounts),
+            "places_count": len(places),
+            "categories_count": len(categories),
+            "total_income": round(total_income, 2),
+            "total_expenses": round(total_expenses, 2),
+            "net": round(total_income - total_expenses, 2),
+        },
+        performance={
+            "processing_duration_ms": t_processing.ms,
+            "charts_generated": 4,
+        },
+        date_range={
+            "start": str(start_date),
+            "end": str(end_date),
+            "days": (end_date - start_date).days + 1,
+        },
+    )
+    
     return {
         "currency": current_user.country,
         "language": current_user.country,

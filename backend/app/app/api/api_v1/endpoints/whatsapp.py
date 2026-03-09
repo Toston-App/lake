@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from app.utilities.whatsapp import (
     send_reaction,
     send_text_message,
 )
+from app.utilities.wide_events import enrich_event, mark_for_logging, timed
 
 router = APIRouter()
 
@@ -73,6 +74,7 @@ async def verify_webhook(
 
 @router.post("/webhook")
 async def process_webhook(
+    request: Request,
     callback: WhatsAppCallback = Body(...),
     db: AsyncSession = Depends(deps.async_get_db),
 ) -> dict[str, str]:
@@ -82,6 +84,18 @@ async def process_webhook(
     This endpoint receives messages from the WhatsApp API and processes them
     to extract transaction information and create the corresponding transactions
     """
+    # Mark this critical endpoint to always be logged (bypasses sampling)
+    mark_for_logging(request)
+
+    # Add WhatsApp webhook context
+    enrich_event(
+        request,
+        webhook={
+            "type": "whatsapp",
+            "entries_count": len(callback.entry),
+        },
+    )
+
     try:
         # Process each incoming message
         for entry in callback.entry:
@@ -99,8 +113,26 @@ async def process_webhook(
                                 # Find user by phone number
                                 user = await crud.user.get_by_phone(db, phone=phone_number)
 
+                                # Add WhatsApp message context
+                                enrich_event(
+                                    request,
+                                    whatsapp={
+                                        "message_id": message_obj.get("id"),
+                                        "from_number_hash": phone_number,  # Already hashed for privacy
+                                        "message_type": "text" if "text" in message_obj else "interactive",
+                                        "has_user": user is not None,
+                                    },
+                                )
+
                                 if not user:
                                     logger.warning(f"No user found for phone number: {phone_number}")
+                                    enrich_event(
+                                        request,
+                                        user_lookup={
+                                            "found": False,
+                                            "action": "sent_registration_instructions",
+                                        },
+                                    )
                                     await send_text_message(
                                         send_to,
                                         """👋 ¡Hola! Aún no tienes vinculado tu número de telefono.
@@ -120,6 +152,17 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                                     )
                                     continue
 
+                                # Add user context to wide event
+                                enrich_event(
+                                    request,
+                                    user={
+                                        "id": user.id,
+                                        "email": user.email,
+                                        "is_superuser": user.is_superuser,
+                                        "has_default_account": user.default_account_id is not None,
+                                    },
+                                )
+
                                 defaultAccountMessage = "" if user.default_account_id is not None else """💡 *Tip:* También puedes escribir "*cuenta por defecto*" para configurar una cuenta predeterminada y hacer el proceso más rápido."""
 
                                 # Handle text messages
@@ -129,6 +172,14 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
 
                                     # Check if user wants to set default account
                                     if any(keyword in message_text.lower() for keyword in ["cuenta por defecto", "cuenta predeterminada", "default account", "configurar cuenta"]):
+                                        enrich_event(
+                                            request,
+                                            action={
+                                                "type": "set_default_account",
+                                                "triggered_by": "keyword_match",
+                                            },
+                                        )
+
                                         # Fetch user accounts
                                         accounts = await crud.account.get_multi_by_owner(db=db, owner_id=user.id)
 
@@ -192,17 +243,43 @@ Para agregar una cuenta:
 
                                     # Parse message to extract transaction data
                                     try:
-                                        transaction_data = await whatsapp_parser.parse_message(
-                                            message=message_text,
-                                            categories=simplify_categories(categories),
-                                            places=simplify_places(places),
-                                            accounts=simplify_accounts(accounts),
-                                            default_account=default_account
+                                        with timed() as t_parse:
+                                            transaction_data = await whatsapp_parser.parse_message(
+                                                message=message_text,
+                                                categories=simplify_categories(categories),
+                                                places=simplify_places(places),
+                                                accounts=simplify_accounts(accounts),
+                                                default_account=default_account
+                                            )
+
+                                        enrich_event(
+                                            request,
+                                            ai={
+                                                "provider": "openai",
+                                                "parse_duration_ms": t_parse.ms,
+                                                "message_length": len(message_text),
+                                                "context_items": {
+                                                    "categories": len(categories),
+                                                    "places": len(places),
+                                                    "accounts": len(accounts),
+                                                },
+                                            },
                                         )
 
                                         # Check if parsing returned empty data
                                         if not transaction_data or "amount" not in transaction_data or transaction_data["amount"] <= 0:
                                             logger.warning(f"Failed to parse message: {message_text}")
+
+                                            # Add parsing failure context
+                                            enrich_event(
+                                                request,
+                                                parsing={
+                                                    "success": False,
+                                                    "reason": "invalid_amount" if not transaction_data or transaction_data.get("amount", 0) <= 0 else "missing_data",
+                                                    "action": "sent_help_message",
+                                                },
+                                            )
+
                                             await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="😵‍💫")
                                             await send_text_message(
                                                 send_to,
@@ -219,15 +296,38 @@ Por ejemplo:
                                             )
                                             continue
 
+                                        # Add successful parsing context
+                                        enrich_event(
+                                            request,
+                                            parsing={
+                                                "success": True,
+                                                "transaction_type": transaction_data.get("type"),
+                                                "amount": transaction_data.get("amount"),
+                                                "has_category": transaction_data.get("category_id") is not None,
+                                                "has_place": transaction_data.get("place_id") is not None,
+                                                "has_account": transaction_data.get("account_id") is not None,
+                                            },
+                                        )
+
                                         # Save message id to react later
                                         transaction_data["message_to_react"] = message_obj["id"]
                                         # Cache transaction data for later confirmation
                                         transaction_id = transaction_data["id"]
 
-                                        store_success = await store_transaction(
-                                            transaction_id=transaction_id,
-                                            transaction_data=transaction_data,
-                                            user_id=user.id
+                                        with timed() as t_cache:
+                                            store_success = await store_transaction(
+                                                transaction_id=transaction_id,
+                                                transaction_data=transaction_data,
+                                                user_id=user.id
+                                            )
+
+                                        enrich_event(
+                                            request,
+                                            cache={
+                                                "operation": "store_transaction",
+                                                "success": store_success,
+                                                "duration_ms": t_cache.ms,
+                                            },
                                         )
 
                                         if not store_success:
@@ -373,8 +473,24 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     made_from="WhatsApp"
                                                 )
 
-                                                expesne = await crud.expense.create_with_owner(
-                                                    db=db, obj_in=expense_in, owner_id=user_id
+                                                with timed() as t_db:
+                                                    expesne = await crud.expense.create_with_owner(
+                                                        db=db, obj_in=expense_in, owner_id=user_id
+                                                    )
+
+                                                enrich_event(
+                                                    request,
+                                                    database={
+                                                        "operation": "create_expense",
+                                                        "duration_ms": t_db.ms,
+                                                        "success": expesne is not None,
+                                                    },
+                                                    transaction={
+                                                        "type": "expense",
+                                                        "id": expesne.id if expesne else None,
+                                                        "amount": transaction_data["amount"],
+                                                        "source": "whatsapp",
+                                                    },
                                                 )
 
                                                 if expesne is None:
@@ -403,8 +519,24 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     made_from="WhatsApp"
                                                 )
 
-                                                income = await crud.income.create_with_owner(
-                                                    db=db, obj_in=income_in, owner_id=user_id
+                                                with timed() as t_db:
+                                                    income = await crud.income.create_with_owner(
+                                                        db=db, obj_in=income_in, owner_id=user_id
+                                                    )
+
+                                                enrich_event(
+                                                    request,
+                                                    database={
+                                                        "operation": "create_income",
+                                                        "duration_ms": t_db.ms,
+                                                        "success": income is not None,
+                                                    },
+                                                    transaction={
+                                                        "type": "income",
+                                                        "id": income.id if income else None,
+                                                        "amount": transaction_data["amount"],
+                                                        "source": "whatsapp",
+                                                    },
                                                 )
 
                                                 if income is None:
@@ -431,8 +563,24 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                     description=transaction_data.get("description") or "Added via WhatsApp",
                                                 )
 
-                                                transfer = await crud.transfer.create_with_owner(
-                                                    db=db, obj_in=transfer_in, owner_id=user_id
+                                                with timed() as t_db:
+                                                    transfer = await crud.transfer.create_with_owner(
+                                                        db=db, obj_in=transfer_in, owner_id=user_id
+                                                    )
+
+                                                enrich_event(
+                                                    request,
+                                                    database={
+                                                        "operation": "create_transfer",
+                                                        "duration_ms": t_db.ms,
+                                                        "success": transfer is not None,
+                                                    },
+                                                    transaction={
+                                                        "type": "transfer",
+                                                        "id": transfer.id if transfer else None,
+                                                        "amount": transaction_data["amount"],
+                                                        "source": "whatsapp",
+                                                    },
                                                 )
 
                                                 if transfer is None:
