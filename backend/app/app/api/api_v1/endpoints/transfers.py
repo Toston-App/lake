@@ -3,18 +3,20 @@ from datetime import date as Date
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
+from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
 
 
 @router.get("/getAll", response_model=list[schemas.Transfer])
 async def read_all_transfers(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
     limit: int = 100,
@@ -23,18 +25,39 @@ async def read_all_transfers(
     """
     Retrieve transfers.
     """
-    if crud.user.is_superuser(current_user):
-        transfers = await crud.transfer.get_multi(db, skip=skip, limit=limit)
-    else:
-        transfers = await crud.transfer.get_multi_by_owner(
-            db=db, owner_id=current_user.id, skip=skip, limit=limit
-        )
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "is_superuser": current_user.is_superuser,
+        },
+        query={"type": "list_transfers", "skip": skip, "limit": limit},
+    )
+
+    with timed() as t:
+        if crud.user.is_superuser(current_user):
+            transfers = await crud.transfer.get_multi(db, skip=skip, limit=limit)
+        else:
+            transfers = await crud.transfer.get_multi_by_owner(
+                db=db, owner_id=current_user.id, skip=skip, limit=limit
+            )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "list_transfers",
+            "duration_ms": t.ms,
+            "results_count": len(transfers),
+        },
+    )
 
     return transfers
 
 
 @router.get("/{date_filter_type}/{date}", response_model=list[schemas.Transfer])
 async def read_transfers(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
     date: str = None,
@@ -43,6 +66,16 @@ async def read_transfers(
     """
     Retrieve transfers filtered by type.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        query={
+            "type": "filter_transfers_by_date",
+            "date_filter_type": date_filter_type.value,
+            "date_param": date,
+        },
+    )
+
     start_date: Date | None = None
     end_date: Date | None = None
 
@@ -121,9 +154,25 @@ async def read_transfers(
             )
 
     if start_date and end_date:
-        transfers = await crud.transfer.get_multi_by_date(
-            db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date
+        with timed() as t:
+            transfers = await crud.transfer.get_multi_by_date(
+                db=db, owner_id=current_user.id, start_date=start_date, end_date=end_date
+            )
+
+        enrich_event(
+            request,
+            database={
+                "operation": "filter_transfers_by_date",
+                "duration_ms": t.ms,
+                "results_count": len(transfers),
+            },
+            date_range={
+                "start": str(start_date),
+                "end": str(end_date),
+                "days": (end_date - start_date).days + 1,
+            },
         )
+
         return transfers
 
     return []
@@ -132,6 +181,7 @@ async def read_transfers(
 @router.post("", response_model=schemas.Transfer)
 async def create_transfer(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     transfer_in: schemas.TransferCreate,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -139,12 +189,43 @@ async def create_transfer(
     """
     Create new transfer.
     """
-    transfer = await crud.transfer.create_with_owner(
-        db=db, obj_in=transfer_in, owner_id=current_user.id
+    enrich_event(
+        request,
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "is_superuser": current_user.is_superuser,
+        },
+        operation={
+            "type": "create_transfer",
+            "from_account": transfer_in.from_acc,
+            "to_account": transfer_in.to_acc,
+        },
     )
+
+    with timed() as t:
+        transfer = await crud.transfer.create_with_owner(
+            db=db, obj_in=transfer_in, owner_id=current_user.id
+        )
 
     if transfer is None:
         raise HTTPException(status_code=400, detail="Account not found")
+
+    enrich_event(
+        request,
+        database={
+            "operation": "create_transfer",
+            "duration_ms": t.ms,
+            "success": True,
+        },
+        transaction={
+            "type": "transfer",
+            "id": transfer.id,
+            "amount": float(transfer_in.amount),
+            "from_account": transfer_in.from_acc,
+            "to_account": transfer_in.to_acc,
+        },
+    )
 
     return transfer
 
@@ -152,6 +233,7 @@ async def create_transfer(
 @router.get("/{id}", response_model=schemas.Transfer)
 async def read_transfer(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -159,6 +241,12 @@ async def read_transfer(
     """
     Get transfer by ID.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        query={"type": "get_transfer_by_id", "transfer_id": id},
+    )
+
     transfer = await crud.transfer.get(db=db, id=id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
@@ -172,6 +260,7 @@ async def read_transfer(
 @router.put("/{id}", response_model=schemas.Transfer)
 async def update_transfer(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     transfer_in: schemas.TransferUpdate,
@@ -180,21 +269,48 @@ async def update_transfer(
     """
     Update a transfer.
     """
-    existing_transfer = await read_transfer(db=db, id=id, current_user=current_user)
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={"type": "update_transfer", "transfer_id": id},
+    )
 
-    # Store original values for comparison
+    existing_transfer = await read_transfer(db=db, id=id, current_user=current_user, request=request)
+
     original_from_acc = existing_transfer.from_acc
     original_to_acc = existing_transfer.to_acc
     original_amount = existing_transfer.amount
 
-    # Update the transfer
     try:
         transfer_in.updated_at = datetime.now(timezone.utc)
-        updated_transfer = await crud.transfer.update(
-            db=db, db_obj=existing_transfer, obj_in=transfer_in
-        )
+        with timed() as t:
+            updated_transfer = await crud.transfer.update(
+                db=db, db_obj=existing_transfer, obj_in=transfer_in
+            )
     except Exception:
         raise HTTPException(status_code=400, detail="Error updating transfer.")
+
+    changes = {}
+    if transfer_in.amount is not None and original_amount != transfer_in.amount:
+        changes["amount"] = {"from": float(original_amount), "to": float(transfer_in.amount)}
+    if transfer_in.from_acc is not None and original_from_acc != transfer_in.from_acc:
+        changes["from_acc"] = {"from": original_from_acc, "to": transfer_in.from_acc}
+    if transfer_in.to_acc is not None and original_to_acc != transfer_in.to_acc:
+        changes["to_acc"] = {"from": original_to_acc, "to": transfer_in.to_acc}
+
+    enrich_event(
+        request,
+        database={
+            "operation": "update_transfer",
+            "duration_ms": t.ms,
+            "success": True,
+        },
+        transaction={
+            "id": id,
+            "changes": changes,
+            "fields_changed": len(changes),
+        },
+    )
 
     # Handle source account change
     if transfer_in.from_acc is not None and original_from_acc != transfer_in.from_acc:
@@ -265,6 +381,7 @@ async def update_transfer(
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
 async def delete_transfer(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -272,23 +389,45 @@ async def delete_transfer(
     """
     Delete an transfer.
     """
-    transfer = await read_transfer(db=db, id=id, current_user=current_user)
-    transfer = await crud.transfer.remove(db=db, id=id)
-
-    # TODO: Do it in a single query or concurrently with asyncio
-    await crud.account.update_by_id_and_field(
-        db=db,
-        owner_id=current_user.id,
-        id=transfer.from_acc,
-        column="total_transfers_out",
-        amount=-transfer.amount,
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={"type": "delete_transfer", "transfer_id": id},
     )
-    await crud.account.update_by_id_and_field(
-        db=db,
-        owner_id=current_user.id,
-        id=transfer.to_acc,
-        column="total_transfers_in",
-        amount=-transfer.amount
+
+    transfer = await read_transfer(db=db, id=id, current_user=current_user, request=request)
+
+    with timed() as t:
+        transfer = await crud.transfer.remove(db=db, id=id)
+    # TODO: Do it in a single query or concurrently with asyncio
+        await crud.account.update_by_id_and_field(
+            db=db,
+            owner_id=current_user.id,
+            id=transfer.from_acc,
+            column="total_transfers_out",
+            amount=-transfer.amount,
+        )
+        await crud.account.update_by_id_and_field(
+            db=db,
+            owner_id=current_user.id,
+            id=transfer.to_acc,
+            column="total_transfers_in",
+            amount=-transfer.amount
+        )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "delete_transfer",
+            "duration_ms": t.ms,
+            "success": True,
+        },
+        transaction={
+            "id": id,
+            "amount": float(transfer.amount),
+            "from_account": transfer.from_acc,
+            "to_account": transfer.to_acc,
+        },
     )
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
