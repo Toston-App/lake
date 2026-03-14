@@ -166,7 +166,10 @@ async def get_comparison(
         },
     )
 
-    result = ComparisonResponse(accounts_growth=growth)
+    # account_diff returns int keys; schema expects str keys
+    result = ComparisonResponse(
+        accounts_growth={str(k): v for k, v in growth.items()}
+    )
 
     # Store in cache
     await store_cached(
