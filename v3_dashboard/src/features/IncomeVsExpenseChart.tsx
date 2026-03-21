@@ -13,22 +13,22 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCharts } from "@/api/hooks";
 import type { DateFilterType, TransactionChartData } from "@/types/api";
 
-interface TransactionChartProps {
+interface IncomeVsExpenseChartProps {
   dateFilterType: DateFilterType;
   date: string;
 }
 
-export function TransactionChart({
+export function IncomeVsExpenseChart({
   dateFilterType,
   date,
-}: TransactionChartProps) {
+}: IncomeVsExpenseChartProps) {
   const { data, isLoading } = useCharts(dateFilterType, date);
 
   if (isLoading) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Transaction Timeline</CardTitle>
+          <CardTitle className="text-base">Income vs Expense</CardTitle>
         </CardHeader>
         <CardContent>
           <Skeleton className="h-[300px] w-full" />
@@ -37,7 +37,9 @@ export function TransactionChart({
     );
   }
 
-  const chartData = data?.transactions as TransactionChartData | undefined;
+  const chartData = data?.income_vs_expense as
+    | TransactionChartData
+    | undefined;
 
   if (
     !chartData ||
@@ -48,7 +50,7 @@ export function TransactionChart({
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Transaction Timeline</CardTitle>
+          <CardTitle className="text-base">Income vs Expense</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground py-12 text-center text-sm">
@@ -71,7 +73,7 @@ export function TransactionChart({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Transaction Timeline</CardTitle>
+        <CardTitle className="text-base">Income vs Expense</CardTitle>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
@@ -104,9 +106,7 @@ export function TransactionChart({
               }}
               labelStyle={{ color: "var(--color-foreground)" }}
             />
-            <Legend
-              wrapperStyle={{ fontSize: "13px" }}
-            />
+            <Legend wrapperStyle={{ fontSize: "13px" }} />
             {chartData.series.map((s) => (
               <Line
                 key={s.name}

@@ -82,7 +82,8 @@ export interface AccountChartItem {
 }
 
 export interface ChartsResponse {
-  transactions: TransactionChartData | [];
+  net: TransactionChartData | [];
+  income_vs_expense: TransactionChartData | [];
   categories: CategoriesChartData | null;
   accounts: Record<string, AccountChartItem>;
 }

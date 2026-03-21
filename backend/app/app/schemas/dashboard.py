@@ -19,7 +19,8 @@ class SummaryResponse(BaseModel):
 
 
 class ChartsResponse(BaseModel):
-    transactions: Any
+    net: Any
+    income_vs_expense: Any
     categories: Any
     accounts: dict
 

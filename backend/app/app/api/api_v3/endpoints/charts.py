@@ -13,7 +13,8 @@ from app.process_data.process import (
     account_charts,
     categories_charts,
     get_df,
-    transaction_charts,
+    income_vs_expense_chart,
+    net_chart,
 )
 from app.schemas.dashboard import ChartsResponse
 from app.utilities.redis import get_cached, store_cached
@@ -105,7 +106,8 @@ async def get_charts(
     # Empty data — return empty charts
     if not incomes and not expenses:
         result = ChartsResponse(
-            transactions=[],
+            net=[],
+            income_vs_expense=[],
             categories=[],
             accounts={},
         )
@@ -128,7 +130,12 @@ async def get_charts(
             categories=jsonable_encoder(categories),
         )
 
-        transaction_chart = transaction_charts(
+        net_chart_data = net_chart(
+            date_filter_type=date_filter_type,
+            expenses_df=dfs["expenses"],
+            incomes_df=dfs["incomes"],
+        )
+        income_vs_expense_chart_data = income_vs_expense_chart(
             date_filter_type=date_filter_type,
             expenses_df=dfs["expenses"],
             incomes_df=dfs["incomes"],
@@ -147,12 +154,13 @@ async def get_charts(
         request,
         performance={
             "processing_duration_ms": t_processing.ms,
-            "charts_generated": 3,
+            "charts_generated": 4,
         },
     )
 
     result = ChartsResponse(
-        transactions=transaction_chart,
+        net=net_chart_data,
+        income_vs_expense=income_vs_expense_chart_data,
         categories=categories_chart,
         accounts=account_chart,
     )

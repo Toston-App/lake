@@ -54,7 +54,6 @@ async def get_summary(
     date_range = parse_date_range(date_filter_type, date)
 
     with timed() as t:
-        # SQL SUM aggregations — no Pandas needed
         period_income_result = await db.execute(
             select(func.coalesce(func.sum(Income.amount), 0.0)).where(
                 and_(

@@ -10,7 +10,8 @@ import {
 import { DateFilter } from "@/features/DateFilter";
 import { SummaryCards } from "@/features/SummaryCards";
 import { AccountsList } from "@/features/AccountsList";
-import { TransactionChart } from "@/features/TransactionChart";
+import { NetChart } from "@/features/NetChart";
+import { IncomeVsExpenseChart } from "@/features/IncomeVsExpenseChart";
 import { CategoriesChart } from "@/features/CategoriesChart";
 import { AccountCharts } from "@/features/AccountCharts";
 import { TransactionsTable } from "@/features/TransactionsTable";
@@ -21,7 +22,7 @@ import type { DateFilterType } from "@/types/api";
 export default function App() {
   const [dateFilterType, setDateFilterType] = useState<DateFilterType>("month");
   const [date, setDate] = useState(getCurrentMonth);
-  const [chartTab, setChartTab] = useState("timeline");
+  const [chartTab, setChartTab] = useState("net");
 
   return (
     <div className="bg-background text-foreground min-h-screen">
@@ -63,13 +64,17 @@ export default function App() {
         <section>
           <Tabs value={chartTab} onValueChange={setChartTab}>
             <TabsList>
-              <TabsTrigger value="timeline">Timeline</TabsTrigger>
+              <TabsTrigger value="net">Net</TabsTrigger>
+              <TabsTrigger value="income-vs-expense">Income vs Expense</TabsTrigger>
               <TabsTrigger value="categories">Categories</TabsTrigger>
               <TabsTrigger value="accounts">Accounts</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="timeline">
-              <TransactionChart dateFilterType={dateFilterType} date={date} />
+            <TabsContent value="net">
+              <NetChart dateFilterType={dateFilterType} date={date} />
+            </TabsContent>
+            <TabsContent value="income-vs-expense">
+              <IncomeVsExpenseChart dateFilterType={dateFilterType} date={date} />
             </TabsContent>
             <TabsContent value="categories">
               <CategoriesChart dateFilterType={dateFilterType} date={date} />

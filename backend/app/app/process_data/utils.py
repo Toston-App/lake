@@ -30,3 +30,22 @@ def return_base(xAxis, total, expenses, incomes, income_color):
         ],
         "xAxis": xAxis,
     }
+
+
+def return_net(xAxis, total):
+    return {
+        "series": [
+            {"name": "Net", "data": total, "color": "#168fff"},
+        ],
+        "xAxis": xAxis,
+    }
+
+
+def return_income_vs_expense(xAxis, expenses, incomes, income_color):
+    return {
+        "series": [
+            {"name": "Expenses", "data": expenses, "color": "#e23670"},
+            {"name": "Incomes", "data": incomes, "color": income_color},
+        ],
+        "xAxis": xAxis,
+    }
