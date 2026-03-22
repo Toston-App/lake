@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
+from app.utilities.redis import invalidate_user_cache
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -246,6 +247,9 @@ async def create_expense(
         },
     )
 
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
+
     return expense
 
 
@@ -291,6 +295,9 @@ async def create_expenses_bulk(
             "avg_duration_per_item_ms": round(t.ms / len(expenses_in), 2) if expenses_in else 0,
         },
     )
+
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
 
     return expenses
 
@@ -506,6 +513,9 @@ async def update_expense(
                 amount=amount_difference,
             )
 
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
+
     return updated_expense
 
 
@@ -592,6 +602,9 @@ async def delete_expense(
             "had_category": expense.category_id is not None,
         },
     )
+
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
 
@@ -714,6 +727,9 @@ async def delete_expenses_bulk(
             "success_rate": round(len(removed_expenses) / len(id_list) * 100, 2) if id_list else 0,
         },
     )
+
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_expenses)} expenses",

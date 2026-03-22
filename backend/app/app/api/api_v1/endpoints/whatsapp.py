@@ -11,7 +11,7 @@ from app.api import deps
 from app.core.config import settings
 from app.utilities.encryption import hash_sha256
 from app.utilities.logger import setup_logger
-from app.utilities.redis import delete_transaction, get_transaction, store_transaction
+from app.utilities.redis import delete_transaction, get_transaction, invalidate_user_cache, store_transaction
 from app.utilities.simplifier import accounts as simplify_accounts
 from app.utilities.simplifier import categories as simplify_categories
 from app.utilities.simplifier import places as simplify_places
@@ -501,6 +501,8 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                         "❌ No se pudo crear el gasto. Intenta de nuevo."
                                                     )
                                                 else:
+                                                    # Invalidate user's cached dashboard data
+                                                    await invalidate_user_cache(user_id)
                                                     await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="✅")
                                                     await send_text_message(
                                                         send_to,
@@ -547,6 +549,8 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                         "❌ No se pudo crear el ingreso. Intenta de nuevo."
                                                     )
                                                 else:
+                                                    # Invalidate user's cached dashboard data
+                                                    await invalidate_user_cache(user_id)
                                                     await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="✅")
                                                     await send_text_message(
                                                         send_to,
@@ -591,6 +595,8 @@ Por favor, intenta de nuevo con un formato más claro."""
                                                         "❌ No se pudo crear la transferencia. Intenta de nuevo."
                                                     )
                                                 else:
+                                                    # Invalidate user's cached dashboard data
+                                                    await invalidate_user_cache(user_id)
                                                     await send_reaction(phone_number=send_to, message_id=message_to_react, emoji="✅")
                                                     await send_text_message(
                                                         send_to,

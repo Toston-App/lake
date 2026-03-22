@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
+from app.utilities.redis import invalidate_user_cache
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -227,6 +228,9 @@ async def create_transfer(
         },
     )
 
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
+
     return transfer
 
 
@@ -376,6 +380,9 @@ async def update_transfer(
             amount=amount_difference,
         )
 
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
+
     return updated_transfer
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
@@ -429,5 +436,8 @@ async def delete_transfer(
             "to_account": transfer.to_acc,
         },
     )
+
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
