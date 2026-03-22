@@ -161,3 +161,72 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
         )
 
     raise HTTPException(status_code=400, detail="Invalid date filter type")
+
+
+def get_previous_period_date_range(
+    date_filter_type: DateFilterType, date_param: str
+) -> DateRange:
+    """
+    Calculate the previous period's date range based on the current period.
+
+    Examples:
+    - Month 02/25 → 01/25
+    - Year 2025 → 2024
+    - Quarter 2025-Q1 → 2024-Q4
+    - Week 2026-03-22 → 2026-03-15
+    - Date 2026-03-22 → 2026-03-21
+    - Range (90 days) → Previous 90 days
+    """
+    if date_filter_type == DateFilterType.month:
+        date_obj = datetime.strptime(date_param, "%Y-%m")
+        prev_date = date_obj - relativedelta(months=1)
+        return parse_date_range(date_filter_type, prev_date.strftime("%Y-%m"))
+
+    elif date_filter_type == DateFilterType.year:
+        year = int(date_param) - 1
+        return parse_date_range(date_filter_type, str(year))
+
+    elif date_filter_type == DateFilterType.quarter:
+        year_str, quarter_str = date_param.split("-")
+        quarter_num = int(quarter_str.replace("Q", ""))
+        year = int(year_str)
+
+        # Calculate previous quarter
+        if quarter_num == 1:
+            prev_quarter = 4
+            prev_year = year - 1
+        else:
+            prev_quarter = quarter_num - 1
+            prev_year = year
+
+        prev_date_param = f"{prev_year}-Q{prev_quarter}"
+        return parse_date_range(date_filter_type, prev_date_param)
+
+    elif date_filter_type == DateFilterType.week:
+        date_obj = datetime.strptime(date_param, "%Y-%m-%d")
+        prev_date = date_obj - timedelta(days=7)
+        return parse_date_range(date_filter_type, prev_date.strftime("%Y-%m-%d"))
+
+    elif date_filter_type == DateFilterType.date:
+        date_obj = datetime.strptime(date_param, "%Y-%m-%d")
+        prev_date = date_obj - timedelta(days=1)
+        return parse_date_range(date_filter_type, prev_date.strftime("%Y-%m-%d"))
+
+    elif date_filter_type == DateFilterType.range:
+        start_str, end_str = date_param.split(":")
+        start_date = datetime.strptime(start_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(end_str, "%Y-%m-%d").date()
+
+        # Calculate range length
+        range_length = (end_date - start_date).days + 1
+
+        # Shift backward by range length
+        prev_start = start_date - timedelta(days=range_length)
+        prev_end = start_date - timedelta(days=1)
+
+        prev_date_param = (
+            f"{prev_start.strftime('%Y-%m-%d')}:{prev_end.strftime('%Y-%m-%d')}"
+        )
+        return parse_date_range(date_filter_type, prev_date_param)
+
+    raise HTTPException(status_code=400, detail="Invalid date filter type")

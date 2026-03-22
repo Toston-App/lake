@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models
 from app.api import deps
 from app.api.deps import DateFilterType
-from app.api.api_v3.utils import parse_date_range
+from app.api.api_v3.utils import parse_date_range, get_previous_period_date_range
 from app.process_data.process import (
     account_charts,
     categories_charts,
@@ -16,6 +16,7 @@ from app.process_data.process import (
     income_vs_expense_chart,
     net_chart,
 )
+from app.process_data.utils import calculate_summary
 from app.schemas.dashboard import ChartsResponse
 from app.utilities.redis import get_cached, store_cached
 from app.utilities.wide_events import enrich_event, timed
@@ -57,39 +58,55 @@ async def get_charts(
     enrich_event(request, cache={"hit": False, "prefix": "charts"})
 
     date_range = parse_date_range(date_filter_type, date)
+    prev_date_range = get_previous_period_date_range(date_filter_type, date)
 
     with timed() as t_db:
-        # Fetch current-period data only (no past period — that's for comparison)
-        incomes, expenses, transfers, accounts, places, categories = (
-            await asyncio.gather(
-                crud.income.get_multi_by_date(
-                    db=db,
-                    owner_id=current_user.id,
-                    start_date=date_range.start_date,
-                    end_date=date_range.end_date,
-                ),
-                crud.expense.get_multi_by_date(
-                    db=db,
-                    owner_id=current_user.id,
-                    start_date=date_range.start_date,
-                    end_date=date_range.end_date,
-                ),
-                crud.transfer.get_multi_by_date(
-                    db=db,
-                    owner_id=current_user.id,
-                    start_date=date_range.start_date,
-                    end_date=date_range.end_date,
-                ),
-                crud.account.get_multi_by_owner(
-                    db=db, owner_id=current_user.id
-                ),
-                crud.place.get_multi_by_owner(
-                    db=db, owner_id=current_user.id
-                ),
-                crud.category.get_multi_by_owner(
-                    db=db, owner_id=current_user.id
-                ),
-            )
+        # Fetch both current and previous period data
+        (
+            incomes,
+            expenses,
+            transfers,
+            accounts,
+            places,
+            categories,
+            prev_incomes,
+            prev_expenses,
+        ) = await asyncio.gather(
+            # Current period
+            crud.income.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+            ),
+            crud.expense.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+            ),
+            crud.transfer.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+            ),
+            crud.account.get_multi_by_owner(db=db, owner_id=current_user.id),
+            crud.place.get_multi_by_owner(db=db, owner_id=current_user.id),
+            crud.category.get_multi_by_owner(db=db, owner_id=current_user.id),
+            # Previous period (for comparison)
+            crud.income.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=prev_date_range.start_date,
+                end_date=prev_date_range.end_date,
+            ),
+            crud.expense.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=prev_date_range.start_date,
+                end_date=prev_date_range.end_date,
+            ),
         )
 
     enrich_event(
@@ -130,11 +147,42 @@ async def get_charts(
             categories=jsonable_encoder(categories),
         )
 
+        # Get previous period DFs for comparison
+        prev_dfs = get_df(
+            expenses=jsonable_encoder(prev_expenses),
+            incomes=jsonable_encoder(prev_incomes),
+            transfers=[],  # Not needed for net calculation
+            accounts=jsonable_encoder(accounts),
+            places=jsonable_encoder(places),
+            categories=jsonable_encoder(categories),
+        )
+
+        # Calculate current period net
         net_chart_data = net_chart(
             date_filter_type=date_filter_type,
             expenses_df=dfs["expenses"],
             incomes_df=dfs["incomes"],
         )
+
+        # Calculate previous period net total (handle empty period)
+        if prev_incomes or prev_expenses:
+            prev_net_chart_data = net_chart(
+                date_filter_type=date_filter_type,
+                expenses_df=prev_dfs["expenses"],
+                incomes_df=prev_dfs["incomes"],
+            )
+            previous_total = sum(prev_net_chart_data["series"][0]["data"])
+        else:
+            # No transactions in previous period
+            previous_total = 0.0
+
+        # Calculate summary comparison
+        current_total = sum(net_chart_data["series"][0]["data"])
+        summary = calculate_summary(current_total, previous_total)
+
+        # Add summary to net chart data
+        net_chart_data["summary"] = summary
+
         income_vs_expense_chart_data = income_vs_expense_chart(
             date_filter_type=date_filter_type,
             expenses_df=dfs["expenses"],

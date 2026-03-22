@@ -9,6 +9,14 @@ class Balance(BaseModel):
     outcome: float
 
 
+class NetSummary(BaseModel):
+    current: float
+    previous: float
+    change: float
+    changePercent: float
+    isPositive: bool
+
+
 class SummaryResponse(BaseModel):
     currency: str
     language: str
