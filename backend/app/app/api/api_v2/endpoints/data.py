@@ -259,8 +259,7 @@ async def get_all_data(
         )
 
         return {
-            "currency": current_user.country,
-            "language": current_user.country,
+            "country": current_user.country,
             "accounts": jsonable_encoder(accounts),
             "balance": {
                 "total": round(current_user.balance_total, 2),
@@ -344,10 +343,9 @@ async def get_all_data(
             "days": (end_date - start_date).days + 1,
         },
     )
-    
+
     return {
-        "currency": current_user.country,
-        "language": current_user.country,
+        "country": current_user.country,
         "accounts": jsonable_encoder(accounts),
         "balance": {
             "total": round(current_user.balance_total, 2),

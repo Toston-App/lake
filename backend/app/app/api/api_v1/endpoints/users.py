@@ -134,16 +134,15 @@ async def update_user_me(
     await crud.user.update(db, db_obj=current_user, obj_in=user_in)
     return True
 
-# we don't need this endpoint for now
-# @router.get("/me", response_model=schemas.User)
-# async def read_user_me(
-#     db: AsyncSession = Depends(deps.async_get_db),
-#     current_user: models.User = Depends(deps.get_current_active_user),
-# ) -> Any:
-#     """
-#     Get current user.
-#     """
-#     return current_user
+@router.get("/me", response_model=schemas.UserGetMe)
+async def read_user_me(
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Get current user.
+    """
+    return current_user
 
 
 @router.post("/open", response_model=schemas.Msg)
