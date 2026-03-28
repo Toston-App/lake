@@ -114,7 +114,8 @@ async def get_recap_status(user_id: int, year: int) -> dict | None:
 
 # ==================== Dashboard Cache Functions ====================
 
-CACHE_PREFIXES = ["charts", "summary", "comparison"]
+# Removed `"comparison"` since this is not used for v3 migration but could be helpful for future features.
+CACHE_PREFIXES = ["charts", "summary"]
 CACHE_TTL = 60 * 60 * 24 * 7  # 7 days in seconds
 
 
