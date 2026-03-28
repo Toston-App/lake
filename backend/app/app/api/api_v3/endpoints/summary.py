@@ -90,8 +90,7 @@ async def get_summary(
     )
 
     result = SummaryResponse(
-        currency=current_user.country,
-        language=current_user.country,
+        country=current_user.country,
         balance=Balance(
             total=round(current_user.balance_total, 2),
             income=round(current_user.balance_income, 2),
