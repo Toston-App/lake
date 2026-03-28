@@ -12,6 +12,7 @@ from fastapi_pagination import add_pagination as PaginationProvider
 
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
+from app.api.api_v3.api import api_router as api_router_v3
 from app.core.config import settings
 from app.utilities.axiom import initialize_axiom, get_axiom_client
 from app.utilities.wide_events import WideEventsMiddleware
@@ -174,6 +175,7 @@ async def openapi(username: str = Depends(get_current_username)):
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
+app.include_router(api_router_v3, prefix=settings.API_V3_STR)
 
 @app.get("/api/v1/utils/health-check/")
 def health_check():

@@ -6,7 +6,13 @@ import pandas as pd
 
 from app.api.deps import DateFilterType
 
-from .utils import get_month_weeks, get_week_range, return_base
+from .utils import (
+    get_month_weeks,
+    get_week_range,
+    return_base,
+    return_income_vs_expense,
+    return_net,
+)
 
 
 def get_percentage(past, actual):
@@ -144,7 +150,8 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
     }
 
 
-def transaction_charts(date_filter_type, incomes_df, expenses_df):
+def _aggregate_transactions(date_filter_type, incomes_df, expenses_df):
+    """Shared aggregation logic. Returns (xAxis, totals, expenses, incomes, income_color)."""
     combined_df = pd.concat([expenses_df, incomes_df], ignore_index=True)
     income_color = incomes_df["category_color"].iloc[0] if not incomes_df.empty else "#4aae27"
 
@@ -190,12 +197,12 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             how="left",
         ).fillna(0)
 
-        return return_base(
-            xAxis=total["month"].tolist(),
-            total=total["amount"].tolist(),
-            expenses=expenses["amount"].tolist(),
-            incomes=incomes["amount"].tolist(),
-            income_color=income_color,
+        return (
+            total["month"].tolist(),
+            total["amount"].tolist(),
+            expenses["amount"].tolist(),
+            incomes["amount"].tolist(),
+            income_color,
         )
 
     if date_filter_type == DateFilterType.quarter:
@@ -246,12 +253,12 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
 
         quarter_expenses["amount"] = quarter_expenses["amount"].abs()
 
-        return return_base(
-            xAxis=quarter_total["month"].tolist(),
-            total=quarter_total["amount"].tolist(),
-            expenses=quarter_expenses["amount"].tolist(),
-            incomes=quarter_incomes["amount"].tolist(),
-            income_color=income_color,
+        return (
+            quarter_total["month"].tolist(),
+            quarter_total["amount"].tolist(),
+            quarter_expenses["amount"].tolist(),
+            quarter_incomes["amount"].tolist(),
+            income_color,
         )
 
     if date_filter_type == DateFilterType.month:
@@ -265,8 +272,6 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
             data = get_week_range(combined_df.iloc[0]["date"].year, i)
             month_ranges["week"].append(data["week"])
             month_ranges["range"].append(data["range"])
-
-        month_df = pd.DataFrame(month_ranges)
 
         month_df = pd.DataFrame(month_ranges)
 
@@ -291,12 +296,12 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         ).fillna(0)
         month_expenses["amount"] = month_expenses["amount"].abs()
 
-        return return_base(
-            xAxis=month_total["range"].tolist(),
-            total=month_total["amount"].tolist(),
-            expenses=month_expenses["amount"].tolist(),
-            incomes=month_incomes["amount"].tolist(),
-            income_color=income_color,
+        return (
+            month_total["range"].tolist(),
+            month_total["amount"].tolist(),
+            month_expenses["amount"].tolist(),
+            month_incomes["amount"].tolist(),
+            income_color,
         )
 
     if date_filter_type == DateFilterType.week:
@@ -336,12 +341,12 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         ).fillna(0)
         week_expenses["amount"] = week_expenses["amount"].abs()
 
-        return return_base(
-            xAxis=week_total["day_of_week"].tolist(),
-            total=week_total["amount"].tolist(),
-            expenses=week_expenses["amount"].tolist(),
-            incomes=week_incomes["amount"].tolist(),
-            income_color=income_color,
+        return (
+            week_total["day_of_week"].tolist(),
+            week_total["amount"].tolist(),
+            week_expenses["amount"].tolist(),
+            week_incomes["amount"].tolist(),
+            income_color,
         )
 
     if (
@@ -367,13 +372,46 @@ def transaction_charts(date_filter_type, incomes_df, expenses_df):
         date_incomes["date"] = date_incomes["date"].dt.strftime("%Y-%m-%d")
         date_expenses["date"] = date_expenses["date"].dt.strftime("%Y-%m-%d")
 
-        return return_base(
-            xAxis=date_total["date"].tolist(),
-            total=date_total["amount"].tolist(),
-            expenses=date_incomes["amount"].tolist(),
-            incomes=date_expenses["amount"].tolist(),
-            income_color=income_color
+        return (
+            date_total["date"].tolist(),
+            date_total["amount"].tolist(),
+            date_expenses["amount"].tolist(),
+            date_incomes["amount"].tolist(),
+            income_color,
         )
+
+
+def transaction_charts(date_filter_type, incomes_df, expenses_df):
+    """Legacy function used by API v2. Returns combined net + income vs expense data."""
+    x_axis, totals, expenses, incomes, income_color = _aggregate_transactions(
+        date_filter_type, incomes_df, expenses_df
+    )
+    return return_base(
+        xAxis=x_axis,
+        total=totals,
+        expenses=expenses,
+        incomes=incomes,
+        income_color=income_color,
+    )
+
+
+def net_chart(date_filter_type, incomes_df, expenses_df):
+    x_axis, totals, _expenses, _incomes, _income_color = _aggregate_transactions(
+        date_filter_type, incomes_df, expenses_df
+    )
+    return return_net(xAxis=x_axis, total=totals)
+
+
+def income_vs_expense_chart(date_filter_type, incomes_df, expenses_df):
+    x_axis, _totals, expenses, incomes, income_color = _aggregate_transactions(
+        date_filter_type, incomes_df, expenses_df
+    )
+    return return_income_vs_expense(
+        xAxis=x_axis,
+        expenses=expenses,
+        incomes=incomes,
+        income_color=income_color,
+    )
 
 
 def categories_charts(incomes_df, expenses_df):
