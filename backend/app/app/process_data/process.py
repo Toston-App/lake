@@ -41,12 +41,13 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
         if pd.notna(subcategory_id) and subcategory_id in subcategories_df.index:
             return subcategories_df.loc[subcategory_id, "name"]
 
-        return None
+        return "Sin Subcategoría"
 
     def get_income_category_id(row):
         subcategory_id = row["subcategory_id"]
         if pd.notna(subcategory_id) and subcategory_id in subcategories_df.index:
             return subcategories_df.loc[subcategory_id, "category_id"]
+
         return None
 
     def get_place_name(row):
@@ -123,6 +124,20 @@ def get_df(expenses, incomes, transfers, accounts, places, categories):
         incomes_df["category_id"] = incomes_df.apply(get_income_category_id, axis=1)
         incomes_df["category"] = incomes_df.apply(get_category_name, axis=1)
         incomes_df["category_color"] = incomes_df.apply(get_income_category_color, axis=1)
+
+        # If any category fields are None, try to get values from other incomes
+        if not incomes_df.empty:
+            non_null_categories = incomes_df["category_id"].dropna()
+            if not non_null_categories.empty:
+                fallback_category_id = non_null_categories.iloc[0]
+                incomes_df["category_id"] = incomes_df["category_id"].fillna(fallback_category_id)
+
+                # Get the corresponding category name and color from the fallback category_id
+                if fallback_category_id in categories_df.index:
+                    fallback_category = categories_df.loc[fallback_category_id, "name"]
+                    fallback_color = categories_df.loc[fallback_category_id, "color"]
+                    incomes_df["category"] = incomes_df["category"].fillna(fallback_category)
+                    incomes_df["category_color"] = incomes_df["category_color"].fillna(fallback_color)
 
         incomes_df.drop(
             columns=["account_id", "place_id", "owner_id"],

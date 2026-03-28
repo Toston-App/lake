@@ -192,17 +192,19 @@ async def get_charts(
             expenses_df=dfs["expenses"],
             incomes_df=dfs["incomes"],
         )
-        account_chart = account_charts(
-            incomes_df=dfs["incomes"],
-            expenses_df=dfs["expenses"],
-            transfers_df=dfs["transfers"],
-        )
+
+        # API V3 redesign removed accounts charts since they were not clear for users. We can re add in the future
+        # account_chart = account_charts(
+        #     incomes_df=dfs["incomes"],
+        #     expenses_df=dfs["expenses"],
+        #     transfers_df=dfs["transfers"],
+        # )
 
     enrich_event(
         request,
         performance={
             "processing_duration_ms": t_processing.ms,
-            "charts_generated": 4,
+            "charts_generated": 3,
         },
     )
 
@@ -210,7 +212,7 @@ async def get_charts(
         net=net_chart_data,
         income_vs_expense=income_vs_expense_chart_data,
         categories=categories_chart,
-        accounts=account_chart,
+        # accounts=account_chart,
     )
 
     # Store in cache

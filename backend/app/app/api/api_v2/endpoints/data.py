@@ -57,29 +57,11 @@ async def read_all_expenses(
 async def all_querys(
     db, start_date, end_date, type="days", time_difference=0, owner_id=None
 ):
-    reldelta = (
-        relativedelta(days=time_difference)
-        if type == "days"
-        else relativedelta(months=time_difference)
-    )
-
     incomes_actual_task = crud.income.get_multi_by_date(
         db=db, owner_id=owner_id, start_date=start_date, end_date=end_date
     )
-    incomes_past_task = crud.income.get_multi_by_date(
-        db=db,
-        owner_id=owner_id,
-        start_date=start_date - reldelta,
-        end_date=end_date - reldelta,
-    )
     expenses_actual_task = crud.expense.get_multi_by_date(
         db=db, owner_id=owner_id, start_date=start_date, end_date=end_date
-    )
-    expenses_past_task = crud.expense.get_multi_by_date(
-        db=db,
-        owner_id=owner_id,
-        start_date=start_date - reldelta,
-        end_date=end_date - reldelta,
     )
     transfers_task = crud.transfer.get_multi_by_date(db=db, owner_id=owner_id, start_date=start_date, end_date=end_date)
 
@@ -90,9 +72,7 @@ async def all_querys(
 
     results = await asyncio.gather(
         incomes_actual_task,
-        incomes_past_task,
         expenses_actual_task,
-        expenses_past_task,
         transfers_task,
         accounts_task,
         places_task,
@@ -128,7 +108,7 @@ async def get_all_data(
             "date_param": date,
         },
     )
-    
+
     start_date: Date | None = None
     end_date: Date | None = None
     results = None
@@ -239,9 +219,7 @@ async def get_all_data(
 
     (
         incomes_actual,
-        incomes_past,
         expenses_actual,
-        expenses_past,
         transfers,
         accounts,
         places,
@@ -277,45 +255,6 @@ async def get_all_data(
             },
         }
 
-    with timed() as t_processing:
-        dfs = get_df(
-            expenses=jsonable_encoder(expenses_actual),
-            incomes=jsonable_encoder(incomes_actual),
-            transfers=jsonable_encoder(transfers),
-            accounts=jsonable_encoder(accounts),
-            places=jsonable_encoder(places),
-            categories=jsonable_encoder(categories),
-        )
-        past_dfs = get_df(
-            expenses=jsonable_encoder(expenses_past),
-            incomes=jsonable_encoder(incomes_past),
-            transfers=jsonable_encoder(transfers),
-            accounts=jsonable_encoder(accounts),
-            places=jsonable_encoder(places),
-            categories=jsonable_encoder(categories),
-        )
-
-        transaction_chart = transaction_charts(
-            date_filter_type=date_filter_type,
-            expenses_df=dfs["expenses"],
-            incomes_df=dfs["incomes"],
-        )
-        categories_chart = categories_charts(
-            expenses_df=dfs["expenses"], incomes_df=dfs["incomes"]
-        )
-        past_accounts_total = accounts_total(
-            incomes_df=past_dfs["incomes"], expenses_df=past_dfs["expenses"]
-        )
-        actual_accounts_total = accounts_total(
-            incomes_df=dfs["incomes"], expenses_df=dfs["expenses"]
-        )
-        accounts_growth = account_diff(
-            past=past_accounts_total, actual=actual_accounts_total
-        )
-        account_chart = account_charts(
-            incomes_df=dfs["incomes"], expenses_df=dfs["expenses"], transfers_df=dfs["transfers"]
-        )
-
     total_income = sum(float(i.get("amount", 0)) for i in jsonable_encoder(incomes_actual))
     total_expenses = sum(float(e.get("amount", 0)) for e in jsonable_encoder(expenses_actual))
 
@@ -332,10 +271,6 @@ async def get_all_data(
             "total_income": round(total_income, 2),
             "total_expenses": round(total_expenses, 2),
             "net": round(total_income - total_expenses, 2),
-        },
-        performance={
-            "processing_duration_ms": t_processing.ms,
-            "charts_generated": 4,
         },
         date_range={
             "start": str(start_date),
@@ -354,13 +289,7 @@ async def get_all_data(
         },
         "incomes": jsonable_encoder(incomes_actual),
         "expenses": jsonable_encoder(expenses_actual),
-        "transfers": jsonable_encoder(transfers),
-        "charts": {
-            "transactions": transaction_chart,
-            "categories": categories_chart,
-            "accounts_growth": accounts_growth,
-            "accounts": account_chart,
-        },
+        "transfers": jsonable_encoder(transfers)
     }
 
 

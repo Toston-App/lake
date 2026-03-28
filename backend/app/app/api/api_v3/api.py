@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.api_v3.endpoints import charts, comparison, summary, transactions
+from app.api.api_v3.endpoints import charts, comparison, summary
 
 api_router = APIRouter()
 api_router.include_router(summary.router, prefix="/summary", tags=["summary"])

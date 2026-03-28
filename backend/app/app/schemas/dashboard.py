@@ -30,7 +30,7 @@ class ChartsResponse(BaseModel):
     net: Any
     income_vs_expense: Any
     categories: Any
-    accounts: dict
+    # accounts: dict
 
 
 class ComparisonResponse(BaseModel):
