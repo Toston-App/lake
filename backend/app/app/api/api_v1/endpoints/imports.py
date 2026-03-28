@@ -11,6 +11,7 @@ from app import crud, models, schemas
 from app.api import deps
 from app.models.imports import ImportService
 from app.synonyms import get_synonyms
+from app.utilities.redis import invalidate_user_cache
 from app.utilities.wide_events import enrich_event, mark_for_logging
 
 router = APIRouter()
@@ -325,6 +326,9 @@ async def process_import(
             "unmatched_categories": unmatched_categories,
         },
     )
+
+    # Invalidate user's cached dashboard data after import
+    await invalidate_user_cache(current_user.id)
 
     return {
         "message": "Importación exitosa",

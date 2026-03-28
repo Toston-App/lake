@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
+from app.utilities.redis import invalidate_user_cache
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -226,6 +227,9 @@ async def create_income(
         },
     )
 
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
+
     return income
 
 
@@ -264,6 +268,9 @@ async def create_incomes_bulk(
             "avg_duration_per_item_ms": round(t.ms / len(incomes_in), 2) if incomes_in else 0,
         },
     )
+
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
 
     return incomes
 
@@ -451,6 +458,9 @@ async def update_income(
                 amount=amount_difference,
             )
 
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
+
     return updated_income
 
 
@@ -531,6 +541,9 @@ async def delete_income(
                     )
                     await db.commit()
 
+
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
 
@@ -644,6 +657,9 @@ async def delete_incomes_bulk(
             "success_rate": round(len(removed_incomes) / len(id_list) * 100, 2) if id_list else 0,
         },
     )
+
+    # Invalidate user's cached dashboard data
+    await invalidate_user_cache(current_user.id)
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_incomes)} incomes",

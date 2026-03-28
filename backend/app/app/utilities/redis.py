@@ -110,3 +110,58 @@ async def get_recap_status(user_id: int, year: int) -> dict | None:
             f"Error retrieving recap status for user {user_id}, year {year}: {str(e)}"
         )
         return None
+
+
+# ==================== Dashboard Cache Functions ====================
+
+CACHE_PREFIXES = ["charts", "summary", "comparison"]
+CACHE_TTL = 60 * 60 * 24 * 7  # 7 days in seconds
+
+
+async def store_cached(
+    prefix: str, user_id: int, filter_type: str, date_param: str, data: dict
+) -> bool:
+    """Store computed dashboard data in Redis with 7-day TTL."""
+    try:
+        key = f"{prefix}:{user_id}:{filter_type}:{date_param}"
+        await r.set(key, json.dumps(data, cls=DateEncoder))
+        await r.expire(key, CACHE_TTL)
+        return True
+    except Exception as e:
+        logging.error(f"Redis error storing cache {key}: {str(e)}")
+        return False
+
+
+async def get_cached(
+    prefix: str, user_id: int, filter_type: str, date_param: str
+) -> dict | None:
+    """Retrieve cached dashboard data from Redis."""
+    try:
+        key = f"{prefix}:{user_id}:{filter_type}:{date_param}"
+        cached = await r.get(key)
+        if cached:
+            return json.loads(cached)
+        return None
+    except (Exception, json.JSONDecodeError) as e:
+        logging.error(f"Redis error retrieving cache {key}: {str(e)}")
+        return None
+
+
+async def invalidate_user_cache(user_id: int) -> bool:
+    """Delete all cached dashboard data for a user using SCAN + DEL."""
+    try:
+        for prefix in CACHE_PREFIXES:
+            pattern = f"{prefix}:{user_id}:*"
+            cursor = 0
+            while True:
+                cursor, keys = await r.scan(cursor, match=pattern, count=100)
+                if keys:
+                    await r.delete(*keys)
+                if cursor == 0:
+                    break
+        return True
+    except Exception as e:
+        logging.error(
+            f"Redis error invalidating cache for user {user_id}: {str(e)}"
+        )
+        return False

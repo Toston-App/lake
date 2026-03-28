@@ -13,6 +13,7 @@ class AsyncPostgresDsn(PostgresDsn):
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     API_V2_STR: str = "/api/v2"
+    API_V3_STR: str = "/api/v3"
     # used for jwt
     SECRET_KEY: str = secrets.token_urlsafe(32)
     # used for encryption with Fernet
