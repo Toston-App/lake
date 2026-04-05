@@ -13,7 +13,7 @@ from fastapi_pagination import Page
 
 router = APIRouter()
 
-@router.get("/", response_model=Page[schemas.Transaction])
+@router.get("", response_model=Page[schemas.Transaction])
 async def read_transactions(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
