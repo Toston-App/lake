@@ -42,6 +42,7 @@ async def get_multi_by_owner_with_filters(
             Expense.id.label("id"),
             literal_column("'expense'").label("type"),
             Expense.date.label("date"),
+            Expense.created_at.label("created_at"),
         )
         .where(Expense.owner_id == owner_id)
     )
@@ -51,6 +52,7 @@ async def get_multi_by_owner_with_filters(
             Income.id.label("id"),
             literal_column("'income'").label("type"),
             Income.date.label("date"),
+            Income.created_at.label("created_at"),
         )
         # We still need this join for filtering by category later
         .join(Subcategory, Income.subcategory_id == Subcategory.id, isouter=True)
@@ -62,6 +64,7 @@ async def get_multi_by_owner_with_filters(
             Transfer.id.label("id"),
             literal_column("'transfer'").label("type"),
             Transfer.date.label("date"),
+            Transfer.created_at.label("created_at"),
         )
         .where(Transfer.owner_id == owner_id)
     )
@@ -131,9 +134,15 @@ async def get_multi_by_owner_with_filters(
     union_query = union_all(*subqueries).cte("union_query")
 
     # Now, select from the UNION, sort, and paginate it
+    # Order by date first, then by created_at as secondary sort for consistent ordering
+    if order == OrderDirection.desc:
+        order_clause = [union_query.c.date.desc(), union_query.c.created_at.desc()]
+    else:
+        order_clause = [union_query.c.date.asc(), union_query.c.created_at.desc()]
+
     paginated_ids_query = (
         select(union_query.c.id, union_query.c.type, union_query.c.date)
-        .order_by(union_query.c.date.desc() if order == OrderDirection.desc else union_query.c.date.asc())
+        .order_by(*order_clause)
     )
 
     async def _hydrate_transactions(paginated_results: list) -> list:
