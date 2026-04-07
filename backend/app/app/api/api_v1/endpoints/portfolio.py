@@ -47,7 +47,7 @@ async def get_portfolio_summary(
     total_invested_usd = 0.0
     total_invested_mxn = 0.0
     total_gain_loss = 0.0
-    
+
     for holding in holdings:
         total_value_usd += holding.current_value_usd
         total_value_mxn += holding.current_value_mxn
@@ -56,20 +56,20 @@ async def get_portfolio_summary(
             total_invested_usd += holding.total_invested
         else:
             total_invested_mxn += holding.total_invested
-        total_gain_loss += holding.unrealized_gain_loss
-    
+
     # Calculate combined totals (all investments converted to single currency)
     total_invested_combined_usd = total_invested_usd + (total_invested_mxn / usd_mxn_rate)
     total_invested_combined_mxn = (total_invested_usd * usd_mxn_rate) + total_invested_mxn
-    
+
+    total_gain_loss = total_value_usd - total_invested_combined_usd
     # Calculate total percentage gain/loss
     total_gain_loss_pct = 0.0
     if total_invested_combined_usd > 0:
-        total_gain_loss_pct = (total_gain_loss / total_invested_combined_usd) * 100
-    
+        total_gain_loss_pct = ((total_value_usd - total_invested_combined_usd) / total_invested_combined_usd ) * 100
+
     # Count unique assets
     asset_ids = set(h.asset_id for h in holdings)
-    
+
     return PortfolioSummary(
         total_value_usd=round(total_value_usd, 2),
         total_value_mxn=round(total_value_mxn, 2),
