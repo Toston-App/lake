@@ -97,3 +97,14 @@ class ExternalAssetSearchResult(BaseModel):
     country: str
     exchange: Optional[str] = None
 
+
+# External crypto search result (from CoinGecko)
+class ExternalCryptoSearchResult(BaseModel):
+    symbol: str
+    name: str
+    asset_type: AssetType
+    market: Market
+    currency: Currency
+    coingecko_id: str
+    market_cap_rank: Optional[int] = None
+

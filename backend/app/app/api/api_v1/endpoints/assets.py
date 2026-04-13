@@ -17,10 +17,12 @@ from app.schemas.asset import (
     AssetWithPrice,
     AssetDeletionResponse,
     ExternalAssetSearchResult,
+    ExternalCryptoSearchResult,
 )
 from app.schemas.asset_price import CurrentPrice, PriceRefreshResponse
 from app.services.price_fetcher import PriceFetcher
 from app.services.yahoo_finance import YahooFinanceService
+from app.services.coingecko import CoinGeckoService
 
 router = APIRouter()
 
@@ -39,7 +41,7 @@ async def list_assets(
 ) -> Any:
     """
     List all tracked assets with optional filtering.
-    
+
     Filters:
     - asset_class: EQUITIES, FIXED_INCOME, CRYPTO, FUNDS
     - asset_type: STOCK, ETF, BOND, CETES, TREASURY, CRYPTOCURRENCY, MUTUAL_FUND, INDEX_FUND
@@ -68,7 +70,7 @@ async def create_asset(
 ) -> Any:
     """
     Create a new asset to track.
-    
+
     The asset_class is automatically inferred from asset_type if not provided.
     """
     # Check if asset already exists
@@ -78,11 +80,11 @@ async def create_asset(
             status_code=400,
             detail=f"Asset with symbol {asset_in.symbol.upper()} already exists",
         )
-    
+
     # Auto-set asset_class from asset_type
     if asset_in.asset_class is None:
         asset_in.asset_class = ASSET_TYPE_TO_CLASS.get(asset_in.asset_type)
-    
+
     asset = await crud.asset.create(db, obj_in=asset_in)
     return asset
 
@@ -109,26 +111,26 @@ async def search_external_assets(
 ) -> Any:
     """
     Search for assets from external sources (Yahoo Finance).
-    
+
     Searches both USA (NYSE, NASDAQ) and Mexican (BMV) markets.
     Results include stocks and ETFs that can be added to the portfolio.
     """
     results = await YahooFinanceService.search_symbol(q)
-    
+
     # Filter to only include stocks and ETFs from USA and Mexico exchanges
     allowed_exchanges = {"NYQ", "NMS", "NGM", "PCX", "BTS", "MEX", "NYSE", "NASDAQ"}
     allowed_types = {"EQUITY", "ETF"}
-    
+
     filtered_results = []
     for item in results:
         exchange = item.get("exchange", "")
         quote_type = item.get("type", "")
-        
+
         # Include if it matches our criteria or is a Mexican stock
         is_mexican = ".MX" in (item.get("symbol") or "")
         is_allowed_exchange = exchange in allowed_exchanges or is_mexican
         is_allowed_type = quote_type in allowed_types
-        
+
         if is_allowed_exchange and is_allowed_type:
             # Determine market and currency
             if is_mexican or exchange == "MEX":
@@ -143,13 +145,13 @@ async def search_external_assets(
                 market = Market.NASDAQ
                 currency = Currency.USD
                 country = "US"
-            
+
             # Determine asset type
             asset_type = AssetType.ETF if quote_type == "ETF" else AssetType.STOCK
-            
+
             # Clean up the symbol (remove .MX suffix for internal storage)
             symbol = item.get("symbol", "").replace(".MX", "")
-            
+
             filtered_results.append(ExternalAssetSearchResult(
                 symbol=symbol,
                 name=item.get("name") or symbol,
@@ -159,8 +161,36 @@ async def search_external_assets(
                 country=country,
                 exchange=exchange,
             ))
-    
+
     return filtered_results
+
+
+@router.get("/search-crypto", response_model=list[ExternalCryptoSearchResult])
+async def search_crypto_assets(
+    current_user: models.User = Depends(deps.get_current_active_user),
+    q: str = Query(..., min_length=1, description="Search query (symbol or name)"),
+) -> Any:
+    """
+    Search for cryptocurrencies from CoinGecko.
+
+    Returns cryptocurrency search results that can be added to the portfolio.
+    Results include symbol, name, CoinGecko ID, and market cap rank.
+    """
+    results = await CoinGeckoService.search_coins(q)
+
+    crypto_results = []
+    for coin in results:
+        crypto_results.append(ExternalCryptoSearchResult(
+            symbol=coin.get("symbol", ""),
+            name=coin.get("name", ""),
+            asset_type=AssetType.CRYPTOCURRENCY,
+            market=Market.CRYPTO,
+            currency=Currency.USD,
+            coingecko_id=coin.get("coingecko_id", ""),
+            market_cap_rank=coin.get("market_cap_rank"),
+        ))
+
+    return crypto_results
 
 
 @router.get("/{asset_id}", response_model=AssetWithPrice)
