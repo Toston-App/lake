@@ -1,6 +1,6 @@
 // Configuration
 const API_BASE = 'http://localhost:8888/api/v1';
-let authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3Njk3OTQ1NTksInVzZXIiOnsibmFtZSI6InN0cmluZyIsImVtYWlsIjoidXNlckBleGFtcGxlLmNvbSIsImNvdW50cnkiOiJzdHJpbmciLCJpZCI6MX19.iJOswWv3vcsa6cOK9F6CEZshoFU1BjRm5OMH_cZjlcI"; // Set your auth token here
+let authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzYwNTUzNTYsInVzZXIiOnsibmFtZSI6InN0cmluZyIsImVtYWlsIjoidXNlckBleGFtcGxlLmNvbSIsImNvdW50cnkiOiJzdHJpbmciLCJpZCI6Mn19.hPWJkiyjqjGgwBZn6hSHj-msKp5G27XhM9KTvQ213bU"; // Set your auth token here
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -629,6 +629,7 @@ async function showAddTransactionModal() {
     document.getElementById('tx-selected-market').value = '';
     document.getElementById('tx-selected-currency').value = '';
     document.getElementById('tx-selected-country').value = '';
+    document.getElementById('tx-selected-coingecko-id').value = '';
     
     openModal('add-transaction-modal');
 }
@@ -650,20 +651,48 @@ async function searchAssets(query) {
         try {
             resultsContainer.innerHTML = '<div class="search-loading">Searching...</div>';
             
-            const results = await apiRequest(`/investments/assets/search-external?q=${encodeURIComponent(query)}`);
+            // Call both endpoints in parallel
+            const [stockResults, cryptoResults] = await Promise.all([
+                apiRequest(`/investments/assets/search-external?q=${encodeURIComponent(query)}`).catch(() => []),
+                apiRequest(`/investments/assets/search-crypto?q=${encodeURIComponent(query)}`).catch(() => [])
+            ]);
             
-            if (results.length === 0) {
+            // Combine results
+            const allResults = [...cryptoResults, ...stockResults];
+            
+            if (allResults.length === 0) {
                 resultsContainer.innerHTML = '<div class="search-no-results">No assets found. Try manual entry.</div>';
                 return;
             }
             
-            resultsContainer.innerHTML = results.map(asset => `
-                <div class="search-result-item" onclick='selectAsset(${JSON.stringify(asset)})'>
-                    <span class="result-symbol">${asset.symbol}</span>
-                    <span class="result-name">${asset.name}</span>
-                    <span class="result-market badge badge-${asset.market.toLowerCase()}">${asset.market}</span>
+            // Group results by type for better display
+            const cryptoGroup = cryptoResults.length > 0 ? `
+                <div class="search-group">
+                    <div class="search-group-header">Cryptocurrencies</div>
+                    ${cryptoResults.map(asset => `
+                        <div class="search-result-item" onclick='selectCryptoAsset(${JSON.stringify(asset)})'>
+                            <span class="result-symbol">${asset.symbol}</span>
+                            <span class="result-name">${asset.name}</span>
+                            <span class="result-market badge badge-crypto">CRYPTO</span>
+                        </div>
+                    `).join('')}
                 </div>
-            `).join('');
+            ` : '';
+            
+            const stockGroup = stockResults.length > 0 ? `
+                <div class="search-group">
+                    <div class="search-group-header">Stocks & ETFs</div>
+                    ${stockResults.map(asset => `
+                        <div class="search-result-item" onclick='selectAsset(${JSON.stringify(asset)})'>
+                            <span class="result-symbol">${asset.symbol}</span>
+                            <span class="result-name">${asset.name}</span>
+                            <span class="result-market badge badge-${asset.market.toLowerCase()}">${asset.market}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : '';
+            
+            resultsContainer.innerHTML = cryptoGroup + stockGroup;
             
         } catch (error) {
             console.error('Asset search failed:', error);
@@ -682,6 +711,7 @@ function selectAsset(asset) {
     document.getElementById('tx-selected-market').value = asset.market;
     document.getElementById('tx-selected-currency').value = asset.currency;
     document.getElementById('tx-selected-country').value = asset.country;
+    document.getElementById('tx-selected-coingecko-id').value = '';
     
     // Update display
     document.getElementById('selected-asset-symbol').textContent = asset.symbol;
@@ -702,6 +732,37 @@ function selectAsset(asset) {
     document.getElementById('manual-asset-fields').style.display = 'none';
 }
 
+function selectCryptoAsset(asset) {
+    selectedAsset = asset;
+    
+    // Update hidden fields (crypto doesn't have country, but has coingecko_id)
+    document.getElementById('tx-selected-symbol').value = asset.symbol;
+    document.getElementById('tx-selected-name').value = asset.name;
+    document.getElementById('tx-selected-type').value = asset.asset_type;
+    document.getElementById('tx-selected-market').value = asset.market;
+    document.getElementById('tx-selected-currency').value = asset.currency;
+    document.getElementById('tx-selected-country').value = 'GLOBAL'; // Crypto is global
+    document.getElementById('tx-selected-coingecko-id').value = asset.coingecko_id || '';
+    
+    // Update display
+    document.getElementById('selected-asset-symbol').textContent = asset.symbol;
+    document.getElementById('selected-asset-name').textContent = asset.name;
+    document.getElementById('selected-asset-market').textContent = asset.market;
+    document.getElementById('selected-asset-market').className = `asset-market badge badge-crypto`;
+    
+    // Show selected asset, hide search
+    document.getElementById('selected-asset-display').style.display = 'flex';
+    document.getElementById('tx-asset-search').style.display = 'none';
+    document.getElementById('asset-search-results').innerHTML = '';
+    
+    // Update currency based on asset (crypto defaults to USD)
+    document.getElementById('tx-currency').value = asset.currency;
+    
+    // Hide manual entry if it was open
+    document.getElementById('tx-manual-entry').checked = false;
+    document.getElementById('manual-asset-fields').style.display = 'none';
+}
+
 function clearSelectedAsset() {
     selectedAsset = null;
     
@@ -712,6 +773,7 @@ function clearSelectedAsset() {
     document.getElementById('tx-selected-market').value = '';
     document.getElementById('tx-selected-currency').value = '';
     document.getElementById('tx-selected-country').value = '';
+    document.getElementById('tx-selected-coingecko-id').value = '';
     
     // Show search, hide selected
     document.getElementById('selected-asset-display').style.display = 'none';
@@ -815,7 +877,7 @@ async function submitTransaction(event) {
     const isManualEntry = document.getElementById('tx-manual-entry').checked;
     
     // Get asset info (from selection or manual entry)
-    let symbol, assetName, assetType, market, currency, country;
+    let symbol, assetName, assetType, market, currency, country, coingeckoId;
     
     if (isManualEntry) {
         symbol = document.getElementById('tx-symbol').value.toUpperCase().trim();
@@ -824,6 +886,7 @@ async function submitTransaction(event) {
         market = document.getElementById('tx-market').value;
         currency = document.getElementById('tx-currency').value;
         country = market === 'BMV' ? 'MX' : 'US';
+        coingeckoId = null;
     } else if (selectedAsset) {
         symbol = selectedAsset.symbol;
         assetName = selectedAsset.name;
@@ -831,6 +894,7 @@ async function submitTransaction(event) {
         market = selectedAsset.market;
         currency = selectedAsset.currency;
         country = selectedAsset.country;
+        coingeckoId = selectedAsset.coingecko_id || null;
     } else {
         // Check hidden fields (for form resubmission)
         symbol = document.getElementById('tx-selected-symbol').value;
@@ -843,6 +907,7 @@ async function submitTransaction(event) {
         market = document.getElementById('tx-selected-market').value || 'NYSE';
         currency = document.getElementById('tx-selected-currency').value || 'USD';
         country = document.getElementById('tx-selected-country').value || 'US';
+        coingeckoId = document.getElementById('tx-selected-coingecko-id').value || null;
     }
     
     if (!symbol) {
@@ -857,6 +922,7 @@ async function submitTransaction(event) {
         market: market,
         currency: currency,
         country: country,
+        coingecko_id: coingeckoId,
         transaction_type: document.getElementById('tx-type').value,
         quantity: parseFloat(document.getElementById('tx-quantity').value),
         price_per_unit: parseFloat(document.getElementById('tx-price').value),
@@ -924,4 +990,3 @@ document.addEventListener('keydown', (e) => {
         closeModal();
     }
 });
-

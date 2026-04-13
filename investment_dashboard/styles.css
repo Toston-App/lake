@@ -732,6 +732,26 @@ body {
     color: var(--negative);
 }
 
+/* Search Groups */
+.search-group {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.search-group:last-child {
+    border-bottom: none;
+}
+
+.search-group-header {
+    padding: 0.5rem 1rem;
+    background: var(--bg-tertiary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border-color);
+}
+
 /* Selected Asset Display */
 .selected-asset {
     display: flex;

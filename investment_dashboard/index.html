@@ -354,10 +354,10 @@
         <form id="add-transaction-form" onsubmit="submitTransaction(event)">
             <!-- Asset Search -->
             <div class="form-group">
-                <label for="tx-asset-search">Search Asset (USA / Mexico)</label>
+                <label for="tx-asset-search">Search Asset (Stocks, ETFs, Crypto)</label>
                 <div class="asset-search-container">
                     <input type="text" id="tx-asset-search" 
-                           placeholder="Search by symbol or name (e.g., AAPL, AMXL)" 
+                           placeholder="Search by symbol or name (e.g., AAPL, BTC, AMXL)" 
                            autocomplete="off"
                            oninput="searchAssets(this.value)">
                     <div id="asset-search-results" class="search-results"></div>
@@ -420,6 +420,7 @@
             <input type="hidden" id="tx-selected-market">
             <input type="hidden" id="tx-selected-currency">
             <input type="hidden" id="tx-selected-country">
+            <input type="hidden" id="tx-selected-coingecko-id">
 
             <div class="form-group">
                 <label for="tx-type">Transaction Type</label>
@@ -496,4 +497,3 @@
     <script src="./app.js"></script>
 </body>
 </html>
-
