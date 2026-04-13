@@ -77,29 +77,35 @@ class CoinGeckoService:
             CoinGecko ID or None if not found
         """
         return CRYPTO_ID_MAP.get(symbol.upper())
-    
+
     @classmethod
-    async def get_price(cls, symbol: str) -> Optional[CryptoPrice]:
+    async def get_price(
+        cls,
+        symbol: str,
+        coingecko_id: Optional[str] = None,
+    ) -> Optional[CryptoPrice]:
         """
         Fetch current price for a cryptocurrency.
-        
+
         Args:
             symbol: Cryptocurrency symbol (e.g., "BTC", "ETH")
-        
+            coingecko_id: CoinGecko ID (preferred when available)
+
         Returns:
             CryptoPrice object or None if fetch fails
         """
-        coingecko_id = cls.get_coingecko_id(symbol)
-        if not coingecko_id:
+        resolved_coingecko_id = coingecko_id or cls.get_coingecko_id(symbol)
+        if not resolved_coingecko_id:
+            #TODO: improve this
             logger.warning(f"Unknown cryptocurrency symbol: {symbol}")
             return None
-        
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     f"{cls.BASE_URL}/simple/price",
                     params={
-                        "ids": coingecko_id,
+                        "ids": resolved_coingecko_id,
                         "vs_currencies": "usd,mxn",
                         "include_24hr_change": "true",
                         "include_24hr_vol": "true",
@@ -108,34 +114,35 @@ class CoinGeckoService:
                 )
                 response.raise_for_status()
                 data = response.json()
-                
-                if coingecko_id not in data:
-                    logger.warning(f"No data returned for {coingecko_id}")
+
+                if resolved_coingecko_id not in data:
+                    logger.warning(f"No data returned for {resolved_coingecko_id}")
                     return None
-                
-                coin_data = data[coingecko_id]
+
+                coin_data = data[resolved_coingecko_id]
                 price_usd = coin_data.get("usd")
-                
+
                 if price_usd is None:
                     return None
-                
+
                 return CryptoPrice(
                     symbol=symbol.upper(),
-                    coingecko_id=coingecko_id,
+                    coingecko_id=resolved_coingecko_id,
                     price_usd=price_usd,
+                    #TODO: improve this conversion (fetch actual MXN price with CurrencyConverter)
                     price_mxn=coin_data.get("mxn", price_usd * 17),  # Fallback conversion
                     market_cap=coin_data.get("usd_market_cap"),
                     volume_24h=coin_data.get("usd_24h_vol"),
                     change_24h_percent=coin_data.get("usd_24h_change"),
                 )
-                
+
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error fetching {symbol} price: {e}")
             return None
         except Exception as e:
             logger.error(f"Error fetching {symbol} price: {e}")
             return None
-    
+
     @classmethod
     async def get_prices_batch(cls, symbols: list[str]) -> dict[str, CryptoPrice]:
         """
@@ -233,4 +240,3 @@ class CoinGeckoService:
             coingecko_id: CoinGecko ID
         """
         CRYPTO_ID_MAP[symbol.upper()] = coingecko_id
-

@@ -16,6 +16,7 @@ class AssetBase(BaseModel):
     market: Optional[Market] = Market.NYSE
     sector: Optional[str] = None
     country: Optional[str] = "US"
+    coingecko_id: Optional[str] = None
     is_active: Optional[bool] = True
 
     @validator("symbol", pre=True, always=True)
@@ -107,4 +108,3 @@ class ExternalCryptoSearchResult(BaseModel):
     currency: Currency
     coingecko_id: str
     market_cap_rank: Optional[int] = None
-

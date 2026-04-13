@@ -184,6 +184,7 @@ async def create_transaction_with_asset(
             market=transaction_in.market,
             country=transaction_in.country,
             sector=transaction_in.sector,
+            coingecko_id=transaction_in.coingecko_id,
         )
         asset = await crud.asset.create(db, obj_in=asset_in)
         asset_created = True
@@ -420,4 +421,3 @@ async def delete_transaction(
     return InvestmentTransactionDeletionResponse(
         message=f"Transaction {transaction_id} deleted"
     )
-

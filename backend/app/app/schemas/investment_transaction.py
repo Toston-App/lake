@@ -113,6 +113,7 @@ class TransactionWithAssetCreate(BaseModel):
     currency: Currency = Currency.USD
     country: str = "US"
     sector: Optional[str] = None
+    coingecko_id: Optional[str] = None
     
     # Transaction details
     transaction_type: TransactionType
@@ -172,4 +173,3 @@ class TransactionWithAssetResponse(BaseModel):
 
 # Update forward references
 TransactionWithAssetResponse.update_forward_refs()
-

@@ -111,15 +111,19 @@ class PriceFetcher:
             change=stock_price.change,
             change_percent=stock_price.change_percent,
         )
-    
+
     @classmethod
     async def _fetch_crypto_price(cls, asset: Asset) -> Optional[AssetPriceCreate]:
         """Fetch price for cryptocurrencies from CoinGecko."""
-        crypto_price = await CoinGeckoService.get_price(asset.symbol)
-        
+        crypto_price = await CoinGeckoService.get_price(
+            asset.symbol,
+            coingecko_id=asset.coingecko_id,
+        )
+
+
         if not crypto_price:
             return None
-        
+
         return AssetPriceCreate(
             asset_id=asset.id,
             price=crypto_price.price_usd,
@@ -129,7 +133,7 @@ class PriceFetcher:
             volume=crypto_price.volume_24h,
             change_percent=crypto_price.change_24h_percent,
         )
-    
+
     @classmethod
     async def refresh_all_prices(
         cls,
@@ -239,4 +243,3 @@ class PriceFetcher:
         
         # Fetch fresh price
         return await cls.fetch_and_store_price(db, asset)
-
