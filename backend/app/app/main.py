@@ -25,30 +25,30 @@ app = FastAPI(
 )
 PaginationProvider(app)
 
-@app.middleware("http")
-async def add_csp_header(request: Request, call_next):
-    response = await call_next(request)
+# @app.middleware("http")
+# async def add_csp_header(request: Request, call_next):
+#     response = await call_next(request)
     
-    csp_directives = [
-        "default-src 'self'",
-        "img-src 'self' data:",
-        "connect-src 'self'",
-        "script-src 'self'",
-        "style-src 'self' 'unsafe-inline'",
-        "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
-        "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-        "base-uri 'self'",
-        "font-src 'self' https: data:",
-        "frame-ancestors 'self'",
-        "object-src 'none'",
-        "script-src-attr 'none'",
-        "require-trusted-types-for 'script'"
-    ]
+#     csp_directives = [
+#         "default-src 'self'",
+#         "img-src 'self' data:",
+#         "connect-src 'self'",
+#         "script-src 'self'",
+#         "style-src 'self' 'unsafe-inline'",
+#         "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+#         "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+#         "base-uri 'self'",
+#         "font-src 'self' https: data:",
+#         "frame-ancestors 'self'",
+#         "object-src 'none'",
+#         "script-src-attr 'none'",
+#         "require-trusted-types-for 'script'"
+#     ]
     
-    csp_policy = "; ".join(csp_directives)
-    response.headers["Content-Security-Policy"] = csp_policy
+#     csp_policy = "; ".join(csp_directives)
+#     response.headers["Content-Security-Policy"] = csp_policy
     
-    return response
+#     return response
 
 security = HTTPBasic()
 

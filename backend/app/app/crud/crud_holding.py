@@ -1,6 +1,5 @@
 from typing import Optional
 
-from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -17,7 +16,12 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         self, db: AsyncSession, *, obj_in: HoldingCreate, owner_id: int
     ) -> Holding:
         """Create a new holding for a user."""
-        obj_in_data = jsonable_encoder(obj_in)
+        obj_in_data = {
+            "asset_id": obj_in.asset_id,
+            "quantity": obj_in.quantity,
+            "avg_cost_basis": obj_in.avg_cost_basis,
+            "cost_currency": obj_in.cost_currency,
+        }
         
         # Calculate total invested from quantity and cost basis
         obj_in_data["total_invested"] = obj_in_data["quantity"] * obj_in_data["avg_cost_basis"]
@@ -184,4 +188,3 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
 
 
 holding = CRUDHolding(Holding)
-

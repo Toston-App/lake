@@ -18,6 +18,7 @@ from app.schemas.asset import (
     AssetDeletionResponse,
     ExternalAssetSearchResult,
     ExternalCryptoSearchResult,
+    ExternalAssetProvider,
 )
 from app.schemas.asset_price import CurrentPrice, PriceRefreshResponse
 from app.services.price_fetcher import PriceFetcher
@@ -153,6 +154,8 @@ async def search_external_assets(
             symbol = item.get("symbol", "").replace(".MX", "")
 
             filtered_results.append(ExternalAssetSearchResult(
+                provider=ExternalAssetProvider.YAHOO,
+                external_id=item.get("symbol", ""),
                 symbol=symbol,
                 name=item.get("name") or symbol,
                 asset_type=asset_type,
@@ -181,6 +184,8 @@ async def search_crypto_assets(
     crypto_results = []
     for coin in results:
         crypto_results.append(ExternalCryptoSearchResult(
+            provider=ExternalAssetProvider.COINGECKO,
+            external_id=coin.get("coingecko_id", ""),
             symbol=coin.get("symbol", ""),
             name=coin.get("name", ""),
             asset_type=AssetType.CRYPTOCURRENCY,
@@ -348,4 +353,3 @@ async def refresh_all_prices(
         updated_count=updated_count,
         failed_symbols=failed_symbols,
     )
-

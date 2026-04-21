@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
+from app.models.asset import ASSET_TYPE_TO_CLASS
 from app.models.asset import AssetClass, Currency
+from app.schemas.asset import AssetCreate
 from app.schemas.holding import (
     Holding,
     HoldingCreate,
@@ -17,6 +19,7 @@ from app.schemas.holding import (
     HoldingWithAsset,
     HoldingDeletionResponse,
 )
+from app.services.asset_resolver import AssetResolverService
 
 router = APIRouter()
 
@@ -100,14 +103,44 @@ async def create_holding(
     
     If a holding already exists for this asset, use PUT to update it.
     """
-    # Check if asset exists
-    asset = await crud.asset.get(db, id=holding_in.asset_id)
-    if not asset:
-        raise HTTPException(status_code=404, detail="Asset not found")
+    # Resolve asset from existing ID or external identifier
+    if holding_in.asset_id is not None:
+        asset = await crud.asset.get(db, id=holding_in.asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+    else:
+        if not holding_in.provider or not holding_in.external_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Provide asset_id or provider+external_id",
+            )
+
+        if holding_in.provider.value == "yahoo":
+            resolved_asset = await AssetResolverService.resolve_from_yahoo(holding_in.external_id)
+        else:
+            resolved_asset = await AssetResolverService.resolve_from_coingecko(holding_in.external_id)
+
+        existing_asset = await crud.asset.get_by_symbol(db, symbol=resolved_asset.symbol)
+        if existing_asset:
+            asset = existing_asset
+        else:
+            asset_in = AssetCreate(
+                symbol=resolved_asset.symbol,
+                name=resolved_asset.name,
+                asset_type=resolved_asset.asset_type,
+                asset_class=ASSET_TYPE_TO_CLASS.get(resolved_asset.asset_type),
+                currency=resolved_asset.currency,
+                market=resolved_asset.market,
+                country=resolved_asset.country,
+                coingecko_id=resolved_asset.coingecko_id,
+            )
+            asset = await crud.asset.create(db, obj_in=asset_in)
+
+        holding_in.asset_id = asset.id
     
     # Check if holding already exists
     existing = await crud.holding.get_by_owner_and_asset(
-        db, owner_id=current_user.id, asset_id=holding_in.asset_id
+        db, owner_id=current_user.id, asset_id=asset.id
     )
     if existing:
         raise HTTPException(
@@ -227,4 +260,3 @@ async def delete_holding(
     
     await crud.holding.remove(db, id=holding_id)
     return HoldingDeletionResponse(message=f"Holding for {asset.symbol} deleted")
-

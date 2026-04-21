@@ -1,11 +1,12 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, root_validator, validator
 
-from app.models.asset import AssetType, Currency, Market
+from app.models.asset import Currency
 from app.models.broker import Broker
 from app.models.investment_transaction import TransactionType
+from app.schemas.asset import ExternalAssetProvider
 
 
 # Shared properties
@@ -105,16 +106,11 @@ class TransactionWithAssetCreate(BaseModel):
     This allows users to record a transaction without first manually creating
     an asset and holding.
     """
-    # Asset info (required for new assets, used to find/create the asset)
-    symbol: str
-    asset_name: Optional[str] = None  # Optional - can be auto-filled or manual
-    asset_type: AssetType = AssetType.STOCK
-    market: Market = Market.NYSE
-    currency: Currency = Currency.USD
-    country: str = "US"
-    sector: Optional[str] = None
-    coingecko_id: Optional[str] = None
-    
+    # Asset identity (required for selected external assets)
+    asset_id: Optional[int] = None
+    provider: Optional[ExternalAssetProvider] = None
+    external_id: Optional[str] = None
+
     # Transaction details
     transaction_type: TransactionType
     quantity: float
@@ -128,11 +124,25 @@ class TransactionWithAssetCreate(BaseModel):
     exchange_rate_to_usd: Optional[float] = None
     exchange_rate_to_mxn: Optional[float] = None
 
-    @validator("symbol", pre=True, always=True)
-    def uppercase_symbol(cls, v):
-        if v is not None:
-            return v.upper().strip()
+    @validator("external_id", pre=True, always=True)
+    def normalize_external_id(cls, v):
+        if isinstance(v, str):
+            return v.strip()
         return v
+
+    @root_validator(skip_on_failure=True)
+    def validate_asset_identity(cls, values):
+        asset_id = values.get("asset_id")
+        provider = values.get("provider")
+        external_id = values.get("external_id")
+
+        if asset_id is not None:
+            return values
+
+        if provider is not None and external_id:
+            return values
+
+        raise ValueError("Provide asset_id or provider+external_id")
 
     @validator("quantity", "price_per_unit", "fees", pre=True, always=True)
     def round_floats(cls, v):

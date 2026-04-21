@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, root_validator, validator
 
 from app.models.asset import AssetClass, AssetType, Currency, Market
+from app.schemas.asset import ExternalAssetProvider
 
 
 # Shared properties
@@ -23,10 +24,34 @@ class HoldingBase(BaseModel):
 
 # Properties to receive on Holding creation
 class HoldingCreate(HoldingBase):
-    asset_id: int
+    asset_id: Optional[int] = None
+    provider: Optional[ExternalAssetProvider] = None
+    external_id: Optional[str] = None
     quantity: float
     avg_cost_basis: float
     cost_currency: Currency = Currency.USD
+
+    @validator("external_id", pre=True, always=True)
+    def normalize_external_id(cls, v):
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+    @root_validator(pre=True)
+    def validate_asset_source(cls, values):
+        asset_id = values.get("asset_id")
+        if asset_id is not None:
+            return values
+
+        required_external_fields = ("provider", "external_id")
+        missing = [field for field in required_external_fields if values.get(field) in (None, "")]
+        if missing:
+            missing_fields = ", ".join(missing)
+            raise ValueError(
+                f"Either asset_id must be provided, or external asset identifier is required: {missing_fields}"
+            )
+
+        return values
 
 
 # Properties to receive on Holding update
@@ -86,4 +111,3 @@ class HoldingWithAsset(Holding):
 
 class HoldingDeletionResponse(BaseModel):
     message: str
-

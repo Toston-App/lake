@@ -407,9 +407,6 @@ const results = await apiCall('/assets/search-external?q=TSLA');
 
 // Search for Mexican stocks
 const mxResults = await apiCall('/assets/search-external?q=AMXL');
-
-// Search for Bitcoin
-const cryptoResults = await apiCall('/assets/search-external?q=BTC');
 ```
 
 **Response:**
@@ -433,6 +430,72 @@ const cryptoResults = await apiCall('/assets/search-external?q=BTC');
     "currency": "MXN",
     "country": "MX",
     "exchange": "BMV"
+  }
+]
+```
+
+---
+
+#### 5. Search Cryptocurrencies
+
+Search for cryptocurrencies from CoinGecko. This endpoint allows you to discover and add crypto assets to your portfolio.
+
+**Endpoint:** `GET /assets/search-crypto`
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `q` | string | Yes | Search query (symbol or cryptocurrency name) |
+
+**Response Schema:**
+
+```typescript
+interface ExternalCryptoSearchResult {
+  symbol: string;
+  name: string;
+  asset_type: AssetType;  // Always "cryptocurrency"
+  market: Market;         // Always "CRYPTO"
+  currency: Currency;     // Always "USD"
+  coingecko_id: string;   // CoinGecko ID for price fetching
+  market_cap_rank: number | null;  // Market cap rank (1 = highest)
+}
+```
+
+**Example:**
+
+```javascript
+// Search for Bitcoin
+const results = await apiCall('/assets/search-crypto?q=bitcoin');
+
+// Search by symbol
+const ethResults = await apiCall('/assets/search-crypto?q=ETH');
+
+// Search for Dogecoin
+const dogeResults = await apiCall('/assets/search-crypto?q=doge');
+```
+
+**Response:**
+
+```json
+[
+  {
+    "symbol": "BTC",
+    "name": "Bitcoin",
+    "asset_type": "cryptocurrency",
+    "market": "CRYPTO",
+    "currency": "USD",
+    "coingecko_id": "bitcoin",
+    "market_cap_rank": 1
+  },
+  {
+    "symbol": "ETH",
+    "name": "Ethereum",
+    "asset_type": "cryptocurrency",
+    "market": "CRYPTO",
+    "currency": "USD",
+    "coingecko_id": "ethereum",
+    "market_cap_rank": 2
   }
 ]
 ```
@@ -748,7 +811,10 @@ Create a new holding position.
 
 ```typescript
 interface HoldingCreate {
-  asset_id: number;         // Required - ID of the asset
+  asset_id?: number;        // Existing tracked asset ID
+  // Or provide trusted external identifier (asset auto-created if missing)
+  provider?: 'yahoo' | 'coingecko';
+  external_id?: string;      // Yahoo ticker (e.g., "AAPL", "AMXL.MX") or CoinGecko ID (e.g., "bitcoin")
   quantity: number;         // Required - Number of units held
   avg_cost_basis: number;   // Required - Average purchase price per unit
   cost_currency?: Currency; // Default: "USD"
@@ -764,6 +830,18 @@ const newHolding = await apiCall('/holdings', {
     asset_id: 1,
     quantity: 50,
     avg_cost_basis: 150.00,
+    cost_currency: 'USD',
+  }),
+});
+
+// Or create from external search result (asset auto-created if needed)
+const newHoldingFromSearch = await apiCall('/holdings', {
+  method: 'POST',
+  body: JSON.stringify({
+    provider: 'yahoo',
+    external_id: 'NVDA',
+    quantity: 3,
+    avg_cost_basis: 910.50,
     cost_currency: 'USD',
   }),
 });
@@ -998,14 +1076,10 @@ const dividendTxn = await apiCall('/transactions', {
 
 ```typescript
 interface TransactionWithAssetCreate {
-  // Asset information
-  symbol: string;               // Required
-  asset_name?: string;          // Optional, will be fetched if not provided
-  asset_type?: AssetType;       // Default: "stock"
-  market?: Market;              // Default: "NYSE"
-  currency?: Currency;          // Default: "USD"
-  country?: string;             // Default: "US"
-  sector?: string;
+  // Asset identity (one required)
+  asset_id?: number;            // Existing tracked asset ID
+  provider?: 'yahoo' | 'coingecko';
+  external_id?: string;         // Yahoo ticker or CoinGecko ID
   
   // Transaction details
   transaction_type: TransactionType; // Required
@@ -1039,14 +1113,9 @@ interface TransactionWithAssetResponse {
 const result = await apiCall('/transactions/with-asset', {
   method: 'POST',
   body: JSON.stringify({
-    // Asset info
-    symbol: 'GOOGL',
-    asset_name: 'Alphabet Inc.',
-    asset_type: 'stock',
-    market: 'NASDAQ',
-    currency: 'USD',
-    country: 'US',
-    sector: 'Technology',
+    // Asset identity
+    provider: 'yahoo',
+    external_id: 'GOOGL',
     
     // Transaction details
     transaction_type: 'buy',
@@ -1063,13 +1132,8 @@ const result = await apiCall('/transactions/with-asset', {
 const mxResult = await apiCall('/transactions/with-asset', {
   method: 'POST',
   body: JSON.stringify({
-    symbol: 'AMXL.MX',
-    asset_name: 'America Movil SAB de CV',
-    asset_type: 'stock',
-    market: 'BMV',
-    currency: 'MXN',
-    country: 'MX',
-    sector: 'Telecommunications',
+    provider: 'yahoo',
+    external_id: 'AMXL.MX',
     
     transaction_type: 'buy',
     quantity: 100,
@@ -1083,11 +1147,8 @@ const mxResult = await apiCall('/transactions/with-asset', {
 const cryptoResult = await apiCall('/transactions/with-asset', {
   method: 'POST',
   body: JSON.stringify({
-    symbol: 'BTC',
-    asset_name: 'Bitcoin',
-    asset_type: 'cryptocurrency',
-    market: 'CRYPTO',
-    currency: 'USD',
+    provider: 'coingecko',
+    external_id: 'bitcoin',
     
     transaction_type: 'buy',
     quantity: 0.5,

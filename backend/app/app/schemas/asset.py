@@ -1,4 +1,5 @@
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, validator
@@ -89,7 +90,14 @@ class AssetDeletionResponse(BaseModel):
 
 
 # External asset search result (from Yahoo Finance, etc.)
+class ExternalAssetProvider(str, Enum):
+    YAHOO = "yahoo"
+    COINGECKO = "coingecko"
+
+
 class ExternalAssetSearchResult(BaseModel):
+    provider: ExternalAssetProvider = ExternalAssetProvider.YAHOO
+    external_id: str
     symbol: str
     name: str
     asset_type: AssetType
@@ -101,6 +109,8 @@ class ExternalAssetSearchResult(BaseModel):
 
 # External crypto search result (from CoinGecko)
 class ExternalCryptoSearchResult(BaseModel):
+    provider: ExternalAssetProvider = ExternalAssetProvider.COINGECKO
+    external_id: str
     symbol: str
     name: str
     asset_type: AssetType

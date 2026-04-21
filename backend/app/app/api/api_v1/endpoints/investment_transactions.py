@@ -21,6 +21,7 @@ from app.schemas.investment_transaction import (
 )
 from app.schemas.asset import AssetCreate
 from app.schemas.holding import HoldingCreate
+from app.services.asset_resolver import AssetResolverService
 from app.services.currency_converter import CurrencyConverter
 
 router = APIRouter()
@@ -164,30 +165,40 @@ async def create_transaction_with_asset(
     This is ideal for quickly adding new investments without first
     manually creating assets and holdings.
     """
-    from app.models.asset import ASSET_TYPE_TO_CLASS
-    
     # Step 1: Get or create the asset
     asset_created = False
-    existing_asset = await crud.asset.get_by_symbol(db, symbol=transaction_in.symbol)
-    
-    if existing_asset:
-        asset = existing_asset
+    if transaction_in.asset_id is not None:
+        asset = await crud.asset.get(db, id=transaction_in.asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
     else:
-        # Create new asset
-        asset_class = ASSET_TYPE_TO_CLASS.get(transaction_in.asset_type)
-        asset_in = AssetCreate(
-            symbol=transaction_in.symbol,
-            name=transaction_in.asset_name or transaction_in.symbol,
-            asset_type=transaction_in.asset_type,
-            asset_class=asset_class,
-            currency=transaction_in.currency,
-            market=transaction_in.market,
-            country=transaction_in.country,
-            sector=transaction_in.sector,
-            coingecko_id=transaction_in.coingecko_id,
-        )
-        asset = await crud.asset.create(db, obj_in=asset_in)
-        asset_created = True
+        if transaction_in.provider is not None and transaction_in.external_id:
+            if transaction_in.provider.value == "yahoo":
+                resolved_asset = await AssetResolverService.resolve_from_yahoo(transaction_in.external_id)
+            else:
+                resolved_asset = await AssetResolverService.resolve_from_coingecko(transaction_in.external_id)
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="Provide asset_id or provider+external_id",
+            )
+
+        existing_asset = await crud.asset.get_by_symbol(db, symbol=resolved_asset.symbol)
+
+        if existing_asset:
+            asset = existing_asset
+        else:
+            asset_in = AssetCreate(
+                symbol=resolved_asset.symbol,
+                name=resolved_asset.name,
+                asset_type=resolved_asset.asset_type,
+                currency=resolved_asset.currency,
+                market=resolved_asset.market,
+                country=resolved_asset.country,
+                coingecko_id=resolved_asset.coingecko_id,
+            )
+            asset = await crud.asset.create(db, obj_in=asset_in)
+            asset_created = True
     
     # Step 2: Get or create the holding for this user
     holding_created = False
@@ -203,7 +214,7 @@ async def create_transaction_with_asset(
             asset_id=asset.id,
             quantity=0.0,
             avg_cost_basis=0.0,
-            cost_currency=transaction_in.currency,
+            cost_currency=asset.currency,
         )
         holding = await crud.holding.create_with_owner(
             db, obj_in=holding_in, owner_id=current_user.id
@@ -212,18 +223,19 @@ async def create_transaction_with_asset(
     
     # Step 3: Get exchange rates
     usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
+    transaction_currency = asset.currency
     
     exchange_rate_to_usd = transaction_in.exchange_rate_to_usd
     exchange_rate_to_mxn = transaction_in.exchange_rate_to_mxn
     
     if exchange_rate_to_usd is None:
-        if transaction_in.currency.value == "USD":
+        if transaction_currency.value == "USD":
             exchange_rate_to_usd = 1.0
         else:
             exchange_rate_to_usd = 1.0 / usd_mxn_rate
     
     if exchange_rate_to_mxn is None:
-        if transaction_in.currency.value == "MXN":
+        if transaction_currency.value == "MXN":
             exchange_rate_to_mxn = 1.0
         else:
             exchange_rate_to_mxn = usd_mxn_rate
@@ -234,7 +246,7 @@ async def create_transaction_with_asset(
         transaction_type=transaction_in.transaction_type,
         quantity=transaction_in.quantity,
         price_per_unit=transaction_in.price_per_unit,
-        currency=transaction_in.currency,
+        currency=transaction_currency,
         fees=transaction_in.fees,
         exchange_rate_to_usd=exchange_rate_to_usd,
         exchange_rate_to_mxn=exchange_rate_to_mxn,
