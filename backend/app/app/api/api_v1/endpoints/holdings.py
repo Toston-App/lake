@@ -145,7 +145,7 @@ async def create_holding(
     if existing:
         raise HTTPException(
             status_code=400,
-            detail=f"You already have a holding for {asset.symbol}. Use PUT to update it.",
+            detail=f"You already have a holding for {asset.symbol}.",
         )
     
     holding = await crud.holding.create_with_owner(
