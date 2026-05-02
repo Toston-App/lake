@@ -16,8 +16,10 @@ class AccountBase(BaseModel):
     total_incomes: Optional[float] = None
     total_transfers_in: Optional[float] = None
     total_transfers_out: Optional[float] = None
+    total_investments: Optional[float] = 0.0
     type: AccountType = AccountType.MISCELLANEOUS
     color: Optional[str] = "#168FFF"
+    logo: Optional[str] = None
 
     @validator('color')
     def validate_color(cls, v):

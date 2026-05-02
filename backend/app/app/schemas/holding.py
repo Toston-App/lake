@@ -10,6 +10,7 @@ from app.schemas.asset import ExternalAssetProvider
 # Shared properties
 class HoldingBase(BaseModel):
     asset_id: Optional[int] = None
+    account_id: Optional[int] = None
     quantity: Optional[float] = 0.0
     avg_cost_basis: Optional[float] = 0.0
     cost_currency: Optional[Currency] = Currency.USD
@@ -25,6 +26,7 @@ class HoldingBase(BaseModel):
 # Properties to receive on Holding creation
 class HoldingCreate(HoldingBase):
     asset_id: Optional[int] = None
+    account_id: int
     provider: Optional[ExternalAssetProvider] = None
     external_id: Optional[str] = None
     quantity: float
@@ -68,6 +70,7 @@ class HoldingUpdate(HoldingBase):
 class HoldingInDBBase(HoldingBase):
     id: int
     owner_id: int
+    account_id: int
     asset_id: int
     quantity: float
     current_value: float

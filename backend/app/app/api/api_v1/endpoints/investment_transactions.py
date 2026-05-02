@@ -34,6 +34,7 @@ async def list_transactions(
     skip: int = 0,
     limit: int = 100,
     holding_id: Optional[int] = Query(None, description="Filter by holding"),
+    account_id: Optional[int] = Query(None, description="Filter by account"),
     transaction_type: Optional[TransactionType] = Query(None, description="Filter by type"),
 ) -> Any:
     """
@@ -41,12 +42,21 @@ async def list_transactions(
 
     Optional filters:
     - holding_id: Show transactions for a specific holding
+    - account_id: Show transactions for a specific account
     - transaction_type: BUY, SELL, DIVIDEND, SPLIT, TRANSFER_IN, TRANSFER_OUT
     """
     if holding_id:
         transactions = await crud.investment_transaction.get_by_holding(
             db,
             holding_id=holding_id,
+            owner_id=current_user.id,
+            skip=skip,
+            limit=limit,
+        )
+    elif account_id:
+        transactions = await crud.investment_transaction.get_by_account(
+            db,
+            account_id=account_id,
             owner_id=current_user.id,
             skip=skip,
             limit=limit,
@@ -76,6 +86,7 @@ async def list_transactions(
         tx_data = InvestmentTransactionWithAsset(
             id=tx.id,
             owner_id=tx.owner_id,
+            account_id=tx.account_id,
             holding_id=tx.holding_id,
             transaction_type=tx.transaction_type,
             quantity=tx.quantity,
@@ -86,7 +97,6 @@ async def list_transactions(
             exchange_rate_to_usd=tx.exchange_rate_to_usd,
             exchange_rate_to_mxn=tx.exchange_rate_to_mxn,
             notes=tx.notes,
-            broker=tx.broker,
             executed_at=tx.executed_at,
             symbol=asset.symbol if asset else None,
             asset_name=asset.name if asset else None,
@@ -110,13 +120,22 @@ async def create_transaction(
     - quantity (for BUY/SELL)
     - average cost basis (for BUY)
     - total invested amount
+    
+    And update the account's total_investments.
     """
-    # Verify holding belongs to user
+    # Verify account belongs to user
+    account = await crud.account.get(db, id=transaction_in.account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    # Verify holding belongs to user and matches account
     holding = await crud.holding.get(db, id=transaction_in.holding_id)
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
     
-    if holding.owner_id != current_user.id:
+    if holding.owner_id != current_user.id or holding.account_id != account.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     # Get current exchange rates
@@ -200,10 +219,17 @@ async def create_transaction_with_asset(
             asset = await crud.asset.create(db, obj_in=asset_in)
             asset_created = True
     
-    # Step 2: Get or create the holding for this user
+    # Step 2: Verify account belongs to user
+    account = await crud.account.get(db, id=transaction_in.account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
+    # Step 3: Get or create the holding for this account
     holding_created = False
-    existing_holding = await crud.holding.get_by_owner_and_asset(
-        db, owner_id=current_user.id, asset_id=asset.id
+    existing_holding = await crud.holding.get_by_account_and_asset(
+        db, account_id=account.id, asset_id=asset.id
     )
     
     if existing_holding:
@@ -212,6 +238,7 @@ async def create_transaction_with_asset(
         # Create new holding with zero initial values
         holding_in = HoldingCreate(
             asset_id=asset.id,
+            account_id=account.id,
             quantity=0.0,
             avg_cost_basis=0.0,
             cost_currency=asset.currency,
@@ -243,6 +270,7 @@ async def create_transaction_with_asset(
     # Step 4: Create the transaction
     tx_in = InvestmentTransactionCreate(
         holding_id=holding.id,
+        account_id=account.id,
         transaction_type=transaction_in.transaction_type,
         quantity=transaction_in.quantity,
         price_per_unit=transaction_in.price_per_unit,
@@ -251,7 +279,6 @@ async def create_transaction_with_asset(
         exchange_rate_to_usd=exchange_rate_to_usd,
         exchange_rate_to_mxn=exchange_rate_to_mxn,
         executed_at=transaction_in.executed_at,
-        broker=transaction_in.broker,
         notes=transaction_in.notes,
     )
     
@@ -266,6 +293,7 @@ async def create_transaction_with_asset(
         transaction=InvestmentTransaction(
             id=transaction.id,
             owner_id=transaction.owner_id,
+            account_id=transaction.account_id,
             holding_id=transaction.holding_id,
             transaction_type=transaction.transaction_type,
             quantity=transaction.quantity,
@@ -276,7 +304,6 @@ async def create_transaction_with_asset(
             exchange_rate_to_usd=transaction.exchange_rate_to_usd,
             exchange_rate_to_mxn=transaction.exchange_rate_to_mxn,
             notes=transaction.notes,
-            broker=transaction.broker,
             executed_at=transaction.executed_at,
         ),
         asset_created=asset_created,
@@ -392,6 +419,7 @@ async def get_transaction(
     return InvestmentTransactionWithAsset(
         id=transaction.id,
         owner_id=transaction.owner_id,
+        account_id=transaction.account_id,
         holding_id=transaction.holding_id,
         transaction_type=transaction.transaction_type,
         quantity=transaction.quantity,
@@ -402,7 +430,6 @@ async def get_transaction(
         exchange_rate_to_usd=transaction.exchange_rate_to_usd,
         exchange_rate_to_mxn=transaction.exchange_rate_to_mxn,
         notes=transaction.notes,
-        broker=transaction.broker,
         executed_at=transaction.executed_at,
         symbol=asset.symbol if asset else None,
         asset_name=asset.name if asset else None,

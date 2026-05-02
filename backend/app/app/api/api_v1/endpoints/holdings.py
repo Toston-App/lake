@@ -30,6 +30,7 @@ async def list_holdings(
     current_user: models.User = Depends(deps.get_current_active_user),
     skip: int = 0,
     limit: int = 100,
+    account_id: Optional[int] = Query(None, description="Filter by account"),
     asset_class: Optional[AssetClass] = Query(None, description="Filter by asset class"),
     currency: Optional[Currency] = Query(None, description="Filter by asset currency"),
 ) -> Any:
@@ -37,17 +38,27 @@ async def list_holdings(
     List all holdings for the current user.
     
     Optional filters:
+    - account_id: Filter by specific account
     - asset_class: Filter by EQUITIES, FIXED_INCOME, CRYPTO, or FUNDS
     - currency: Filter by USD or MXN exposure
     """
-    holdings = await crud.holding.get_filtered(
-        db,
-        owner_id=current_user.id,
-        asset_class=asset_class,
-        currency=currency,
-        skip=skip,
-        limit=limit,
-    )
+    if account_id:
+        # Validate account ownership
+        account = await crud.account.get(db, id=account_id)
+        if not account or account.owner_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not enough permissions")
+        holdings = await crud.holding.get_by_account(
+            db, account_id=account_id, skip=skip, limit=limit
+        )
+    else:
+        holdings = await crud.holding.get_filtered(
+            db,
+            owner_id=current_user.id,
+            asset_class=asset_class,
+            currency=currency,
+            skip=skip,
+            limit=limit,
+        )
     
     # Enrich with asset details
     result = []
@@ -60,6 +71,7 @@ async def list_holdings(
         holding_data = HoldingWithAsset(
             id=holding.id,
             owner_id=holding.owner_id,
+            account_id=holding.account_id,
             asset_id=holding.asset_id,
             quantity=holding.quantity,
             avg_cost_basis=holding.avg_cost_basis,
@@ -101,8 +113,15 @@ async def create_holding(
     """
     Create a new holding.
     
-    If a holding already exists for this asset, use PUT to update it.
+    If a holding already exists for this asset in the account, use PUT to update it.
     """
+    # Verify account belongs to user
+    account = await crud.account.get(db, id=holding_in.account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if account.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+    
     # Resolve asset from existing ID or external identifier
     if holding_in.asset_id is not None:
         asset = await crud.asset.get(db, id=holding_in.asset_id)
@@ -138,14 +157,14 @@ async def create_holding(
 
         holding_in.asset_id = asset.id
     
-    # Check if holding already exists
-    existing = await crud.holding.get_by_owner_and_asset(
-        db, owner_id=current_user.id, asset_id=asset.id
+    # Check if holding already exists in this account
+    existing = await crud.holding.get_by_account_and_asset(
+        db, account_id=account.id, asset_id=asset.id
     )
     if existing:
         raise HTTPException(
             status_code=400,
-            detail=f"You already have a holding for {asset.symbol}.",
+            detail=f"You already have a holding for {asset.symbol} in this account.",
         )
     
     holding = await crud.holding.create_with_owner(
@@ -177,6 +196,7 @@ async def get_holding(
     result = HoldingWithAsset(
         id=holding.id,
         owner_id=holding.owner_id,
+        account_id=holding.account_id,
         asset_id=holding.asset_id,
         quantity=holding.quantity,
         avg_cost_basis=holding.avg_cost_basis,
@@ -236,6 +256,11 @@ async def update_holding(
         holding_in.total_invested = holding.quantity * holding_in.avg_cost_basis
     
     holding = await crud.holding.update(db, db_obj=holding, obj_in=holding_in)
+    
+    # Recalculate account total_investments if cost basis changed
+    if holding_in.total_invested is not None:
+        await crud.account.recalculate_total_investments(db, account_id=holding.account_id)
+    
     return holding
 
 
@@ -257,6 +282,11 @@ async def delete_holding(
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
     asset = await crud.asset.get(db, id=holding.asset_id)
+    account_id = holding.account_id
     
     await crud.holding.remove(db, id=holding_id)
+    
+    # Recalculate account total_investments after deletion
+    await crud.account.recalculate_total_investments(db, account_id=account_id)
+    
     return HoldingDeletionResponse(message=f"Holding for {asset.symbol} deleted")

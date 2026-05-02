@@ -8,6 +8,7 @@ from app.db.base_class import Base
 from app.models.asset import Currency
 
 if TYPE_CHECKING:
+    from .account import Account
     from .asset import Asset
     from .investment_transaction import InvestmentTransaction
     from .user import User
@@ -24,6 +25,7 @@ class Holding(Base):
     
     # Ownership
     owner_id: int = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)
+    account_id: int = Column(Integer, ForeignKey("account.id"), nullable=False, index=True)
     asset_id: int = Column(Integer, ForeignKey("asset.id"), nullable=False, index=True)
     
     # Position details
@@ -53,6 +55,7 @@ class Holding(Base):
     
     # Relationships
     owner: "User" = relationship("User", back_populates="holdings")
+    account: "Account" = relationship("Account", back_populates="holdings")
     asset: "Asset" = relationship("Asset", back_populates="holdings")
     transactions: list["InvestmentTransaction"] = relationship(
         "InvestmentTransaction", 

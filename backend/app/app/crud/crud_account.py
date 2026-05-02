@@ -90,5 +90,25 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
 
         return account
 
+    async def recalculate_total_investments(
+        self, db: AsyncSession, *, account_id: int
+    ) -> Account:
+        """Recalculate total_investments for an account based on its holdings."""
+        from sqlalchemy import func
+        from app.models.holding import Holding
+
+        result = await db.execute(
+            select(func.sum(Holding.current_value)).filter(Holding.account_id == account_id)
+        )
+        total = result.scalar()
+
+        account = await self.get(db, id=account_id)
+        if account:
+            account.total_investments = total or 0.0
+            db.add(account)
+            await db.commit()
+            await db.refresh(account)
+        return account
+
 
 account = CRUDAccount(Account)

@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models
 from app.api import deps
 from app.models.asset import AssetClass, AssetType, Currency, Market
-from app.models.broker import Broker, BROKER_INFO
 from app.schemas.portfolio import (
     PortfolioSummary,
     AllocationItem,
@@ -20,7 +19,7 @@ from app.schemas.portfolio import (
     AllocationByMarket,
     AllocationByType,
     AllocationByCountry,
-    AllocationByBroker,
+    AllocationByAccount,
     TopHolding,
     TopHoldingsResponse,
 )
@@ -362,60 +361,43 @@ async def get_allocation_by_country(
     )
 
 
-@router.get("/allocation/by-broker", response_model=AllocationByBroker)
-async def get_allocation_by_broker(
+@router.get("/allocation/by-account", response_model=AllocationByAccount)
+async def get_allocation_by_account(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Get portfolio allocation breakdown by broker.
+    Get portfolio allocation breakdown by account.
     
-    Aggregates holdings by the broker used for transactions.
-    If the same asset was purchased through multiple brokers,
-    each broker's portion is shown separately.
+    Aggregates holdings by the account they belong to.
+    Each account's total holdings value is shown separately.
     """
-    # Get all user's transactions to determine broker for each holding
-    transactions = await crud.investment_transaction.get_by_owner(
-        db, owner_id=current_user.id
-    )
-    
     # Get all holdings
     holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
-    holding_map = {h.id: h for h in holdings}
     
-    # Group transactions by broker and holding
-    # Track which portion of each holding belongs to which broker
-    broker_holdings: dict[str, dict] = defaultdict(
-        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0, "holding_ids": set()}
+    # Get all accounts for name resolution
+    accounts = await crud.account.get_multi_by_owner(db, owner_id=current_user.id)
+    account_map = {a.id: a for a in accounts}
+    
+    # Group holdings by account
+    account_holdings: dict[int, dict] = defaultdict(
+        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
     )
-    
-    # For simplicity, we associate each holding with the broker
-    # from its most recent transaction (or most common broker)
-    holding_broker_map: dict[int, str] = {}
-    
-    for tx in transactions:
-        broker_key = tx.broker.value if tx.broker else "UNKNOWN"
-        # Associate holding with this broker
-        # (last transaction's broker wins, or we could do majority)
-        holding_broker_map[tx.holding_id] = broker_key
-    
-    # Now calculate values per broker
     total_usd = 0.0
     total_mxn = 0.0
     
     for holding in holdings:
-        broker_key = holding_broker_map.get(holding.id, "UNKNOWN")
-        broker_holdings[broker_key]["usd"] += holding.current_value_usd
-        broker_holdings[broker_key]["mxn"] += holding.current_value_mxn
-        broker_holdings[broker_key]["count"] += 1
-        broker_holdings[broker_key]["holding_ids"].add(holding.id)
+        account_id = holding.account_id
+        account_holdings[account_id]["usd"] += holding.current_value_usd
+        account_holdings[account_id]["mxn"] += holding.current_value_mxn
+        account_holdings[account_id]["count"] += 1
         total_usd += holding.current_value_usd
         total_mxn += holding.current_value_mxn
     
     # Build allocation items
     allocations = []
-    for broker_key, data in sorted(
-        broker_holdings.items(),
+    for account_id, data in sorted(
+        account_holdings.items(),
         key=lambda x: x[1]["usd"],
         reverse=True
     ):
@@ -424,26 +406,19 @@ async def get_allocation_by_broker(
         
         percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
         
-        # Get broker display name
-        if broker_key == "UNKNOWN":
-            name = "Unknown Broker"
-        else:
-            try:
-                broker = Broker(broker_key)
-                name = BROKER_INFO[broker].name
-            except (ValueError, KeyError):
-                name = broker_key
+        account = account_map.get(account_id)
+        name = account.name if account else f"Account {account_id}"
         
         allocations.append(AllocationItem(
             name=name,
-            value=broker_key,
+            value=str(account_id),
             total_value_usd=round(data["usd"], 2),
             total_value_mxn=round(data["mxn"], 2),
             percentage=round(percentage, 2),
             holdings_count=data["count"],
         ))
     
-    return AllocationByBroker(
+    return AllocationByAccount(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
         allocations=allocations,

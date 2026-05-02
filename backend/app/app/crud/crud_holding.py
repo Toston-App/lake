@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.expression import select
 
+from app import crud
 from app.crud.base import CRUDBase
 from app.models.asset import Asset, AssetClass, Currency
 from app.models.holding import Holding
@@ -18,6 +19,7 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         """Create a new holding for a user."""
         obj_in_data = {
             "asset_id": obj_in.asset_id,
+            "account_id": obj_in.account_id,
             "quantity": obj_in.quantity,
             "avg_cost_basis": obj_in.avg_cost_basis,
             "cost_currency": obj_in.cost_currency,
@@ -25,11 +27,19 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         
         # Calculate total invested from quantity and cost basis
         obj_in_data["total_invested"] = obj_in_data["quantity"] * obj_in_data["avg_cost_basis"]
+        # Initialize current_value to cost basis until first price refresh
+        obj_in_data["current_value"] = obj_in_data["total_invested"]
+        obj_in_data["current_value_usd"] = obj_in_data["total_invested"]
+        obj_in_data["current_value_mxn"] = obj_in_data["total_invested"]
         
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
         await db.commit()
         await db.refresh(db_obj)
+        
+        # Recalculate account total_investments
+        await crud.account.recalculate_total_investments(db, account_id=db_obj.account_id)
+        
         return db_obj
 
     async def get_by_owner(
@@ -45,16 +55,34 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         )
         return result.scalars().all()
 
-    async def get_by_owner_and_asset(
-        self, db: AsyncSession, *, owner_id: int, asset_id: int
+    async def get_by_account_and_asset(
+        self, db: AsyncSession, *, account_id: int, asset_id: int
     ) -> Optional[Holding]:
-        """Get a specific holding by owner and asset."""
+        """Get a specific holding by account and asset."""
         result = await db.execute(
             select(self.model)
             .options(selectinload(Holding.asset))
-            .filter(Holding.owner_id == owner_id, Holding.asset_id == asset_id)
+            .filter(Holding.account_id == account_id, Holding.asset_id == asset_id)
         )
         return result.scalars().first()
+
+    async def get_by_account(
+        self,
+        db: AsyncSession,
+        *,
+        account_id: int,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[Holding]:
+        """Get all holdings for a specific account."""
+        result = await db.execute(
+            select(self.model)
+            .options(selectinload(Holding.asset))
+            .filter(Holding.account_id == account_id)
+            .offset(skip)
+            .limit(limit)
+        )
+        return result.scalars().all()
 
     async def get_by_asset_class(
         self,
@@ -175,15 +203,27 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
             holding.quantity = new_quantity
             holding.total_invested = new_total_invested
             holding.avg_cost_basis = new_total_invested / new_quantity
+            # Update current_value if no price has been fetched yet
+            if holding.current_value == 0:
+                holding.current_value = new_total_invested
+                holding.current_value_usd = new_total_invested
+                holding.current_value_mxn = new_total_invested
         else:
             # All shares sold
             holding.quantity = 0
             holding.total_invested = 0
             holding.avg_cost_basis = 0
+            holding.current_value = 0
+            holding.current_value_usd = 0
+            holding.current_value_mxn = 0
         
         db.add(holding)
         await db.commit()
         await db.refresh(holding)
+        
+        # Recalculate account total_investments
+        await crud.account.recalculate_total_investments(db, account_id=holding.account_id)
+        
         return holding
 
 

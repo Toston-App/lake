@@ -202,6 +202,11 @@ class PriceFetcher:
                 price_usd=price_data.price_usd,
                 price_mxn=price_data.price_mxn,
             )
+        
+        # Recalculate total_investments for all affected accounts
+        account_ids = set(h.account_id for h in holdings)
+        for account_id in account_ids:
+            await crud.account.recalculate_total_investments(db, account_id=account_id)
     
     @classmethod
     async def get_current_price(

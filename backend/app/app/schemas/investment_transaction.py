@@ -4,7 +4,6 @@ from typing import Optional
 from pydantic import BaseModel, root_validator, validator
 
 from app.models.asset import Currency
-from app.models.broker import Broker
 from app.models.investment_transaction import TransactionType
 from app.schemas.asset import ExternalAssetProvider
 
@@ -12,6 +11,7 @@ from app.schemas.asset import ExternalAssetProvider
 # Shared properties
 class InvestmentTransactionBase(BaseModel):
     holding_id: Optional[int] = None
+    account_id: Optional[int] = None
     transaction_type: Optional[TransactionType] = None
     quantity: Optional[float] = None
     price_per_unit: Optional[float] = None
@@ -20,7 +20,6 @@ class InvestmentTransactionBase(BaseModel):
     exchange_rate_to_usd: Optional[float] = None
     exchange_rate_to_mxn: Optional[float] = None
     notes: Optional[str] = None
-    broker: Optional[Broker] = None
     executed_at: Optional[datetime] = None
 
     @validator("quantity", "price_per_unit", "fees", pre=True, always=True)
@@ -45,6 +44,7 @@ class InvestmentTransactionBase(BaseModel):
 # Properties to receive on Transaction creation
 class InvestmentTransactionCreate(InvestmentTransactionBase):
     holding_id: int
+    account_id: int
     transaction_type: TransactionType
     quantity: float
     price_per_unit: float
@@ -66,6 +66,7 @@ class InvestmentTransactionUpdate(InvestmentTransactionBase):
 class InvestmentTransactionInDBBase(InvestmentTransactionBase):
     id: int
     owner_id: int
+    account_id: int
     holding_id: int
     transaction_type: TransactionType
     quantity: float
@@ -117,7 +118,7 @@ class TransactionWithAssetCreate(BaseModel):
     price_per_unit: float
     fees: float = 0.0
     executed_at: datetime
-    broker: Optional[Broker] = None
+    account_id: int
     notes: Optional[str] = None
     
     # Optional exchange rates (auto-fetched if not provided)

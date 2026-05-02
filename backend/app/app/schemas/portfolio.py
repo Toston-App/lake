@@ -97,9 +97,9 @@ class AllocationByCountry(BaseModel):
     allocations: list[AllocationItem]
 
 
-# Allocation by Broker
-class AllocationByBroker(BaseModel):
-    """Portfolio allocation broken down by broker."""
+# Allocation by Account
+class AllocationByAccount(BaseModel):
+    """Portfolio allocation broken down by account."""
     total_value_usd: float
     total_value_mxn: float
     allocations: list[AllocationItem]

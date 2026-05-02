@@ -7,9 +7,9 @@ from sqlalchemy.sql import func
 
 from app.db.base_class import Base
 from app.models.asset import Currency
-from app.models.broker import Broker
 
 if TYPE_CHECKING:
+    from .account import Account
     from .holding import Holding
     from .user import User
 
@@ -20,8 +20,8 @@ class TransactionType(str, enum.Enum):
     SELL = "sell"
     DIVIDEND = "dividend"
     SPLIT = "split"  # Stock split
-    TRANSFER_IN = "transfer_in"  # Transfer from another broker
-    TRANSFER_OUT = "transfer_out"  # Transfer to another broker
+    TRANSFER_IN = "transfer_in"  # Transfer from another account
+    TRANSFER_OUT = "transfer_out"  # Transfer to another account
 
 
 class InvestmentTransaction(Base):
@@ -37,6 +37,7 @@ class InvestmentTransaction(Base):
     
     # Ownership and linking
     owner_id: int = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)
+    account_id: int = Column(Integer, ForeignKey("account.id"), nullable=False, index=True)
     holding_id: int = Column(Integer, ForeignKey("holding.id"), nullable=False, index=True)
     
     # Transaction details
@@ -51,7 +52,7 @@ class InvestmentTransaction(Base):
     # Currency and amounts
     currency: Currency = Column(Enum(Currency), nullable=False, default=Currency.USD)
     total_amount: float = Column(Float, nullable=False)  # quantity * price_per_unit
-    fees: float = Column(Float, nullable=False, default=0.0)  # Broker fees, commissions
+    fees: float = Column(Float, nullable=False, default=0.0)  # Account fees, commissions
     
     # Exchange rate at time of transaction (for multi-currency tracking)
     exchange_rate_to_usd: float = Column(Float, nullable=True)
@@ -59,7 +60,6 @@ class InvestmentTransaction(Base):
     
     # Metadata
     notes: str = Column(Text, nullable=True)
-    broker: Broker = Column(Enum(Broker), nullable=True)  # Selected from predefined list
     
     # When the transaction was executed (may differ from created_at)
     executed_at = Column(DateTime(timezone=True), nullable=False)
@@ -70,5 +70,6 @@ class InvestmentTransaction(Base):
     
     # Relationships
     owner: "User" = relationship("User", back_populates="investment_transactions")
+    account: "Account" = relationship("Account", back_populates="investment_transactions")
     holding: "Holding" = relationship("Holding", back_populates="transactions")
 

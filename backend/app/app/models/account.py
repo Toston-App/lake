@@ -10,7 +10,9 @@ from app.db.base_class import Base
 if TYPE_CHECKING:
     from .balance_adjustment import BalanceAdjustment  # noqa: F401
     from .expense import Expense  # noqa: F401
+    from .holding import Holding  # noqa: F401
     from .income import Income  # noqa: F401
+    from .investment_transaction import InvestmentTransaction  # noqa: F401
     from .transfer import Transfer  # noqa: F401
     from .user import User  # noqa: F401
 
@@ -75,6 +77,8 @@ class Account(Base):
     total_incomes: float = Column(Float, index=True, default=0.0)
     total_transfers_in: float = Column(Float, index=True, default=0.0)
     total_transfers_out: float = Column(Float, index=True, default=0.0)
+    total_investments: float = Column(Float, index=True, default=0.0)
+    logo: str = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     owner_id = Column(Integer, ForeignKey("user.id"))
@@ -89,6 +93,12 @@ class Account(Base):
     )
     balance_adjustments: list["BalanceAdjustment"] = relationship(
         "BalanceAdjustment", back_populates="account", cascade="all, delete-orphan"
+    )
+    holdings: list["Holding"] = relationship(
+        "Holding", back_populates="account", cascade="all, delete-orphan"
+    )
+    investment_transactions: list["InvestmentTransaction"] = relationship(
+        "InvestmentTransaction", back_populates="account", cascade="all, delete-orphan"
     )
     import_id: int = Column(Integer, ForeignKey("import.id"))
     import_source = relationship("Import", back_populates="accounts")

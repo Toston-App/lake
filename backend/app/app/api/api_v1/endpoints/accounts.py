@@ -78,6 +78,7 @@ async def update_account(
     initial_balance: float = Body(None),
     color: str = Body(None),
     type: AccountType = Body(None),
+    logo: str = Body(None),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -107,6 +108,8 @@ async def update_account(
         account_in.color = color
     if type is not None:
         account_in.type = type
+    if logo is not None:
+        account_in.logo = logo
 
     account_in.updated_at = datetime.now(timezone.utc)
     account = await crud.account.update(db=db, db_obj=account, obj_in=account_in)

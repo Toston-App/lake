@@ -79,6 +79,28 @@ class CRUDInvestmentTransaction(
         )
         return result.scalars().all()
 
+    async def get_by_account(
+        self,
+        db: AsyncSession,
+        *,
+        account_id: int,
+        owner_id: int,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[InvestmentTransaction]:
+        """Get all transactions for a specific account."""
+        result = await db.execute(
+            select(self.model)
+            .filter(
+                InvestmentTransaction.account_id == account_id,
+                InvestmentTransaction.owner_id == owner_id,
+            )
+            .order_by(InvestmentTransaction.executed_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        return result.scalars().all()
+
     async def get_by_type(
         self,
         db: AsyncSession,

@@ -58,6 +58,7 @@ from .portfolio import (
     AllocationByMarket,
     AllocationByType,
     AllocationByCountry,
+    AllocationByAccount,
     PerformanceDataPoint,
     PortfolioPerformance,
     TopHolding,
