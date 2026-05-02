@@ -815,6 +815,15 @@ body {
     margin-bottom: 1rem;
 }
 
+/* Inline New Account Fields */
+.new-account-fields {
+    padding: 1rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    margin-bottom: 1rem;
+}
+
 /* Badge colors for markets */
 .badge-nyse { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
 .badge-nasdaq { background: rgba(236, 72, 153, 0.2); color: #ec4899; }
@@ -949,6 +958,50 @@ body {
 
 .allocation-item-with-logo .allocation-bar-container {
     flex: 1;
+}
+
+/* Account elements */
+.account-name-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.account-color-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.account-color-swatch {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+}
+
+.color-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.color-picker-row input[type="color"] {
+    width: 40px;
+    height: 40px;
+    padding: 2px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    cursor: pointer;
+}
+
+.color-preview {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
 }
 
 /* Empty States */

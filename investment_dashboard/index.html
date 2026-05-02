@@ -38,6 +38,14 @@
                     </svg>
                     Assets
                 </a>
+                <a href="#" class="nav-item" data-view="accounts">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v16"/>
+                        <path d="M12 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/>
+                        <path d="M8 17h8"/>
+                    </svg>
+                    Accounts
+                </a>
                 <a href="#" class="nav-item" data-view="holdings">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
@@ -119,8 +127,8 @@
                         <div class="allocation-chart" id="allocation-market"></div>
                     </div>
                     <div class="card">
-                        <h3>By Broker</h3>
-                        <div class="allocation-chart allocation-with-logos" id="allocation-broker"></div>
+                        <h3>By Account</h3>
+                        <div class="allocation-chart allocation-with-logos" id="allocation-account"></div>
                     </div>
                     <div class="card">
                         <h3>Top Holdings</h3>
@@ -171,6 +179,36 @@
                             </tr>
                         </thead>
                         <tbody id="assets-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Accounts View -->
+            <section id="accounts-view" class="view">
+                <header class="view-header">
+                    <h1>Accounts</h1>
+                    <button class="btn btn-primary" onclick="showAddAccountModal()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Add Account
+                    </button>
+                </header>
+                
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Initial Balance</th>
+                                <th>Current Balance</th>
+                                <th>Color</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-table-body"></tbody>
                     </table>
                 </div>
             </section>
@@ -318,6 +356,35 @@
         </div>
         <form id="add-holding-form" onsubmit="submitHolding(event)">
             <div class="form-group">
+                <label for="holding-account">Account</label>
+                <select id="holding-account" required onchange="toggleNewAccountFields('holding')"></select>
+            </div>
+            <div id="holding-new-account-fields" class="new-account-fields" style="display: none;">
+                <div class="form-group">
+                    <label for="holding-new-account-name">Account Name</label>
+                    <input type="text" id="holding-new-account-name" placeholder="e.g., GBM+, Interactive Brokers">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="holding-new-account-type">Account Type</label>
+                        <select id="holding-new-account-type">
+                            <option value="Stocks & Bonds">Stocks & Bonds</option>
+                            <option value="Crypto & Digital Assets">Crypto & Digital Assets</option>
+                            <option value="Retirement Funds">Retirement Funds</option>
+                            <option value="Checking Accounts">Checking Account</option>
+                            <option value="Savings Accounts">Savings Account</option>
+                            <option value="Cash & Wallet">Cash & Wallet</option>
+                            <option value="Business Accounts">Business Account</option>
+                            <option value="Miscellaneous">Miscellaneous</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="holding-new-account-color">Color</label>
+                        <input type="color" id="holding-new-account-color" value="#6366f1">
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
                 <label for="holding-asset">Asset</label>
                 <select id="holding-asset" required></select>
             </div>
@@ -421,6 +488,8 @@
             <input type="hidden" id="tx-selected-currency">
             <input type="hidden" id="tx-selected-country">
             <input type="hidden" id="tx-selected-coingecko-id">
+            <input type="hidden" id="tx-selected-provider">
+            <input type="hidden" id="tx-selected-external-id">
 
             <div class="form-group">
                 <label for="tx-type">Transaction Type</label>
@@ -458,27 +527,8 @@
                 <input type="datetime-local" id="tx-date" required>
             </div>
             <div class="form-group">
-                <label for="tx-broker-search">Broker (optional)</label>
-                <div class="broker-search-container">
-                    <input type="text" 
-                           id="tx-broker-search" 
-                           placeholder="Search brokers..."
-                           autocomplete="off"
-                           oninput="searchBrokers(this.value)">
-                    <div id="broker-search-results" class="search-results"></div>
-                </div>
-                <div id="selected-broker-display" class="selected-asset" style="display: none;">
-                    <div class="selected-asset-info">
-                        <div class="broker-logo-wrapper">
-                            <img id="selected-broker-logo" class="broker-logo" src="" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                            <div id="selected-broker-fallback" class="broker-logo-fallback" style="display: none;"></div>
-                        </div>
-                        <span id="selected-broker-name" class="asset-name"></span>
-                        <span id="selected-broker-country" class="asset-market badge"></span>
-                    </div>
-                    <button type="button" class="btn btn-sm btn-secondary" onclick="clearSelectedBroker()">Change</button>
-                </div>
-                <input type="hidden" id="tx-selected-broker" name="broker">
+                <label for="tx-account">Account</label>
+                <select id="tx-account" required></select>
             </div>
             <div class="form-group">
                 <label for="tx-notes">Notes (optional)</label>
@@ -487,6 +537,50 @@
             <div class="form-actions">
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
                 <button type="submit" class="btn btn-primary">Record Transaction</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Add Account Modal -->
+    <div id="add-account-modal" class="modal">
+        <div class="modal-header">
+            <h2>Add New Account</h2>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <form id="add-account-form" onsubmit="submitAccount(event)">
+            <div class="form-group">
+                <label for="account-name">Account Name</label>
+                <input type="text" id="account-name" required placeholder="e.g., GBM+, Interactive Brokers">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="account-type">Account Type</label>
+                    <select id="account-type" required>
+                        <option value="Stocks & Bonds">Stocks & Bonds</option>
+                        <option value="Crypto & Digital Assets">Crypto & Digital Assets</option>
+                        <option value="Retirement Funds">Retirement Funds</option>
+                        <option value="Checking Accounts">Checking Account</option>
+                        <option value="Savings Accounts">Savings Account</option>
+                        <option value="Cash & Wallet">Cash & Wallet</option>
+                        <option value="Business Accounts">Business Account</option>
+                        <option value="Miscellaneous">Miscellaneous</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="account-initial-balance">Initial Balance</label>
+                    <input type="number" id="account-initial-balance" step="0.01" value="0" placeholder="0.00">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="account-color">Color</label>
+                <div class="color-picker-row">
+                    <input type="color" id="account-color" value="#6366f1">
+                    <span class="color-preview" id="account-color-hex">#6366f1</span>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Account</button>
             </div>
         </form>
     </div>

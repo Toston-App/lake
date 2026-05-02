@@ -1,6 +1,9 @@
 // Configuration
 const API_BASE = 'http://localhost:8888/api/v1';
-let authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzYwNTUzNTYsInVzZXIiOnsibmFtZSI6InN0cmluZyIsImVtYWlsIjoidXNlckBleGFtcGxlLmNvbSIsImNvdW50cnkiOiJzdHJpbmciLCJpZCI6Mn19.hPWJkiyjqjGgwBZn6hSHj-msKp5G27XhM9KTvQ213bU"; // Set your auth token here
+let authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzgyMDE5MjgsInVzZXIiOnsibmFtZSI6InN0cmluZyIsImVtYWlsIjoidXNlcjNAZXhhbXBsZS5jb20iLCJjb3VudHJ5Ijoic3RyaW5nIiwiaWQiOjZ9fQ.g7tdYwwQz4CmQjogMNZhDv2n8G2ShYLGOfr-8OfLJSY"; // Set your auth token here
+
+// State
+let accountsList = [];
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -43,6 +46,9 @@ function showView(viewName) {
             break;
         case 'assets':
             loadAssets();
+            break;
+        case 'accounts':
+            loadAccounts();
             break;
         case 'holdings':
             loadHoldings();
@@ -93,7 +99,7 @@ async function checkApiConnection() {
         statusText.textContent = 'API Connected';
         
         // Load initial data
-        loadBrokersList();
+        loadAccountsList();
         loadDashboard();
     } catch (error) {
         statusDot.classList.add('error');
@@ -129,7 +135,7 @@ async function loadDashboard() {
         loadAllocationByClass();
         loadAllocationByCurrency();
         loadAllocationByMarket();
-        loadAllocationByBroker();
+        loadAllocationByAccount();
         loadTopHoldings();
         
     } catch (error) {
@@ -164,16 +170,16 @@ async function loadAllocationByMarket() {
     }
 }
 
-async function loadAllocationByBroker() {
+async function loadAllocationByAccount() {
     try {
-        const data = await apiRequest('/investments/portfolio/allocation/by-broker');
-        renderBrokerAllocation('allocation-broker', data.allocations);
+        const data = await apiRequest('/investments/portfolio/allocation/by-account');
+        renderAccountAllocation('allocation-account', data.allocations);
     } catch (error) {
-        console.error('Failed to load allocation by broker:', error);
+        console.error('Failed to load allocation by account:', error);
     }
 }
 
-function renderBrokerAllocation(containerId, allocations) {
+function renderAccountAllocation(containerId, allocations) {
     const container = document.getElementById(containerId);
     
     if (!allocations || allocations.length === 0) {
@@ -185,21 +191,16 @@ function renderBrokerAllocation(containerId, allocations) {
         .filter(a => a.percentage > 0)
         .map(a => {
             const firstLetter = (a.name || a.value || 'U').charAt(0).toUpperCase();
-            const logoUrl = a.logo_url || '';
-            const brokerKey = (a.value || 'unknown').toLowerCase().replace(/[^a-z0-9]/g, '-');
+            const accountKey = (a.value || 'unknown').toLowerCase().replace(/[^a-z0-9]/g, '-');
             
             return `
                 <div class="allocation-item allocation-item-with-logo">
                     <div class="broker-logo-wrapper-sm">
-                        <img src="${logoUrl}" 
-                             class="broker-logo-sm" 
-                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" 
-                             alt="">
-                        <div class="broker-logo-fallback-sm" style="${logoUrl ? 'display: none;' : 'display: flex;'}">${firstLetter}</div>
+                        <div class="broker-logo-fallback-sm" style="display: flex;">${firstLetter}</div>
                     </div>
                     <span class="allocation-label">${a.name}</span>
                     <div class="allocation-bar-container">
-                        <div class="allocation-bar alloc-broker-${brokerKey}" 
+                        <div class="allocation-bar alloc-account-${accountKey}" 
                              style="width: ${a.percentage}%; background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));"></div>
                     </div>
                     <span class="allocation-value">${a.percentage.toFixed(1)}%</span>
@@ -424,11 +425,16 @@ function showAddAssetModal() {
 }
 
 async function showAddHoldingModal() {
+    // Ensure accounts are loaded
+    if (accountsList.length === 0) {
+        await loadAccountsList();
+    }
+
     // Load assets for dropdown
     try {
         const assets = await apiRequest('/investments/assets');
-        const select = document.getElementById('holding-asset');
-        select.innerHTML = assets.map(a => 
+        const assetSelect = document.getElementById('holding-asset');
+        assetSelect.innerHTML = assets.map(a => 
             `<option value="${a.id}">${a.symbol} - ${a.name}</option>`
         ).join('');
         
@@ -437,7 +443,16 @@ async function showAddHoldingModal() {
             return;
         }
         
+        populateAccountSelects();
         document.getElementById('add-holding-form').reset();
+        document.getElementById('holding-new-account-fields').style.display = 'none';
+        document.getElementById('holding-new-account-name').required = false;
+
+        if (accountsList.length === 0) {
+            document.getElementById('holding-account').value = '__new__';
+            toggleNewAccountFields('holding');
+        }
+
         openModal('add-holding-modal');
     } catch (error) {
         showToast('Failed to load assets', 'error');
@@ -448,159 +463,159 @@ async function showAddHoldingModal() {
 let searchTimeout = null;
 let selectedAsset = null;
 
-// Broker state
-let brokersList = [];
-let brokersGrouped = {};
-let selectedBroker = null;
-let brokerSearchTimeout = null;
-
-// Load brokers on init
-async function loadBrokersList() {
+// Load accounts on init
+async function loadAccountsList() {
     try {
-        const response = await apiRequest('/brokers/grouped');
-        brokersGrouped = response.groups;
-        // Flatten for easy searching
-        brokersList = [
-            ...(response.groups.US || []),
-            ...(response.groups.Mexico || []),
-            ...(response.groups.Crypto || []),
-            ...(response.groups.International || []),
-        ];
+        accountsList = await apiRequest('/accounts');
+        populateAccountSelects();
     } catch (error) {
-        console.error('Failed to load brokers list:', error);
+        console.error('Failed to load accounts list:', error);
     }
 }
 
-// Search brokers (local filtering with category grouping)
-function searchBrokers(query) {
-    const resultsContainer = document.getElementById('broker-search-results');
+function populateAccountSelects() {
+    // Populate transaction modal account select
+    const txAccountSelect = document.getElementById('tx-account');
+    if (txAccountSelect) {
+        txAccountSelect.innerHTML = accountsList.map(a =>
+            `<option value="${a.id}">${a.name}</option>`
+        ).join('');
+    }
+
+    // Populate holding modal account select (with "Create New" option)
+    const holdingAccountSelect = document.getElementById('holding-account');
+    if (holdingAccountSelect) {
+        const accountOptions = accountsList.map(a =>
+            `<option value="${a.id}">${a.name}</option>`
+        ).join('');
+        holdingAccountSelect.innerHTML = accountOptions +
+            '<option value="__new__">+ Create New Account</option>';
+    }
+}
+
+function toggleNewAccountFields(prefix) {
+    const select = document.getElementById(`${prefix}-account`);
+    const fields = document.getElementById(`${prefix}-new-account-fields`);
+    const nameInput = document.getElementById(`${prefix}-new-account-name`);
+
+    if (select.value === '__new__') {
+        fields.style.display = 'block';
+        nameInput.required = true;
+    } else {
+        fields.style.display = 'none';
+        nameInput.required = false;
+    }
+}
+
+// Accounts
+async function loadAccounts() {
+    try {
+        const accounts = await apiRequest('/accounts');
+        accountsList = accounts;
+        renderAccountsTable(accounts);
+    } catch (error) {
+        console.error('Failed to load accounts:', error);
+        showToast('Failed to load accounts', 'error');
+    }
+}
+
+function renderAccountsTable(accounts) {
+    const tbody = document.getElementById('accounts-table-body');
     
-    if (!query || query.length < 1) {
-        resultsContainer.innerHTML = '';
+    if (!accounts || accounts.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="empty-state">
+                    No accounts yet. Click "Add Account" to create one.
+                </td>
+            </tr>
+        `;
         return;
     }
     
-    // Debounce
-    if (brokerSearchTimeout) {
-        clearTimeout(brokerSearchTimeout);
-    }
-    
-    brokerSearchTimeout = setTimeout(() => {
-        const queryLower = query.toLowerCase();
-        
-        // Filter and group results
-        const grouped = {
-            US: (brokersGrouped.US || []).filter(b => 
-                b.name.toLowerCase().includes(queryLower) || 
-                b.code.toLowerCase().includes(queryLower)
-            ),
-            Mexico: (brokersGrouped.Mexico || []).filter(b => 
-                b.name.toLowerCase().includes(queryLower) || 
-                b.code.toLowerCase().includes(queryLower)
-            ),
-            Crypto: (brokersGrouped.Crypto || []).filter(b => 
-                b.name.toLowerCase().includes(queryLower) || 
-                b.code.toLowerCase().includes(queryLower)
-            ),
-            International: (brokersGrouped.International || []).filter(b => 
-                b.name.toLowerCase().includes(queryLower) || 
-                b.code.toLowerCase().includes(queryLower)
-            ),
-        };
-        
-        const totalMatches = grouped.US.length + grouped.Mexico.length + 
-                            grouped.Crypto.length + grouped.International.length;
-        
-        if (totalMatches === 0) {
-            resultsContainer.innerHTML = '<div class="search-no-results">No brokers found</div>';
-            return;
-        }
-        
-        let html = '';
-        
-        if (grouped.US.length > 0) {
-            html += '<div class="search-group-header">United States</div>';
-            html += grouped.US.map(b => brokerResultItem(b)).join('');
-        }
-        if (grouped.Mexico.length > 0) {
-            html += '<div class="search-group-header">Mexico</div>';
-            html += grouped.Mexico.map(b => brokerResultItem(b)).join('');
-        }
-        if (grouped.Crypto.length > 0) {
-            html += '<div class="search-group-header">Crypto Exchanges</div>';
-            html += grouped.Crypto.map(b => brokerResultItem(b)).join('');
-        }
-        if (grouped.International.length > 0) {
-            html += '<div class="search-group-header">International</div>';
-            html += grouped.International.map(b => brokerResultItem(b)).join('');
-        }
-        
-        resultsContainer.innerHTML = html;
-    }, 150);
+    tbody.innerHTML = accounts.map(a => `
+        <tr>
+            <td>
+                <div class="account-name-cell">
+                    <span class="account-color-dot" style="background: ${a.color || '#6366f1'}"></span>
+                    ${a.name}
+                </div>
+            </td>
+            <td><span class="badge">${a.type}</span></td>
+            <td class="mono">${formatCurrency(a.initial_balance, 'USD')}</td>
+            <td class="mono">${formatCurrency(a.current_balance, 'USD')}</td>
+            <td>
+                <span class="account-color-swatch" style="background: ${a.color || '#6366f1'}"></span>
+            </td>
+            <td>
+                <button class="btn btn-sm btn-danger" onclick="deleteAccount(${a.id})">Delete</button>
+            </td>
+        </tr>
+    `).join('');
 }
 
-function brokerResultItem(broker) {
-    const firstLetter = broker.name.charAt(0).toUpperCase();
-    const brokerJson = JSON.stringify(broker).replace(/'/g, "\\'");
-    return `
-        <div class="search-result-item" onclick='selectBroker(${brokerJson})'>
-            <div class="broker-logo-wrapper-sm">
-                <img src="${broker.logo_url || ''}" 
-                     class="broker-logo-sm" 
-                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" 
-                     alt="">
-                <div class="broker-logo-fallback-sm" style="display: none;">${firstLetter}</div>
-            </div>
-            <span class="result-name">${broker.name}</span>
-            <span class="result-market badge badge-${broker.country.toLowerCase()}">${broker.country}</span>
-        </div>
-    `;
+function showAddAccountModal() {
+    document.getElementById('add-account-form').reset();
+    document.getElementById('account-color').value = '#6366f1';
+    document.getElementById('account-color-hex').textContent = '#6366f1';
+    
+    const colorInput = document.getElementById('account-color');
+    colorInput.addEventListener('input', () => {
+        document.getElementById('account-color-hex').textContent = colorInput.value;
+    });
+    
+    openModal('add-account-modal');
 }
 
-function selectBroker(broker) {
-    selectedBroker = broker;
+async function submitAccount(event) {
+    event.preventDefault();
     
-    // Update hidden field
-    document.getElementById('tx-selected-broker').value = broker.code;
-    
-    // Update display
-    const logo = document.getElementById('selected-broker-logo');
-    const fallback = document.getElementById('selected-broker-fallback');
-    
-    logo.src = broker.logo_url || '';
-    logo.style.display = 'block';
-    fallback.style.display = 'none';
-    fallback.textContent = broker.name.charAt(0).toUpperCase();
-    
-    // Handle logo error
-    logo.onerror = function() {
-        this.style.display = 'none';
-        fallback.style.display = 'flex';
+    const initialBalance = parseFloat(document.getElementById('account-initial-balance').value) || 0;
+    const data = {
+        name: document.getElementById('account-name').value,
+        type: document.getElementById('account-type').value,
+        initial_balance: initialBalance,
+        current_balance: initialBalance,
+        color: document.getElementById('account-color').value,
     };
     
-    document.getElementById('selected-broker-name').textContent = broker.name;
-    document.getElementById('selected-broker-country').textContent = broker.country;
-    document.getElementById('selected-broker-country').className = 
-        `asset-market badge badge-${broker.country.toLowerCase()}`;
-    
-    // Show selected, hide search
-    document.getElementById('selected-broker-display').style.display = 'flex';
-    document.getElementById('tx-broker-search').style.display = 'none';
-    document.getElementById('broker-search-results').innerHTML = '';
+    try {
+        await apiRequest('/accounts', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+        showToast('Account created successfully', 'success');
+        closeModal();
+        loadAccounts();
+        loadAccountsList();
+    } catch (error) {
+        showToast(`Failed to create account: ${error.message}`, 'error');
+    }
 }
 
-function clearSelectedBroker() {
-    selectedBroker = null;
-    document.getElementById('tx-selected-broker').value = '';
+async function deleteAccount(accountId) {
+    if (!confirm('Are you sure you want to delete this account? All associated holdings and transactions will also be deleted.')) return;
     
-    // Show search, hide selected
-    document.getElementById('selected-broker-display').style.display = 'none';
-    document.getElementById('tx-broker-search').style.display = 'block';
-    document.getElementById('tx-broker-search').value = '';
-    document.getElementById('tx-broker-search').focus();
+    try {
+        await apiRequest(`/accounts/${accountId}`, { method: 'DELETE' });
+        showToast('Account deleted', 'success');
+        loadAccounts();
+        loadAccountsList();
+    } catch (error) {
+        showToast(`Failed to delete account: ${error.message}`, 'error');
+    }
 }
 
 async function showAddTransactionModal() {
+    // Ensure accounts are loaded
+    if (accountsList.length === 0) {
+        await loadAccountsList();
+    }
+    if (accountsList.length === 0) {
+        showToast('Please create an account first', 'info');
+        return;
+    }
+
     // Reset form and state
     document.getElementById('add-transaction-form').reset();
     document.getElementById('tx-date').value = new Date().toISOString().slice(0, 16);
@@ -614,13 +629,8 @@ async function showAddTransactionModal() {
     document.getElementById('tx-manual-entry').checked = false;
     document.getElementById('manual-asset-fields').style.display = 'none';
     
-    // Reset broker selection
-    selectedBroker = null;
-    document.getElementById('tx-selected-broker').value = '';
-    document.getElementById('selected-broker-display').style.display = 'none';
-    document.getElementById('tx-broker-search').style.display = 'block';
-    document.getElementById('tx-broker-search').value = '';
-    document.getElementById('broker-search-results').innerHTML = '';
+    // Re-populate account dropdown
+    populateAccountSelects();
     
     // Clear hidden fields
     document.getElementById('tx-selected-symbol').value = '';
@@ -630,6 +640,8 @@ async function showAddTransactionModal() {
     document.getElementById('tx-selected-currency').value = '';
     document.getElementById('tx-selected-country').value = '';
     document.getElementById('tx-selected-coingecko-id').value = '';
+    document.getElementById('tx-selected-provider').value = '';
+    document.getElementById('tx-selected-external-id').value = '';
     
     openModal('add-transaction-modal');
 }
@@ -712,6 +724,8 @@ function selectAsset(asset) {
     document.getElementById('tx-selected-currency').value = asset.currency;
     document.getElementById('tx-selected-country').value = asset.country;
     document.getElementById('tx-selected-coingecko-id').value = '';
+    document.getElementById('tx-selected-provider').value = asset.provider || '';
+    document.getElementById('tx-selected-external-id').value = asset.external_id || '';
     
     // Update display
     document.getElementById('selected-asset-symbol').textContent = asset.symbol;
@@ -741,8 +755,10 @@ function selectCryptoAsset(asset) {
     document.getElementById('tx-selected-type').value = asset.asset_type;
     document.getElementById('tx-selected-market').value = asset.market;
     document.getElementById('tx-selected-currency').value = asset.currency;
-    document.getElementById('tx-selected-country').value = 'GLOBAL'; // Crypto is global
+    document.getElementById('tx-selected-country').value = 'GLOBAL';
     document.getElementById('tx-selected-coingecko-id').value = asset.coingecko_id || '';
+    document.getElementById('tx-selected-provider').value = asset.provider || '';
+    document.getElementById('tx-selected-external-id').value = asset.external_id || '';
     
     // Update display
     document.getElementById('selected-asset-symbol').textContent = asset.symbol;
@@ -774,6 +790,8 @@ function clearSelectedAsset() {
     document.getElementById('tx-selected-currency').value = '';
     document.getElementById('tx-selected-country').value = '';
     document.getElementById('tx-selected-coingecko-id').value = '';
+    document.getElementById('tx-selected-provider').value = '';
+    document.getElementById('tx-selected-external-id').value = '';
     
     // Show search, hide selected
     document.getElementById('selected-asset-display').style.display = 'none';
@@ -850,8 +868,39 @@ async function submitAsset(event) {
 async function submitHolding(event) {
     event.preventDefault();
     
+    let accountId;
+    const accountSelect = document.getElementById('holding-account').value;
+
+    if (accountSelect === '__new__') {
+        const accountName = document.getElementById('holding-new-account-name').value.trim();
+        if (!accountName) {
+            showToast('Please enter a name for the new account', 'error');
+            return;
+        }
+        try {
+            const newAccount = await apiRequest('/accounts', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: accountName,
+                    type: document.getElementById('holding-new-account-type').value,
+                    initial_balance: 0,
+                    current_balance: 0,
+                    color: document.getElementById('holding-new-account-color').value,
+                }),
+            });
+            accountId = newAccount.id;
+            await loadAccountsList();
+        } catch (error) {
+            showToast(`Failed to create account: ${error.message}`, 'error');
+            return;
+        }
+    } else {
+        accountId = parseInt(accountSelect);
+    }
+
     const data = {
         asset_id: parseInt(document.getElementById('holding-asset').value),
+        account_id: accountId,
         quantity: parseFloat(document.getElementById('holding-quantity').value),
         avg_cost_basis: parseFloat(document.getElementById('holding-cost').value),
         cost_currency: document.getElementById('holding-currency').value,
@@ -876,25 +925,49 @@ async function submitTransaction(event) {
     
     const isManualEntry = document.getElementById('tx-manual-entry').checked;
     
-    // Get asset info (from selection or manual entry)
-    let symbol, assetName, assetType, market, currency, country, coingeckoId;
+    let provider, externalId, assetId, symbol;
     
     if (isManualEntry) {
         symbol = document.getElementById('tx-symbol').value.toUpperCase().trim();
-        assetName = document.getElementById('tx-asset-name').value || symbol;
-        assetType = document.getElementById('tx-asset-type').value;
-        market = document.getElementById('tx-market').value;
-        currency = document.getElementById('tx-currency').value;
-        country = market === 'BMV' ? 'MX' : 'US';
-        coingeckoId = null;
+        if (!symbol) {
+            showToast('Please enter an asset symbol', 'error');
+            return;
+        }
+        // For manual entry, create the asset first then use asset_id
+        const assetData = {
+            symbol: symbol,
+            name: document.getElementById('tx-asset-name').value || symbol,
+            asset_type: document.getElementById('tx-asset-type').value,
+            market: document.getElementById('tx-market').value,
+            currency: document.getElementById('tx-currency').value,
+            country: document.getElementById('tx-market').value === 'BMV' ? 'MX' : 'US',
+        };
+        try {
+            const asset = await apiRequest('/investments/assets', {
+                method: 'POST',
+                body: JSON.stringify(assetData),
+            });
+            assetId = asset.id;
+        } catch (error) {
+            if (error.message && error.message.includes('already exists')) {
+                // Asset exists, look it up
+                const assets = await apiRequest(`/investments/assets?symbol=${encodeURIComponent(symbol)}`);
+                const match = Array.isArray(assets) ? assets.find(a => a.symbol === symbol) : null;
+                if (match) {
+                    assetId = match.id;
+                } else {
+                    showToast(`Failed to find existing asset: ${symbol}`, 'error');
+                    return;
+                }
+            } else {
+                showToast(`Failed to create asset: ${error.message}`, 'error');
+                return;
+            }
+        }
     } else if (selectedAsset) {
         symbol = selectedAsset.symbol;
-        assetName = selectedAsset.name;
-        assetType = selectedAsset.asset_type;
-        market = selectedAsset.market;
-        currency = selectedAsset.currency;
-        country = selectedAsset.country;
-        coingeckoId = selectedAsset.coingecko_id || null;
+        provider = selectedAsset.provider || null;
+        externalId = selectedAsset.external_id || null;
     } else {
         // Check hidden fields (for form resubmission)
         symbol = document.getElementById('tx-selected-symbol').value;
@@ -902,12 +975,8 @@ async function submitTransaction(event) {
             showToast('Please select or enter an asset', 'error');
             return;
         }
-        assetName = document.getElementById('tx-selected-name').value || symbol;
-        assetType = document.getElementById('tx-selected-type').value || 'stock';
-        market = document.getElementById('tx-selected-market').value || 'NYSE';
-        currency = document.getElementById('tx-selected-currency').value || 'USD';
-        country = document.getElementById('tx-selected-country').value || 'US';
-        coingeckoId = document.getElementById('tx-selected-coingecko-id').value || null;
+        provider = document.getElementById('tx-selected-provider').value || null;
+        externalId = document.getElementById('tx-selected-external-id').value || null;
     }
     
     if (!symbol) {
@@ -915,22 +984,31 @@ async function submitTransaction(event) {
         return;
     }
     
+    const accountId = parseInt(document.getElementById('tx-account').value);
+    if (!accountId) {
+        showToast('Please select an account', 'error');
+        return;
+    }
+
     const data = {
-        symbol: symbol,
-        asset_name: assetName,
-        asset_type: assetType,
-        market: market,
-        currency: currency,
-        country: country,
-        coingecko_id: coingeckoId,
         transaction_type: document.getElementById('tx-type').value,
         quantity: parseFloat(document.getElementById('tx-quantity').value),
         price_per_unit: parseFloat(document.getElementById('tx-price').value),
         fees: parseFloat(document.getElementById('tx-fees').value) || 0,
         executed_at: new Date(document.getElementById('tx-date').value).toISOString(),
-        broker: document.getElementById('tx-selected-broker').value || null,
+        account_id: accountId,
         notes: document.getElementById('tx-notes').value || null,
     };
+
+    if (assetId) {
+        data.asset_id = assetId;
+    } else if (provider && externalId) {
+        data.provider = provider;
+        data.external_id = externalId;
+    } else {
+        showToast('Missing asset identity. Please search and select an asset, or use manual entry.', 'error');
+        return;
+    }
     
     try {
         const result = await apiRequest('/investments/transactions/with-asset', {
