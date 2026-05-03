@@ -41,6 +41,7 @@ class AllocationItem(BaseModel):
     """Single item in an allocation breakdown."""
     name: str
     value: str  # The enum value or identifier
+    color: Optional[str] = "#168FFF"  # Default color if not provided
     total_value_usd: float
     total_value_mxn: float
     percentage: float

@@ -408,9 +408,11 @@ async def get_allocation_by_account(
         
         account = account_map.get(account_id)
         name = account.name if account else f"Account {account_id}"
+        color = account.color if account else "#168FFF"
         
         allocations.append(AllocationItem(
             name=name,
+            color=color,
             value=str(account_id),
             total_value_usd=round(data["usd"], 2),
             total_value_mxn=round(data["mxn"], 2),
