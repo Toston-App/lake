@@ -18,8 +18,7 @@ class NetSummary(BaseModel):
 
 
 class SummaryResponse(BaseModel):
-    currency: str
-    language: str
+    country: str
     balance: Balance
     period_income: float
     period_expenses: float
