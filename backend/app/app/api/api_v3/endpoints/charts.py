@@ -1,7 +1,7 @@
 import asyncio
-from typing import Any
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,11 +30,13 @@ async def get_charts(
     db: AsyncSession = Depends(deps.async_get_db),
     date_filter_type: DateFilterType = DateFilterType.date,
     date: str = None,
+    account_id: Optional[int] = Query(None, description="Filter by account ID"),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Retrieve chart data for a date range.
     Returns transaction timeline, category drilldown, and per-account balance charts.
+    Optionally filtered by a specific account.
     Cached in Redis with 7-day TTL, invalidated on writes.
     """
     enrich_event(
@@ -44,12 +46,22 @@ async def get_charts(
             "type": "v3_charts",
             "date_filter_type": date_filter_type.value,
             "date_param": date,
+            "account_id": account_id,
         },
     )
 
+    if account_id is not None:
+        account = await crud.account.get_by_id(
+            db, owner_id=current_user.id, id=account_id
+        )
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+    cache_date_key = f"{date}:acc:{account_id or 'all'}"
+
     # Check cache first
     cached = await get_cached(
-        "charts", current_user.id, date_filter_type.value, date
+        "charts", current_user.id, date_filter_type.value, cache_date_key
     )
     if cached:
         enrich_event(request, cache={"hit": True, "prefix": "charts"})
@@ -78,18 +90,21 @@ async def get_charts(
                 owner_id=current_user.id,
                 start_date=date_range.start_date,
                 end_date=date_range.end_date,
+                account_id=account_id,
             ),
             crud.expense.get_multi_by_date(
                 db=db,
                 owner_id=current_user.id,
                 start_date=date_range.start_date,
                 end_date=date_range.end_date,
+                account_id=account_id,
             ),
             crud.transfer.get_multi_by_date(
                 db=db,
                 owner_id=current_user.id,
                 start_date=date_range.start_date,
                 end_date=date_range.end_date,
+                account_id=account_id,
             ),
             crud.account.get_multi_by_owner(db=db, owner_id=current_user.id),
             crud.place.get_multi_by_owner(db=db, owner_id=current_user.id),
@@ -100,12 +115,14 @@ async def get_charts(
                 owner_id=current_user.id,
                 start_date=prev_date_range.start_date,
                 end_date=prev_date_range.end_date,
+                account_id=account_id,
             ),
             crud.expense.get_multi_by_date(
                 db=db,
                 owner_id=current_user.id,
                 start_date=prev_date_range.start_date,
                 end_date=prev_date_range.end_date,
+                account_id=account_id,
             ),
         )
 
@@ -132,7 +149,7 @@ async def get_charts(
             "charts",
             current_user.id,
             date_filter_type.value,
-            date,
+            cache_date_key,
             result.model_dump(),
         )
         return result
@@ -220,7 +237,7 @@ async def get_charts(
         "charts",
         current_user.id,
         date_filter_type.value,
-        date,
+        cache_date_key,
         result.model_dump(),
     )
 
