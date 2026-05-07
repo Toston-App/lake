@@ -2,6 +2,8 @@
 from datetime import datetime
 
 from fastapi.encoders import jsonable_encoder
+from typing import Optional
+
 from sqlalchemy import Date, and_, asc, cast
 from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -123,16 +125,19 @@ class CRUDExpense(CRUDBase[Expense, ExpenseCreate, ExpenseUpdate]):
         owner_id: int,
         start_date: Date = None,
         end_date: str = None,
+        account_id: Optional[int] = None,
     ) -> list[Expense]:
         query = select(self.model)
 
-        query = query.where(
-            and_(
-                self.model.owner_id == owner_id,
-                cast(self.model.date, Date) >= start_date,
-                cast(self.model.date, Date) <= end_date,
-            )
-        ).order_by(asc(self.model.date))
+        conditions = [
+            self.model.owner_id == owner_id,
+            cast(self.model.date, Date) >= start_date,
+            cast(self.model.date, Date) <= end_date,
+        ]
+        if account_id is not None:
+            conditions.append(self.model.account_id == account_id)
+
+        query = query.where(and_(*conditions)).order_by(asc(self.model.date))
 
         result = await db.execute(query)
 
