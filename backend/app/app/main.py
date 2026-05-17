@@ -77,30 +77,30 @@ app.add_middleware(
     slow_request_threshold_ms=settings.AXIOM_SLOW_REQUEST_THRESHOLD_MS,
 )
 
-@app.middleware("http")
-async def add_csp_header(request: Request, call_next):
-    response = await call_next(request)
+# @app.middleware("http")
+# async def add_csp_header(request: Request, call_next):
+#     response = await call_next(request)
 
-    csp_directives = [
-        "default-src 'self'",
-        "img-src 'self' data:",
-        "connect-src 'self'",
-        "script-src 'self'",
-        "style-src 'self' 'unsafe-inline'",
-        "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
-        "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-        "base-uri 'self'",
-        "font-src 'self' https: data:",
-        "frame-ancestors 'self'",
-        "object-src 'none'",
-        "script-src-attr 'none'",
-        "require-trusted-types-for 'script'"
-    ]
+#     csp_directives = [
+#         "default-src 'self'",
+#         "img-src 'self' data:",
+#         "connect-src 'self'",
+#         "script-src 'self'",
+#         "style-src 'self' 'unsafe-inline'",
+#         "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+#         "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+#         "base-uri 'self'",
+#         "font-src 'self' https: data:",
+#         "frame-ancestors 'self'",
+#         "object-src 'none'",
+#         "script-src-attr 'none'",
+#         "require-trusted-types-for 'script'"
+#     ]
 
-    csp_policy = "; ".join(csp_directives)
-    response.headers["Content-Security-Policy"] = csp_policy
+#     csp_policy = "; ".join(csp_directives)
+#     response.headers["Content-Security-Policy"] = csp_policy
 
-    return response
+#     return response
 
 security = HTTPBasic()
 
@@ -108,36 +108,36 @@ security = HTTPBasic()
 # The old log_requests middleware has been replaced with comprehensive wide events
 
 
-# Set all CORS enabled origins
+# CORS configuration.
+#
+# `allow_origins=["*"]` is incompatible with `allow_credentials=True` per the
+# CORS spec and browsers will block cross-origin credentialed requests in
+# that combo anyway. We therefore list explicit origins for production hosts
+# and localhost dev servers, and use `allow_origin_regex` to cover any
+# `*.cleverbill.ing` subdomain. The strings starting with `r"https:\/\/..."`
+# in the previous config were NOT regex (CORSMiddleware does not interpret
+# `allow_origins` entries as regex), so they never matched anything.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://www.cleverbill.ing",
         "https://cleverbill.ing",
         "https://api.cleverbill.ing",
-        "http://api.cleverbill.ing",
         "https://dev.cleverbill.ing",
-        "http://dev.cleverbill.ing",
-        "https://dev.cleverbill.ing/api/v1",
         "https://dashboard.cleverbill.ing",
-        "http://dashboard.cleverbill.ing",
-        "https://dashboard.cleverbill.ing/api/v1",
-        r"https:\/\/*\.cleverbill\.ing",
-        r"https:\/\/*\.cleverbill\.ing/",
-        r"http:\/\/*\.cleverbill\.ing",
-        r"http:\/\/*\.cleverbill\.ing/",
-        "http://localhost:4321",
         "http://localhost",
-        "http://localhost:4200",
         "http://localhost:3000",
+        "http://localhost:4200",
+        "http://localhost:4321",
         "http://localhost:8080",
         "https://localhost",
-        "https://localhost:4200",
         "https://localhost:3000",
+        "https://localhost:4200",
         "https://localhost:8080",
         "https://localhost:8888",
         "https://localhost:9000",
     ],
+    allow_origin_regex=r"^https?://([a-z0-9-]+\.)*cleverbill\.ing$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -14,7 +14,7 @@ from .expense import Expense, ExpenseCreate, ExpenseInDB, ExpenseUpdate, Deletio
 from .place import Place, PlaceCreate, PlaceInDB, PlaceUpdate, DeletionResponse
 from .item import Item, ItemCreate, ItemInDB, ItemUpdate, DeletionResponse
 from .msg import Msg
-from .token import Token, TokenPayload, TokenPayloadUuid
+from .token import Token, LocalTokenPayload, ClerkTokenPayload
 from .user import User, UserCreate, UserCreateUuid, UserInDB, UserUpdate, UserGetMe
 from .imports import Import, ImportCreate, ImportInDB, ImportUpdate, DeletionResponse
 from .bulk import BulkDelete, BulkDeletionsResponse, BulkCreate, BulkCreationsResponse

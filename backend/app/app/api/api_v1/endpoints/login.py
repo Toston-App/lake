@@ -2,7 +2,6 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +55,7 @@ async def login_access_token(
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
         "access_token": security.create_access_token(
-            jsonable_encoder(user), expires_delta=access_token_expires
+            user.id, expires_delta=access_token_expires
         ),
         "token_type": "bearer",
     }

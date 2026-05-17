@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -9,7 +9,7 @@ from jose import jwt
 
 from app.core.config import settings
 
-# TODO: Fix jwt encode and decode when using this. At the moment we're using Clerk auth, so we aren't using this code
+_RESET_PURPOSE = "pwd_reset"
 
 
 def send_email(
@@ -91,20 +91,36 @@ def send_new_account_email(email_to: str, username: str, password: str) -> None:
 
 def generate_password_reset_token(email: str) -> str:
     delta = timedelta(hours=settings.EMAIL_RESET_TOKEN_EXPIRE_HOURS)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires = now + delta
-    exp = expires.timestamp()
     encoded_jwt = jwt.encode(
-        {"exp": exp, "nbf": now, "sub": email},
-        settings.SECRET_KEY,
+        {
+            "sub": email,
+            "purpose": _RESET_PURPOSE,
+            "iat": int(now.timestamp()),
+            "nbf": int(now.timestamp()),
+            "exp": int(expires.timestamp()),
+        },
+        settings.LOCAL_JWT_SECRET,
         algorithm="HS256",
     )
     return encoded_jwt
 
 
 def verify_password_reset_token(token: str) -> Optional[str]:
+    """Return the email a reset token was issued for, or None if invalid.
+
+    Validates the signature, expiry, and that the token was actually issued
+    for password reset (the previous version read a non-existent `email`
+    claim and would always fail with KeyError).
+    """
     try:
-        decoded_token = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-        return decoded_token["email"]
+        decoded_token = jwt.decode(
+            token, settings.LOCAL_JWT_SECRET, algorithms=["HS256"]
+        )
     except jwt.JWTError:
         return None
+
+    if decoded_token.get("purpose") != _RESET_PURPOSE:
+        return None
+    return decoded_token.get("sub")
