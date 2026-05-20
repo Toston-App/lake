@@ -150,15 +150,24 @@ async def create_user_open(
     *,
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-    uuid: str = Body(...),
     use_email: bool = Body(False),
     email: EmailStr = Body(None),
     password: str = Body(None),
     name: str = Body(None),
     country: str = Body(None),
+    bearer_token: str | None = Depends(deps.reusable_oauth2),
+    cookie_token: str | None = Depends(deps.cookie_scheme),
 ) -> Any:
     """
     Create new user without the need to be logged in.
+
+    - `use_email=True`: classic email/password registration. Anyone may call
+      it (subject to `USERS_OPEN_REGISTRATION`).
+    - `use_email=False`: bootstrap a local row for a Clerk-authenticated
+      user. Requires a valid Clerk session token (bearer or `__session`
+      cookie). The `sub` from the verified token is used as the UUID; the
+      request body is NOT trusted for the UUID, since it previously allowed
+      anyone to create a row for any Clerk user id.
     """
     mark_for_logging(request)
     enrich_event(
@@ -203,7 +212,7 @@ async def create_user_open(
 
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = security.create_access_token(
-            jsonable_encoder(user), expires_delta=access_token_expires
+            user.id, expires_delta=access_token_expires
         )
 
         response = JSONResponse(
@@ -219,7 +228,31 @@ async def create_user_open(
         )
         return response
 
-    # UUID auth
+    # UUID (Clerk) branch: require a valid Clerk session and trust only its
+    # verified `sub` as the user uuid. The previous implementation accepted
+    # any UUID from the body, which let anyone create a row impersonating
+    # any Clerk account.
+    token = bearer_token or cookie_token
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Clerk session required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        clerk_payload = deps.verify_clerk_token(token)
+    except Exception:
+        enrich_event(
+            request, auth={"outcome": "failure", "reason": "invalid_clerk_session"}
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Clerk session",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    uuid = clerk_payload.sub
+
     user = await crud.user.get_by_uuid(db, uuid=uuid)
     if user:
         enrich_event(request, auth={"outcome": "failure", "reason": "uuid_exists"})

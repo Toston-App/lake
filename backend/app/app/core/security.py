@@ -1,6 +1,7 @@
 import base64
-from datetime import datetime, timedelta
-from typing import Any, Union
+import secrets
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from jose import jwt
 from passlib.context import CryptContext
@@ -10,32 +11,42 @@ from app.core.config import settings
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-ALGORITHM = "RS256"  # Original algorithm was `HS256`
-PUBLIC_KEY = base64.b64decode(settings.SECRET_KEY).decode("utf-8")
-# TODO: I don't have the private key because I'm using Clerk auth and it olny provides the public key
-PRIVATE_KEY = "secret"
+LOCAL_ALGORITHM = "HS256"
+LOCAL_ISSUER = "local"
+CLERK_ALGORITHM = "RS256"
+
+
+def _clerk_public_key() -> str:
+    """Decode the base64-encoded Clerk PEM public key on demand.
+
+    Done lazily so importing this module doesn't fail if the key is not
+    configured (e.g. during unit tests that don't touch Clerk auth).
+    """
+    return base64.b64decode(settings.CLERK_JWT_PUBLIC_KEY).decode("utf-8")
 
 
 def create_access_token(
-    subject: Union[str, Any], expires_delta: timedelta = None
+    user_id: int, expires_delta: Optional[timedelta] = None
 ) -> str:
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-    to_encode = {
-        "exp": expire,
-        "user": {
-            "name": subject["name"],
-            "email": subject["email"],
-            "country": subject["country"],
-            "id": subject["id"],
-        },
-    }
+    """Issue a local (email/password) access token.
 
-    return jwt.encode(to_encode, "foo", algorithm="HS256")
+    Minimal claims only: `sub` (user id as string), standard `iat`/`exp`,
+    our own `iss` so the verifier can route correctly, and a random `jti`
+    so the token has a unique identifier (useful for future revocation).
+    No PII is embedded.
+    """
+    if expires_delta is None:
+        expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    now = datetime.now(timezone.utc)
+    to_encode = {
+        "sub": str(user_id),
+        "iss": LOCAL_ISSUER,
+        "iat": int(now.timestamp()),
+        "exp": int((now + expires_delta).timestamp()),
+        "jti": secrets.token_urlsafe(16),
+    }
+    return jwt.encode(to_encode, settings.LOCAL_JWT_SECRET, algorithm=LOCAL_ALGORITHM)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

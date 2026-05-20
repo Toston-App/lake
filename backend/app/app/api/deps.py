@@ -1,5 +1,7 @@
+import logging
 from collections.abc import AsyncGenerator, Generator
 from enum import Enum
+from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
@@ -12,15 +14,22 @@ from app.core import security
 from app.core.config import settings
 from app.db.session import SessionLocal, async_session
 
-# Use this to get the jwt like "Bearer" in the Authorization header
+logger = logging.getLogger(__name__)
+
+
+# Bearer token from `Authorization: Bearer <jwt>`. auto_error=False so we can
+# also accept the Clerk session cookie below; one of the two must be present.
 reusable_oauth2 = OAuth2PasswordBearer(
-    tokenUrl=f"{settings.API_V1_STR}/login/access-token"
+    tokenUrl=f"{settings.API_V1_STR}/login/access-token",
+    auto_error=False,
 )
 
-# Use cookie `__session` to get the jwt token
+# Clerk drops its session JWT in the `__session` cookie. We accept it as an
+# alternative to the bearer header.
 cookie_scheme = APIKeyCookie(
     name="__session",
-    description="JWT token from Clerk",
+    description="Session cookie (used by Clerk).",
+    auto_error=False,
 )
 
 
@@ -46,41 +55,107 @@ async def async_get_db() -> AsyncGenerator:
         yield session
 
 
+_CREDENTIALS_EXCEPTION = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Could not validate credentials",
+    headers={"WWW-Authenticate": "Bearer"},
+)
+
+
+def _verify_local_token(token: str) -> schemas.LocalTokenPayload:
+    """Verify a token we issued ourselves (email/password login)."""
+    payload = jwt.decode(
+        token,
+        settings.LOCAL_JWT_SECRET,
+        algorithms=[security.LOCAL_ALGORITHM],
+        issuer=security.LOCAL_ISSUER,
+    )
+    return schemas.LocalTokenPayload(**payload)
+
+
+def verify_clerk_token(token: str) -> schemas.ClerkTokenPayload:
+    """Verify a Clerk-issued session JWT.
+
+    `jwt.decode` checks signature + `exp` + `nbf` + `iss`. We additionally
+    enforce that `azp` is in our allow-list so a token minted for some
+    other application can't be used here.
+    """
+    payload = jwt.decode(
+        token,
+        security._clerk_public_key(),
+        algorithms=[security.CLERK_ALGORITHM],
+        issuer=settings.CLERK_ISSUER,
+    )
+    azp = payload.get("azp")
+    if not azp or azp not in settings.CLERK_AUTHORIZED_PARTIES:
+        raise jwt.JWTError("Unauthorized party (azp)")
+    return schemas.ClerkTokenPayload(**payload)
+
+
 async def get_current_user(
-    db: AsyncSession = Depends(async_get_db), token: str = Depends(reusable_oauth2)
+    db: AsyncSession = Depends(async_get_db),
+    bearer_token: Optional[str] = Depends(reusable_oauth2),
+    cookie_token: Optional[str] = Depends(cookie_scheme),
 ) -> models.User:
-    # TODO add a env var to switch between the devel and prod and change this
-    for key in [security.PUBLIC_KEY, "foo"]:
-        try:
-            if key == "foo":
-                payload = jwt.decode(token, key, algorithms=["HS256"])
-                has_email = payload.get("user").get("email")
-            else:
-                payload = jwt.decode(token, key, algorithms=[security.ALGORITHM])
-                has_email = payload.get("email")
+    token = bearer_token or cookie_token
+    if not token:
+        raise _CREDENTIALS_EXCEPTION
 
-            if has_email:
-                token_data = schemas.TokenPayload(**payload)
-            else:
-                token_data = schemas.TokenPayloadUuid(**payload)
+    # Peek at the unverified `iss` claim to route to the correct verifier.
+    # The routing itself is not a security boundary -- each branch fully
+    # re-verifies the token with the appropriate key/algorithm.
+    try:
+        unverified = jwt.get_unverified_claims(token)
+    except jwt.JWTError:
+        raise _CREDENTIALS_EXCEPTION
 
-            break  # If decoding succeeds, exit the loop
-        except (jwt.JWTError, ValidationError) as e:
-            print("🚀 ~ jwt.JWTError:", e)
-            if key == "foo":  # If this was the last attempt
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Could not validate credentials",
-                )
+    issuer = unverified.get("iss")
 
-    if has_email:
-        user = await crud.user.get(db, id=token_data.user["id"])
-    else:
-        user = await crud.user.get_by_uuid(db, uuid=token_data.sub)
+    try:
+        if issuer == security.LOCAL_ISSUER:
+            local_payload = _verify_local_token(token)
+            user = await crud.user.get(db, id=int(local_payload.sub))
+        elif issuer and issuer == settings.CLERK_ISSUER:
+            clerk_payload = verify_clerk_token(token)
+            user = await crud.user.get_by_uuid(db, uuid=clerk_payload.sub)
+        else:
+            raise _CREDENTIALS_EXCEPTION
+    except (jwt.JWTError, ValidationError, ValueError) as e:
+        logger.warning("JWT validation failed: %s", e)
+        raise _CREDENTIALS_EXCEPTION from None
 
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+
+async def get_clerk_session_sub(
+    bearer_token: Optional[str] = Depends(reusable_oauth2),
+    cookie_token: Optional[str] = Depends(cookie_scheme),
+) -> str:
+    """Require a valid Clerk session and return the verified `sub` (user uuid).
+
+    Used by endpoints that bootstrap a local row for a Clerk-authenticated
+    user (e.g. `POST /users/open` UUID branch). The caller MUST NOT trust
+    any UUID supplied in the request body -- only the value returned here.
+    """
+    token = bearer_token or cookie_token
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Clerk session required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        payload = verify_clerk_token(token)
+    except (jwt.JWTError, ValidationError) as e:
+        logger.warning("Clerk session validation failed: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Clerk session",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+    return payload.sub
 
 
 def get_current_active_user(
