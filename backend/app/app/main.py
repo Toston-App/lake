@@ -20,6 +20,9 @@ from app.utilities.wide_events import WideEventsMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+DOCS_PATHS = {"/docs", "/redoc"}
+TRUSTED_TYPES_DIRECTIVE = "require-trusted-types-for 'script'"
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="0.9.0",
@@ -87,15 +90,16 @@ async def add_csp_header(request: Request, call_next):
         "connect-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
-        "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
+        "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js",
         "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
         "base-uri 'self'",
         "font-src 'self' https: data:",
         "frame-ancestors 'self'",
         "object-src 'none'",
         "script-src-attr 'none'",
-        "require-trusted-types-for 'script'"
     ]
+    if request.url.path not in DOCS_PATHS:
+        csp_directives.append(TRUSTED_TYPES_DIRECTIVE)
 
     csp_policy = "; ".join(csp_directives)
     response.headers["Content-Security-Policy"] = csp_policy
@@ -108,7 +112,7 @@ security = HTTPBasic()
 # The old log_requests middleware has been replaced with comprehensive wide events
 
 
-# Set all CORS enabled origins
+# CORS configuration.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -122,10 +126,6 @@ app.add_middleware(
         "https://dashboard.cleverbill.ing",
         "http://dashboard.cleverbill.ing",
         "https://dashboard.cleverbill.ing/api/v1",
-        r"https:\/\/*\.cleverbill\.ing",
-        r"https:\/\/*\.cleverbill\.ing/",
-        r"http:\/\/*\.cleverbill\.ing",
-        r"http:\/\/*\.cleverbill\.ing/",
         "http://localhost:4321",
         "http://localhost",
         "http://localhost:4200",

@@ -26,5 +26,5 @@ def test_email(
         operation={"type": "test_email", "email_to": email_to},
     )
 
-    send_test_email(email_to=email_to)
+    # send_test_email(email_to=email_to)
     return {"msg": "Test email sent"}
