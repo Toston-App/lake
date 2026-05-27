@@ -1,14 +1,21 @@
 import json
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.chat_agent import ChatAgent, ChatTurnResult
-from app.ai.chat_tools import execute_tool, is_destructive_tool, requires_confirmation
+from app.ai.chat_agent import ChatAgent, ChatStreamEvent, ChatTurnResult
+from app.schemas.chat import ToolStep
+from app.ai.chat_tools import (
+    _transaction_update_data,
+    execute_tool,
+    is_destructive_tool,
+    requires_confirmation,
+)
 from app.core.config import settings
-from app.schemas.chat import ChatAction
+from app.schemas.chat import ChatAction, chat_action_detail
 
 
 @pytest.mark.asyncio
@@ -65,6 +72,84 @@ async def test_send_message_mocked_agent(
     assert len(data["actions"]) == 1
 
 
+def _parse_sse_events(body: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+    for block in body.strip().split("\n\n"):
+        if not block.strip():
+            continue
+        event_type = "message"
+        data_line = None
+        for line in block.split("\n"):
+            if line.startswith("event: "):
+                event_type = line[7:]
+            elif line.startswith("data: "):
+                data_line = line[6:]
+        if data_line is not None:
+            events.append((event_type, json.loads(data_line)))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_send_message_stream_mocked_agent(
+    client: AsyncClient,
+    normal_user_token_headers: dict[str, str],
+):
+    mock_turn = ChatTurnResult(
+        reply="Your balance looks good.",
+        actions=[ChatAction(type="summary_fetched", detail={"period_net": 100})],
+        new_messages=[
+            {"role": "user", "content": "How am I doing?"},
+            {"role": "assistant", "content": "Your balance looks good."},
+        ],
+    )
+
+    async def mock_stream_turn(*_args, **_kwargs):
+        yield ChatStreamEvent(type="token", delta="Your ")
+        yield ChatStreamEvent(type="token", delta="balance")
+        yield ChatStreamEvent(type="tool_step", tool_step=ToolStep(
+            tool_name="get_period_summary",
+            status="completed",
+            label="Fetching period summary",
+        ))
+        yield ChatStreamEvent(type="done", result=mock_turn)
+
+    with patch(
+        "app.api.api_v1.endpoints.chat.get_chat_agent"
+    ) as mock_get_agent:
+        mock_agent = MagicMock(spec=ChatAgent)
+        mock_agent.stream_turn = mock_stream_turn
+        mock_get_agent.return_value = mock_agent
+        with patch(
+            "app.api.api_v1.endpoints.chat.save_conversation",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            with patch(
+                "app.api.api_v1.endpoints.chat.get_conversation",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                async with client.stream(
+                    "POST",
+                    f"{settings.API_V1_STR}/chat/messages/stream",
+                    headers=normal_user_token_headers,
+                    json={"message": "How am I doing?"},
+                ) as response:
+                    assert response.status_code == 200
+                    body = await response.aread()
+    text = body.decode()
+    events = _parse_sse_events(text)
+    types = [e[0] for e in events]
+    assert types[0] == "meta"
+    assert "conversation_id" in events[0][1]
+    assert "token" in types
+    assert "tool_step" in types
+    assert types[-1] == "done"
+    done_data = events[-1][1]
+    assert done_data["reply"] == "Your balance looks good."
+    assert len(done_data["actions"]) == 1
+
+
 @pytest.mark.asyncio
 async def test_execute_tool_list_accounts(
     async_get_db: AsyncSession,
@@ -86,6 +171,33 @@ async def test_execute_tool_list_accounts(
     assert result["success"] is True
     assert action_type == "accounts_listed"
     assert isinstance(result["data"], list)
+    assert chat_action_detail(result["data"]) == {"items": result["data"]}
+    assert chat_action_detail([]) == {"items": []}
+
+
+def test_transaction_update_data_coerces_date_string():
+    out = _transaction_update_data({"date": "2026-05-27", "amount": 10.0})
+    assert out["date"] == date(2026, 5, 27)
+    assert out["amount"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_error_returns_tuple(
+    async_get_db: AsyncSession,
+):
+    from app import crud
+
+    user = await crud.user.get_by_email(async_get_db, email=settings.EMAIL_TEST_USER)
+    result, action_type = await execute_tool(
+        "manage_account",
+        {"action": "update", "id": 999999999, "data": {"name": "x"}},
+        async_get_db,
+        user,
+    )
+    assert action_type is None
+    assert isinstance(result, dict)
+    assert result["success"] is False
+    assert "not found" in result["error"].lower()
 
 
 @pytest.mark.asyncio

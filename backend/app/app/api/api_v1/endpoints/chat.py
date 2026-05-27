@@ -1,12 +1,15 @@
+import json
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.ai.chat_agent import ChatAgent
+from app.ai.chat_agent import ChatAgent, ChatTurnResult
 from app.ai.chat_tools import execute_tool, merge_confirm_tool_args
 from app.api import deps
 from app.core.config import settings
@@ -15,9 +18,12 @@ from app.schemas.chat import (
     ChatConfirmRequest,
     ChatMessageRequest,
     ChatMessageResponse,
+    ChatStreamMeta,
+    ChatStreamToken,
     ConversationDetail,
     ConversationMessage,
     ConversationSummary,
+    chat_action_detail,
     ToolStep,
 )
 from app.utilities.redis import (
@@ -49,6 +55,22 @@ def _require_chat_enabled() -> None:
 def _conversation_title(message: str) -> str:
     text = message.strip().replace("\n", " ")
     return text[:60] + ("…" if len(text) > 60 else "")
+
+
+def _sse_event(event_type: str, data: dict) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _turn_to_response(
+    conversation_id: str, turn: ChatTurnResult
+) -> ChatMessageResponse:
+    return ChatMessageResponse(
+        conversation_id=conversation_id,
+        reply=turn.reply,
+        actions=turn.actions,
+        tool_steps=turn.tool_steps,
+        pending_confirmation=turn.pending_confirmation,
+    )
 
 
 def _merge_messages(
@@ -122,12 +144,106 @@ async def send_chat_message(
         settings.CHAT_CONVERSATION_TTL_SECONDS,
     )
 
-    return ChatMessageResponse(
-        conversation_id=conversation_id,
-        reply=turn.reply,
-        actions=turn.actions,
-        tool_steps=turn.tool_steps,
-        pending_confirmation=turn.pending_confirmation,
+    return _turn_to_response(conversation_id, turn)
+
+
+@router.post("/messages/stream")
+async def send_chat_message_stream(
+    request: Request,
+    body: ChatMessageRequest,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+    agent: ChatAgent = Depends(get_chat_agent),
+) -> StreamingResponse:
+    _require_chat_enabled()
+
+    conversation_id = body.conversation_id or str(uuid.uuid4())
+    history: list[dict] = []
+    title = _conversation_title(body.message)
+
+    existing = await get_conversation(conversation_id, current_user.id)
+    if existing:
+        history = existing.get("messages") or []
+        title = existing.get("title") or title
+
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={
+            "type": "chat_message_stream",
+            "conversation_id": conversation_id,
+            "message_length": len(body.message),
+        },
+    )
+
+    async def event_generator() -> AsyncIterator[str]:
+        with timed() as t:
+            yield _sse_event(
+                "meta",
+                ChatStreamMeta(conversation_id=conversation_id).model_dump(),
+            )
+            try:
+                async for event in agent.stream_turn(
+                    db,
+                    current_user,
+                    body.message,
+                    history,
+                    conversation_id=conversation_id,
+                ):
+                    if event.type == "token" and event.delta:
+                        yield _sse_event(
+                            "token",
+                            ChatStreamToken(delta=event.delta).model_dump(),
+                        )
+                    elif event.type == "tool_step" and event.tool_step:
+                        yield _sse_event(
+                            "tool_step", event.tool_step.model_dump()
+                        )
+                    elif event.type == "done" and event.result:
+                        turn = event.result
+                        updated_messages = _merge_messages(
+                            history, turn.new_messages
+                        )
+                        await save_conversation(
+                            conversation_id,
+                            current_user.id,
+                            updated_messages,
+                            title,
+                            settings.CHAT_CONVERSATION_TTL_SECONDS,
+                        )
+                        response = _turn_to_response(conversation_id, turn)
+                        enrich_event(
+                            request,
+                            ai={
+                                "provider": "openrouter",
+                                "duration_ms": t.ms,
+                                "actions_count": len(turn.actions),
+                                "pending_confirmation": turn.pending_confirmation
+                                is not None,
+                                "streaming": True,
+                            },
+                        )
+                        yield _sse_event("done", response.model_dump(mode="json"))
+            except Exception as exc:
+                enrich_event(
+                    request,
+                    ai={
+                        "provider": "openrouter",
+                        "duration_ms": t.ms,
+                        "streaming": True,
+                        "error": str(exc),
+                    },
+                )
+                yield _sse_event("error", {"detail": str(exc)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -245,7 +361,12 @@ async def confirm_chat_action(
 
     actions: list[ChatAction] = []
     if action_type and result.get("success"):
-        actions.append(ChatAction(type=action_type, detail=result.get("data")))
+        actions.append(
+            ChatAction(
+                type=action_type,
+                detail=chat_action_detail(result.get("data")),
+            )
+        )
         reply = f"Done. {action_type.replace('_', ' ')} completed successfully."
     else:
         reply = result.get("error") or "The action could not be completed."

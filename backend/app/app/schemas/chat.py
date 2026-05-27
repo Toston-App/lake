@@ -9,6 +9,15 @@ class ChatMessageRequest(BaseModel):
     conversation_id: Optional[str] = None
 
 
+def chat_action_detail(data: Any) -> Optional[dict[str, Any]]:
+    """Normalize tool result data for ChatAction (detail must be a dict)."""
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        return data
+    return {"items": data}
+
+
 class ChatAction(BaseModel):
     type: str
     detail: Optional[dict[str, Any]] = None
@@ -33,6 +42,29 @@ class ChatMessageResponse(BaseModel):
     actions: list[ChatAction] = []
     tool_steps: list[ToolStep] = []
     pending_confirmation: Optional[PendingConfirmation] = None
+
+
+class ChatStreamMeta(BaseModel):
+    conversation_id: str
+
+
+class ChatStreamToken(BaseModel):
+    delta: str
+
+
+class ChatStreamError(BaseModel):
+    detail: str
+
+
+class ChatStreamEvent(BaseModel):
+    """SSE payload helper; event name is the `type` field value."""
+
+    type: str  # meta | tool_step | token | done | error
+    conversation_id: Optional[str] = None
+    delta: Optional[str] = None
+    tool_step: Optional[ToolStep] = None
+    detail: Optional[str] = None
+    response: Optional[ChatMessageResponse] = None
 
 
 class ChatConfirmRequest(BaseModel):

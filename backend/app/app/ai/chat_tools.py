@@ -180,6 +180,34 @@ def _serialize_record(record: Any) -> dict:
     return data
 
 
+def _parse_transaction_date(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if "T" in text:
+            text = text.split("T", 1)[0]
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError as exc:
+            raise ToolExecutionError(f"Invalid date: {value!r}") from exc
+    raise ToolExecutionError(f"Invalid date: {value!r}")
+
+
+def _transaction_update_data(patch: dict) -> dict:
+    """Coerce chat/JSON patch fields before CRUD update (dates must be date objects)."""
+    data = dict(patch)
+    if "date" in data:
+        data["date"] = _parse_transaction_date(data["date"])
+    return data
+
+
 async def build_pending_preview(
     db: AsyncSession,
     user: models.User,
@@ -501,7 +529,7 @@ async def execute_tool(
                 acc_id = args["id"]
                 account = await crud.account.get_by_id(db, owner_id=user.id, id=acc_id)
                 if not account:
-                    return _err("Account not found")
+                    return _err("Account not found"), None
                 updated = await crud.account.update(
                     db=db, db_obj=account, obj_in=schemas.AccountUpdate(**args.get("data", {}))
                 )
@@ -511,11 +539,11 @@ async def execute_tool(
                 acc_id = args["id"]
                 account = await crud.account.get_by_id(db, owner_id=user.id, id=acc_id)
                 if not account:
-                    return _err("Account not found")
+                    return _err("Account not found"), None
                 await crud.account.remove(db=db, id=acc_id)
                 await invalidate_user_cache(user.id)
                 return _ok({"id": acc_id, "deleted": True}), "account_deleted"
-            return _err("Invalid action for manage_account")
+            return _err("Invalid action for manage_account"), None
 
         if tool_name == "list_categories":
             categories = await crud.category.get_multi_by_owner(
@@ -534,7 +562,7 @@ async def execute_tool(
             if action == "update":
                 cat = await crud.category.get(db=db, id=args["id"])
                 if not cat or cat.owner_id != user.id:
-                    return _err("Category not found")
+                    return _err("Category not found"), None
                 updated = await crud.category.update(
                     db=db, db_obj=cat, obj_in=schemas.CategoryUpdate(**args.get("data", {}))
                 )
@@ -542,10 +570,10 @@ async def execute_tool(
             if action == "delete":
                 cat = await crud.category.get(db=db, id=args["id"])
                 if not cat or cat.owner_id != user.id:
-                    return _err("Category not found")
+                    return _err("Category not found"), None
                 await crud.category.remove(db=db, id=args["id"])
                 return _ok({"id": args["id"], "deleted": True}), "category_deleted"
-            return _err("Invalid action for manage_category")
+            return _err("Invalid action for manage_category"), None
 
         if tool_name == "manage_subcategory":
             action = args.get("action")
@@ -553,7 +581,7 @@ async def execute_tool(
                 obj = schemas.SubcategoryCreate(**args.get("data", {}))
                 cat = await crud.category.get(db=db, id=obj.category_id)
                 if not cat or cat.owner_id != user.id:
-                    return _err("Parent category not found")
+                    return _err("Parent category not found"), None
                 created = await crud.subcategory.create_with_owner(
                     db=db, obj_in=obj, owner_id=user.id
                 )
@@ -561,7 +589,7 @@ async def execute_tool(
             if action == "update":
                 sub = await crud.subcategory.get(db=db, id=args["id"])
                 if not sub or sub.owner_id != user.id:
-                    return _err("Subcategory not found")
+                    return _err("Subcategory not found"), None
                 updated = await crud.subcategory.update(
                     db=db,
                     db_obj=sub,
@@ -571,10 +599,10 @@ async def execute_tool(
             if action == "delete":
                 sub = await crud.subcategory.get(db=db, id=args["id"])
                 if not sub or sub.owner_id != user.id:
-                    return _err("Subcategory not found")
+                    return _err("Subcategory not found"), None
                 await crud.subcategory.remove(db=db, id=args["id"])
                 return _ok({"id": args["id"], "deleted": True}), "subcategory_deleted"
-            return _err("Invalid action for manage_subcategory")
+            return _err("Invalid action for manage_subcategory"), None
 
         if tool_name == "list_places":
             places = await crud.place.get_multi_by_owner(
@@ -593,7 +621,7 @@ async def execute_tool(
             if action == "update":
                 place = await crud.place.get(db=db, id=args["id"])
                 if not place or place.owner_id != user.id:
-                    return _err("Place not found")
+                    return _err("Place not found"), None
                 updated = await crud.place.update(
                     db=db, db_obj=place, obj_in=schemas.PlaceUpdate(**args.get("data", {}))
                 )
@@ -601,10 +629,10 @@ async def execute_tool(
             if action == "delete":
                 place = await crud.place.get(db=db, id=args["id"])
                 if not place or place.owner_id != user.id:
-                    return _err("Place not found")
+                    return _err("Place not found"), None
                 await crud.place.remove(db=db, id=args["id"])
                 return _ok({"id": args["id"], "deleted": True}), "place_deleted"
-            return _err("Invalid action for manage_place")
+            return _err("Invalid action for manage_place"), None
 
         if tool_name == "create_expense":
             data = dict(args)
@@ -618,10 +646,12 @@ async def execute_tool(
 
         if tool_name == "update_expense":
             expense = await _owned_expense(db, user, args["id"])
+            obj_in = schemas.ExpenseUpdate(**(args.get("data") or {}))
+            update_data = _transaction_update_data(obj_in.dict(exclude_unset=True))
             updated = await crud.expense.update(
                 db=db,
                 db_obj=expense,
-                obj_in=schemas.ExpenseUpdate(**args.get("data", {})),
+                obj_in=update_data,
             )
             await invalidate_user_cache(user.id)
             return _ok(jsonable_encoder(updated)), "expense_updated"
@@ -642,10 +672,12 @@ async def execute_tool(
 
         if tool_name == "update_income":
             income = await _owned_income(db, user, args["id"])
+            obj_in = schemas.IncomeUpdate(**(args.get("data") or {}))
+            update_data = _transaction_update_data(obj_in.dict(exclude_unset=True))
             updated = await crud.income.update(
                 db=db,
                 db_obj=income,
-                obj_in=schemas.IncomeUpdate(**args.get("data", {})),
+                obj_in=update_data,
             )
             await invalidate_user_cache(user.id)
             return _ok(jsonable_encoder(updated)), "income_updated"
@@ -677,10 +709,12 @@ async def execute_tool(
 
         if tool_name == "update_transfer":
             transfer = await _owned_transfer(db, user, args["id"])
+            obj_in = schemas.TransferUpdate(**(args.get("data") or {}))
+            update_data = _transaction_update_data(obj_in.dict(exclude_unset=True))
             updated = await crud.transfer.update(
                 db=db,
                 db_obj=transfer,
-                obj_in=schemas.TransferUpdate(**args.get("data", {})),
+                obj_in=update_data,
             )
             await invalidate_user_cache(user.id)
             return _ok(jsonable_encoder(updated)), "transfer_updated"
@@ -807,7 +841,7 @@ async def execute_tool(
             obj = schemas.BalanceAdjustmentCreate(**args)
             account = await crud.account.get(db=db, id=obj.account_id)
             if not account or account.owner_id != user.id:
-                return _err("Account not found")
+                return _err("Account not found"), None
             old_balance = account.current_balance
             adjustment = await crud.balance_adjustment.create_with_user(
                 db=db,
@@ -833,7 +867,7 @@ async def execute_tool(
                     db, owner_id=user.id, id=args["account_id"]
                 )
                 if not account:
-                    return _err("Account not found")
+                    return _err("Account not found"), None
                 items = await crud.balance_adjustment.get_by_account(
                     db=db, account_id=args["account_id"]
                 )
@@ -851,7 +885,7 @@ async def execute_tool(
             )
             return _ok({"submitted": True}), "feedback_submitted"
 
-        return _err(f"Unknown tool: {tool_name}")
+        return _err(f"Unknown tool: {tool_name}"), None
 
     except ToolExecutionError as e:
         return _err(e.message), None
@@ -972,7 +1006,7 @@ TOOL_DEFINITIONS: list[dict] = [
                     "place_id": {"type": "integer"},
                     "description": {"type": "string"},
                 },
-                "required": ["amount"],
+                "required": ["amount", "date"],
             },
         },
     },
@@ -1007,7 +1041,7 @@ TOOL_DEFINITIONS: list[dict] = [
         "type": "function",
         "function": {
             "name": "create_income",
-            "description": "Create an income. amount is required. User must confirm in chat before saving.",
+            "description": "Create an income. amount is required. if no date is provided, today's date will be used. User must confirm in chat before saving.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1239,8 +1273,10 @@ Rules:
 - Match IDs only from the bootstrap lists below or from prior tool results.
 - Date filter types: date (YYYY-MM-DD), week (YYYY-MM-DD start), month (YYYY-MM), quarter (YYYY-Q1), year (YYYY), range (YYYY-MM-DD:YYYY-MM-DD).
 - Deletes and bulk deletes require user confirmation; when you call those tools, explain what will be deleted and wait for confirmation.
-- Reply in the same language the user uses.
+- Reply in spanish.
 - Be concise and friendly.
+- Never return ids information.
+- Today is {date.today().isoformat()}.
 
 Bootstrap data:
 {json.dumps(bootstrap, ensure_ascii=False)}
