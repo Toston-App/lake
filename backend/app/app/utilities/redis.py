@@ -148,6 +148,164 @@ async def get_cached(
         return None
 
 
+# ==================== Chat conversation storage ====================
+
+CHAT_CONVERSATION_PREFIX = "chat:conv"
+CHAT_USER_INDEX_PREFIX = "chat:user"
+CHAT_PENDING_PREFIX = "chat:pending"
+CHAT_PENDING_TTL = 1800
+
+
+def _chat_conversation_key(conversation_id: str) -> str:
+    return f"{CHAT_CONVERSATION_PREFIX}:{conversation_id}"
+
+
+def _chat_user_index_key(user_id: int) -> str:
+    return f"{CHAT_USER_INDEX_PREFIX}:{user_id}"
+
+
+def _chat_pending_key(action_id: str) -> str:
+    return f"{CHAT_PENDING_PREFIX}:{action_id}"
+
+
+async def get_conversation(conversation_id: str, user_id: int) -> dict | None:
+    """Load a conversation if it belongs to the user."""
+    try:
+        key = _chat_conversation_key(conversation_id)
+        raw = await r.get(key)
+        if not raw:
+            return None
+        data = json.loads(raw)
+        if data.get("user_id") != user_id:
+            return None
+        return data
+    except (Exception, json.JSONDecodeError) as e:
+        logging.error(f"Error loading conversation {conversation_id}: {e}")
+        return None
+
+
+async def save_conversation(
+    conversation_id: str,
+    user_id: int,
+    messages: list[dict],
+    title: str,
+    ttl: int,
+) -> bool:
+    """Persist conversation messages and update the user's conversation index."""
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        payload = {
+            "id": conversation_id,
+            "user_id": user_id,
+            "title": title,
+            "messages": messages,
+            "updated_at": now,
+        }
+        conv_key = _chat_conversation_key(conversation_id)
+        await r.set(conv_key, json.dumps(payload, cls=DateEncoder))
+        await r.expire(conv_key, ttl)
+
+        index_key = _chat_user_index_key(user_id)
+        await r.hset(index_key, conversation_id, json.dumps({"title": title, "updated_at": now}))
+        await r.expire(index_key, ttl)
+        return True
+    except Exception as e:
+        logging.error(f"Error saving conversation {conversation_id}: {e}")
+        return False
+
+
+async def list_user_conversations(user_id: int) -> list[dict]:
+    """List conversation summaries for a user."""
+    try:
+        index_key = _chat_user_index_key(user_id)
+        entries = await r.hgetall(index_key)
+        if not entries:
+            return []
+        result = []
+        for conv_id, meta_raw in entries.items():
+            meta = json.loads(meta_raw)
+            conv = await get_conversation(conv_id, user_id)
+            preview = None
+            if conv and conv.get("messages"):
+                last = conv["messages"][-1]
+                preview = (last.get("content") or "")[:120]
+            result.append(
+                {
+                    "id": conv_id,
+                    "title": meta.get("title") or "Conversation",
+                    "updated_at": meta.get("updated_at"),
+                    "last_message_preview": preview,
+                }
+            )
+        result.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+        return result
+    except Exception as e:
+        logging.error(f"Error listing conversations for user {user_id}: {e}")
+        return []
+
+
+async def delete_conversation(conversation_id: str, user_id: int) -> bool:
+    try:
+        conv = await get_conversation(conversation_id, user_id)
+        if not conv:
+            return False
+        await r.delete(_chat_conversation_key(conversation_id))
+        await r.hdel(_chat_user_index_key(user_id), conversation_id)
+        return True
+    except Exception as e:
+        logging.error(f"Error deleting conversation {conversation_id}: {e}")
+        return False
+
+
+async def store_pending_action(
+    action_id: str,
+    user_id: int,
+    conversation_id: str,
+    tool_name: str,
+    tool_args: dict,
+    preview: dict,
+    expire_time: int = CHAT_PENDING_TTL,
+) -> bool:
+    try:
+        payload = {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "tool_name": tool_name,
+            "tool_args": tool_args,
+            "preview": preview,
+        }
+        key = _chat_pending_key(action_id)
+        await r.set(key, json.dumps(payload, cls=DateEncoder))
+        await r.expire(key, expire_time)
+        return True
+    except Exception as e:
+        logging.error(f"Error storing pending action {action_id}: {e}")
+        return False
+
+
+async def get_pending_action(action_id: str, user_id: int) -> dict | None:
+    try:
+        raw = await r.get(_chat_pending_key(action_id))
+        if not raw:
+            return None
+        data = json.loads(raw)
+        if data.get("user_id") != user_id:
+            return None
+        return data
+    except (Exception, json.JSONDecodeError) as e:
+        logging.error(f"Error loading pending action {action_id}: {e}")
+        return None
+
+
+async def delete_pending_action(action_id: str) -> bool:
+    try:
+        await r.delete(_chat_pending_key(action_id))
+        return True
+    except Exception as e:
+        logging.error(f"Error deleting pending action {action_id}: {e}")
+        return False
+
+
 async def invalidate_user_cache(user_id: int) -> bool:
     """Delete all cached dashboard data for a user using SCAN + DEL."""
     try:

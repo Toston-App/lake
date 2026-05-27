@@ -4,6 +4,7 @@ from app.api.api_v1.endpoints import (
     accounts,
     # ai, # Disabled OCR AI endpoint
     balance_adjustments,
+    chat,
     categories,
     demo_data,
     expenses,
@@ -48,3 +49,4 @@ api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"]
 api_router.include_router(waha.router, prefix="/waha", tags=["whatsapp", "waha"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(recap.router, prefix="/recap", tags=["recap"])
+api_router.include_router(chat.router, prefix="/chat", tags=["chat"])

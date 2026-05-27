@@ -163,6 +163,12 @@ class Settings(BaseSettings):
     OPENROUTER_SITE_URL: Optional[str] = None
     OPENROUTER_APP_NAME: Optional[str] = None
 
+    # Chat agent
+    CHAT_ENABLED: bool = True
+    CHAT_MAX_TOOL_ROUNDS: int = 8
+    CHAT_CONVERSATION_TTL_SECONDS: int = 60 * 60 * 24 * 7
+    CHAT_MODEL: Optional[str] = None
+
     # Feedback
     TELEGRAM_BOT_TOKEN: str
     TELEGRAM_OWNER_ID: str
