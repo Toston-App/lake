@@ -65,6 +65,15 @@ export type UiMessage = {
   created_at?: string
   actions?: ChatAction[]
   toolSteps?: ToolStep[]
+  streaming?: boolean
+}
+
+export type ChatStreamHandlers = {
+  onMeta: (conversationId: string) => void
+  onToken: (delta: string) => void
+  onToolStep: (step: ToolStep) => void
+  onDone: (response: ChatMessageResponse) => void
+  onError: (detail: string) => void
 }
 
 export type Balance = {

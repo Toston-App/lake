@@ -109,6 +109,23 @@ export function useChat() {
     [],
   )
 
+  const updateStreamingAssistant = useCallback(
+    (
+      updater: (msg: UiMessage) => UiMessage,
+    ) => {
+      setMessages((prev) => {
+        const idx = prev.findLastIndex(
+          (m) => m.role === 'assistant' && m.streaming,
+        )
+        if (idx < 0) return prev
+        const next = [...prev]
+        next[idx] = updater(next[idx])
+        return next
+      })
+    },
+    [],
+  )
+
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim()
@@ -117,28 +134,80 @@ export function useChat() {
       setError(null)
       setPendingConfirmation(null)
       const userMessage: UiMessage = { role: 'user', content: trimmed }
-      setMessages((prev) => [...prev, userMessage])
+      const streamingPlaceholder: UiMessage = {
+        role: 'assistant',
+        content: '',
+        streaming: true,
+        toolSteps: [],
+      }
+      setMessages((prev) => [...prev, userMessage, streamingPlaceholder])
       setIsLoading(true)
 
+      let streamFailed = false
+
       try {
-        const response = await chatApi.sendMessage({
-          message: trimmed,
-          conversation_id: conversationId ?? undefined,
-        })
-        setConversationId(response.conversation_id)
-        appendAssistantMessage(
-          response.reply,
-          response.actions,
-          response.tool_steps,
+        await chatApi.sendMessageStream(
+          {
+            message: trimmed,
+            conversation_id: conversationId ?? undefined,
+          },
+          {
+            onMeta: (id) => setConversationId(id),
+            onToken: (delta) => {
+              updateStreamingAssistant((m) => ({
+                ...m,
+                content: m.content + delta,
+              }))
+            },
+            onToolStep: (step) => {
+              updateStreamingAssistant((m) => ({
+                ...m,
+                toolSteps: [...(m.toolSteps ?? []), step],
+              }))
+            },
+            onDone: (response) => {
+              setConversationId(response.conversation_id)
+              setMessages((prev) => {
+                const idx = prev.findLastIndex(
+                  (m) => m.role === 'assistant' && m.streaming,
+                )
+                if (idx < 0) return prev
+                const next = [...prev]
+                next[idx] = {
+                  role: 'assistant',
+                  content: response.reply,
+                  actions:
+                    response.actions.length > 0
+                      ? response.actions
+                      : undefined,
+                  toolSteps:
+                    response.tool_steps.length > 0
+                      ? response.tool_steps
+                      : undefined,
+                  streaming: false,
+                }
+                return next
+              })
+              if (response.pending_confirmation) {
+                setPendingConfirmation(response.pending_confirmation)
+              }
+            },
+            onError: (detail) => {
+              streamFailed = true
+              setError(detail)
+            },
+          },
         )
-        if (response.pending_confirmation) {
-          setPendingConfirmation(response.pending_confirmation)
+        if (!streamFailed) {
+          await refreshConversations()
         }
-        await refreshConversations()
       } catch (err) {
-        setMessages((prev) => prev.slice(0, -1))
+        setMessages((prev) => prev.slice(0, -2))
         setError(formatError(err))
       } finally {
+        if (streamFailed) {
+          setMessages((prev) => prev.slice(0, -2))
+        }
         setIsLoading(false)
       }
     },
@@ -147,7 +216,7 @@ export function useChat() {
       formatError,
       isLoading,
       refreshConversations,
-      appendAssistantMessage,
+      updateStreamingAssistant,
     ],
   )
 

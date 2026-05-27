@@ -10,6 +10,7 @@ type MessageListProps = {
 
 export function MessageList({ messages, isLoading }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const hasStreamingMessage = messages.some((m) => m.streaming)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -28,7 +29,7 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
           message={msg}
         />
       ))}
-      {isLoading && (
+      {isLoading && !hasStreamingMessage && (
         <div className="message message-assistant">
           <div className="message-bubble message-bubble-thinking">
             <ThinkingPanel isActive />

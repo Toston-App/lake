@@ -1,6 +1,7 @@
 import type { UiMessage } from '../types/chat'
 import { MarkdownContent } from './MarkdownContent'
 import { MessageActions } from './MessageActions'
+import { ThinkingPanel } from './ThinkingPanel'
 import { ToolStepsList } from './ToolStepsList'
 
 type MessageBubbleProps = {
@@ -17,12 +18,30 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           <p className="message-plain">{message.content}</p>
         ) : (
           <>
-            {message.toolSteps && message.toolSteps.length > 0 && (
-              <ToolStepsList steps={message.toolSteps} />
-            )}
-            <MarkdownContent content={message.content} />
-            {message.actions && message.actions.length > 0 && (
-              <MessageActions actions={message.actions} />
+            {message.streaming ? (
+              <>
+                <ThinkingPanel
+                  isActive
+                  steps={
+                    message.toolSteps && message.toolSteps.length > 0
+                      ? message.toolSteps
+                      : undefined
+                  }
+                />
+                {message.content ? (
+                  <MarkdownContent content={message.content} />
+                ) : null}
+              </>
+            ) : (
+              <>
+                {message.toolSteps && message.toolSteps.length > 0 && (
+                  <ToolStepsList steps={message.toolSteps} />
+                )}
+                <MarkdownContent content={message.content} />
+                {message.actions && message.actions.length > 0 && (
+                  <MessageActions actions={message.actions} />
+                )}
+              </>
             )}
           </>
         )}
