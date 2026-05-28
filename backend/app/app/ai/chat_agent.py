@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.ai.chat_tools import (
     TOOL_DEFINITIONS,
+    append_ui_rendered_reply_hint,
     build_pending_preview,
     build_system_prompt,
     execute_tool,
@@ -347,6 +348,10 @@ class ChatAgent:
                     "content": json.dumps(result, ensure_ascii=False),
                 }
             )
+
+        append_ui_rendered_reply_hint(
+            state.messages, [a.type for a in state.actions]
+        )
 
     async def stream_turn(
         self,

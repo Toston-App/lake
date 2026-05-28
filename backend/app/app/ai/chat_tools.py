@@ -48,6 +48,33 @@ TRANSACTION_WRITE_TOOLS = frozenset(
     }
 )
 
+# Action types whose payload the chat client renders as structured UI cards.
+UI_RENDERED_ACTION_TYPES = frozenset(
+    {
+        "accounts_listed",
+        "categories_listed",
+        "places_listed",
+        "transactions_searched",
+        "balance_adjustments_listed",
+        "summary_fetched",
+        "charts_fetched",
+    }
+)
+
+UI_RENDERED_REPLY_HINT = (
+    "The user's app already displays the tool results as structured cards from "
+    "actions. Reply in Spanish in at most 2 short sentences. Do not list, bullet, "
+    "or repeat names, amounts, or balances from the tool output."
+)
+
+
+def append_ui_rendered_reply_hint(messages: list[dict], action_types: list[str]) -> bool:
+    """Append an ephemeral model hint when UI-rendered actions are present."""
+    if not any(t in UI_RENDERED_ACTION_TYPES for t in action_types):
+        return False
+    messages.append({"role": "developer", "content": UI_RENDERED_REPLY_HINT})
+    return True
+
 
 class ToolExecutionError(Exception):
     def __init__(self, message: str):
@@ -1114,6 +1141,9 @@ Rules:
 - Reply in spanish.
 - Be concise and friendly.
 - Never return ids information.
+- When a tool returns data the client shows from actions (lists, search results, period summary, charts), do not enumerate accounts, categories, places, transactions, balances, chart numbers, or summary figures in your reply. Use at most 1-2 short sentences: acknowledgment, context, or a follow-up question.
+- For mutations (create/update/delete), a brief confirmation is fine; avoid repeating every field if the client shows a receipt card.
+- If a tool failed, explain the error in prose.
 - Today is {date.today().isoformat()}.
 
 Bootstrap data:

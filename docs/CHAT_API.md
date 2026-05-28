@@ -323,6 +323,8 @@ On failure, `reply` contains the error message and `actions` is empty.
 
 Assistant text for display. Written in Spanish. The agent is instructed not to expose internal IDs in prose, but structured data is available in `actions`.
 
+For turns where `actions` include UI-rendered types (`accounts_listed`, `categories_listed`, `places_listed`, `transactions_searched`, `balance_adjustments_listed`, `summary_fetched`, `charts_fetched`), clients should render the structured payload from `actions` and treat `reply` as short commentary only (acknowledgment or follow-up question). The agent is instructed not to repeat lists, balances, or chart/summary figures in `reply` when those actions are present.
+
 ### `actions[]`
 
 Structured side effects from completed tools in the current turn. Use these to render rich UI (summary cards, charts, transaction lists) without parsing natural language.
