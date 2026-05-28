@@ -5,8 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.api import deps
-from app.api.api_v1.endpoints.expenses import create_expenses_bulk, delete_expenses_bulk
-from app.api.api_v1.endpoints.incomes import create_incomes_bulk, delete_incomes_bulk
+from app.services import transactions as transaction_service
+from app.services.errors import ServiceError, raise_http
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -17,18 +17,14 @@ async def process_bulk_deletion(
     ids: list[int],
     delete_function: callable,
     current_user: models.User,
-    entity_type: str,
-    request: Request,
 ) -> list[int]:
     """Helper function to process bulk deletions"""
     if not ids:
         return []
 
     try:
-        ids_str = ",".join(str(x) for x in ids)
-        result = await delete_function(db=db, ids=ids_str, current_user=current_user, request=request)
-
-        return result.deleted_ids
+        removed = await delete_function(db=db, user=current_user, ids=ids)
+        return [item.id for item in removed]
     except Exception:
         return []
 
@@ -55,23 +51,21 @@ async def bulk_delete(
     )
 
     with timed() as t:
-        incomes_result = await process_bulk_deletion(
-            db=db,
-            ids=to_delete.incomes or [],
-            delete_function=delete_incomes_bulk,
-            current_user=current_user,
-            entity_type="incomes",
-            request=request,
-        )
-
-        expenses_result = await process_bulk_deletion(
-            db=db,
-            ids=to_delete.expenses or [],
-            delete_function=delete_expenses_bulk,
-            current_user=current_user,
-            entity_type="expenses",
-            request=request,
-        )
+        try:
+            incomes_result = await process_bulk_deletion(
+                db=db,
+                ids=to_delete.incomes or [],
+                delete_function=lambda db, user, ids: transaction_service.delete_incomes_bulk(db, user, ids),
+                current_user=current_user,
+            )
+            expenses_result = await process_bulk_deletion(
+                db=db,
+                ids=to_delete.expenses or [],
+                delete_function=lambda db, user, ids: transaction_service.delete_expenses_bulk(db, user, ids),
+                current_user=current_user,
+            )
+        except ServiceError as exc:
+            raise_http(exc)
 
     enrich_event(
         request,
@@ -111,12 +105,11 @@ async def bulk_create(
     )
 
     with timed() as t:
-        incomes_result = await create_incomes_bulk(
-            db=db, incomes_in=to_create.incomes, current_user=current_user, request=request
+        incomes_result = await transaction_service.create_incomes_bulk(
+            db, current_user, to_create.incomes or []
         )
-
-        expenses_result = await create_expenses_bulk(
-            db=db, expenses_in=to_create.expenses, current_user=current_user, request=request
+        expenses_result = await transaction_service.create_expenses_bulk(
+            db, current_user, to_create.expenses or []
         )
 
     enrich_event(

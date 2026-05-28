@@ -262,3 +262,106 @@ async def test_confirm_pending_action(
                     )
     assert response.status_code == 200
     assert "profile" in response.json()["reply"].lower() or response.json()["actions"]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_delete_income_uses_shared_side_effects(
+    async_get_db: AsyncSession,
+):
+    from app import crud, schemas
+    from app.services import transactions as transaction_service
+
+    user = await crud.user.get_by_email(async_get_db, email=settings.EMAIL_TEST_USER)
+    account = await crud.account.create_with_owner(
+        async_get_db,
+        obj_in=schemas.AccountCreate(
+            name="Chat Income Parity", initial_balance=0, color="#168FFF"
+        ),
+        owner_id=user.id,
+    )
+    category = await crud.category.create_with_owner(
+        async_get_db,
+        obj_in=schemas.CategoryCreate(
+            name="Chat Income Category", color="#168FFF", is_income=True
+        ),
+        owner_id=user.id,
+    )
+    subcategory = await crud.subcategory.create_with_owner(
+        async_get_db,
+        obj_in=schemas.SubcategoryCreate(
+            name="Chat Income Subcategory", category_id=category.id
+        ),
+        owner_id=user.id,
+    )
+    income = await transaction_service.create_income(
+        async_get_db,
+        user,
+        schemas.IncomeCreate(
+            amount=42,
+            date="2026-05-27",
+            account_id=account.id,
+            subcategory_id=subcategory.id,
+            made_from="Chat",
+        ),
+    )
+
+    result, action_type = await execute_tool(
+        "delete_income", {"id": income.id}, async_get_db, user, confirmed=True
+    )
+
+    assert result["success"] is True
+    assert action_type == "income_deleted"
+    await async_get_db.refresh(account)
+    await async_get_db.refresh(category)
+    await async_get_db.refresh(subcategory)
+    assert account.total_incomes == 0
+    assert account.current_balance == 0
+    assert category.total == 0
+    assert subcategory.total == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_delete_transfer_uses_shared_side_effects(
+    async_get_db: AsyncSession,
+):
+    from app import crud, schemas
+    from app.services import transactions as transaction_service
+
+    user = await crud.user.get_by_email(async_get_db, email=settings.EMAIL_TEST_USER)
+    source = await crud.account.create_with_owner(
+        async_get_db,
+        obj_in=schemas.AccountCreate(
+            name="Chat Transfer Source", initial_balance=0, color="#168FFF"
+        ),
+        owner_id=user.id,
+    )
+    destination = await crud.account.create_with_owner(
+        async_get_db,
+        obj_in=schemas.AccountCreate(
+            name="Chat Transfer Destination", initial_balance=0, color="#168FFF"
+        ),
+        owner_id=user.id,
+    )
+    transfer = await transaction_service.create_transfer(
+        async_get_db,
+        user,
+        schemas.TransferCreate(
+            amount=25,
+            date="2026-05-27",
+            from_acc=source.id,
+            to_acc=destination.id,
+        ),
+    )
+
+    result, action_type = await execute_tool(
+        "delete_transfer", {"id": transfer.id}, async_get_db, user, confirmed=True
+    )
+
+    assert result["success"] is True
+    assert action_type == "transfer_deleted"
+    await async_get_db.refresh(source)
+    await async_get_db.refresh(destination)
+    assert source.total_transfers_out == 0
+    assert source.current_balance == 0
+    assert destination.total_transfers_in == 0
+    assert destination.current_balance == 0

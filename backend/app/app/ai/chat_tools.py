@@ -7,15 +7,18 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api.deps import DateFilterType
-from app.crud import crud_transaction
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
+from app.services import accounts as account_service
+from app.services import balance_adjustments as balance_adjustment_service
+from app.services import catalog as catalog_service
+from app.services import feedback as feedback_service
+from app.services import transactions as transaction_service
+from app.services.errors import ServiceError
 from app.services.v3_dashboard import fetch_period_charts, fetch_period_summary
-from app.utilities.redis import invalidate_user_cache
 
 CHAT_MADE_FROM = "Chat"
 LIST_LIMIT = 100
@@ -456,44 +459,6 @@ async def _owned_transfer(db, user, transfer_id: int):
     return transfer
 
 
-async def _delete_expense_record(db: AsyncSession, user: models.User, expense_id: int):
-    expense = await _owned_expense(db, user, expense_id)
-    if expense.category_id:
-        category = await crud.category.get(db=db, id=expense.category_id)
-        if category:
-            await db.execute(
-                updateDb(category.__class__)
-                .where(category.__class__.id == category.id)
-                .values(total=category.total - expense.amount)
-                .execution_options(synchronize_session="fetch")
-            )
-            await db.commit()
-    if expense.subcategory_id:
-        subcategory = await crud.subcategory.get(db=db, id=expense.subcategory_id)
-        if subcategory:
-            await db.execute(
-                updateDb(subcategory.__class__)
-                .where(subcategory.__class__.id == subcategory.id)
-                .values(total=subcategory.total - expense.amount)
-                .execution_options(synchronize_session="fetch")
-            )
-            await db.commit()
-    removed = await crud.expense.remove(db=db, id=expense_id)
-    await crud.user.update_balance(
-        db=db, user_id=user.id, is_Expense=True, amount=-removed.amount
-    )
-    if removed.account_id:
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=user.id,
-            id=removed.account_id,
-            column="total_expenses",
-            amount=-removed.amount,
-        )
-    await invalidate_user_cache(user.id)
-    return removed
-
-
 async def execute_tool(
     tool_name: str,
     args: dict,
@@ -506,13 +471,14 @@ async def execute_tool(
     Run a tool. Returns (result_dict, action_type for ChatAction).
     Raises ToolExecutionError on validation failures.
     """
+    _ = confirmed
     try:
         if tool_name == "get_user_profile":
             return _ok({"country": user.country, "name": user.name, "id": user.id}), "profile_fetched"
 
         if tool_name == "list_accounts":
-            accounts = await crud.account.get_multi_by_owner(
-                db=db, owner_id=user.id, skip=0, limit=LIST_LIMIT
+            accounts = await account_service.list_accounts(
+                db, user, skip=0, limit=LIST_LIMIT
             )
             return _ok([_slim_account(a) for a in accounts]), "accounts_listed"
 
@@ -520,34 +486,26 @@ async def execute_tool(
             action = args.get("action")
             if action == "create":
                 obj = schemas.AccountCreate(**args.get("data", {}))
-                created = await crud.account.create_with_owner(
-                    db=db, obj_in=obj, owner_id=user.id
-                )
-                await invalidate_user_cache(user.id)
+                created = await account_service.create_account(db, user, obj)
                 return _ok(_slim_account(created)), "account_created"
             if action == "update":
                 acc_id = args["id"]
-                account = await crud.account.get_by_id(db, owner_id=user.id, id=acc_id)
-                if not account:
-                    return _err("Account not found"), None
-                updated = await crud.account.update(
-                    db=db, db_obj=account, obj_in=schemas.AccountUpdate(**args.get("data", {}))
+                updated = await account_service.update_account(
+                    db,
+                    user,
+                    acc_id,
+                    account_in=schemas.AccountUpdate(**args.get("data", {})),
                 )
-                await invalidate_user_cache(user.id)
                 return _ok(_slim_account(updated)), "account_updated"
             if action == "delete":
                 acc_id = args["id"]
-                account = await crud.account.get_by_id(db, owner_id=user.id, id=acc_id)
-                if not account:
-                    return _err("Account not found"), None
-                await crud.account.remove(db=db, id=acc_id)
-                await invalidate_user_cache(user.id)
+                await account_service.delete_account(db, user, acc_id)
                 return _ok({"id": acc_id, "deleted": True}), "account_deleted"
             return _err("Invalid action for manage_account"), None
 
         if tool_name == "list_categories":
-            categories = await crud.category.get_multi_by_owner(
-                db=db, owner_id=user.id, skip=0, limit=LIST_LIMIT
+            categories = await catalog_service.list_categories(
+                db, user, skip=0, limit=LIST_LIMIT
             )
             return _ok([_slim_category(c) for c in categories]), "categories_listed"
 
@@ -555,23 +513,18 @@ async def execute_tool(
             action = args.get("action")
             if action == "create":
                 obj = schemas.CategoryCreate(**args.get("data", {}))
-                created = await crud.category.create_with_owner(
-                    db=db, obj_in=obj, owner_id=user.id
-                )
+                created = await catalog_service.create_category(db, user, obj)
                 return _ok(jsonable_encoder(created)), "category_created"
             if action == "update":
-                cat = await crud.category.get(db=db, id=args["id"])
-                if not cat or cat.owner_id != user.id:
-                    return _err("Category not found"), None
-                updated = await crud.category.update(
-                    db=db, db_obj=cat, obj_in=schemas.CategoryUpdate(**args.get("data", {}))
+                updated = await catalog_service.update_category(
+                    db,
+                    user,
+                    args["id"],
+                    schemas.CategoryUpdate(**args.get("data", {})),
                 )
                 return _ok(jsonable_encoder(updated)), "category_updated"
             if action == "delete":
-                cat = await crud.category.get(db=db, id=args["id"])
-                if not cat or cat.owner_id != user.id:
-                    return _err("Category not found"), None
-                await crud.category.remove(db=db, id=args["id"])
+                await catalog_service.delete_category(db, user, args["id"])
                 return _ok({"id": args["id"], "deleted": True}), "category_deleted"
             return _err("Invalid action for manage_category"), None
 
@@ -579,34 +532,24 @@ async def execute_tool(
             action = args.get("action")
             if action == "create":
                 obj = schemas.SubcategoryCreate(**args.get("data", {}))
-                cat = await crud.category.get(db=db, id=obj.category_id)
-                if not cat or cat.owner_id != user.id:
-                    return _err("Parent category not found"), None
-                created = await crud.subcategory.create_with_owner(
-                    db=db, obj_in=obj, owner_id=user.id
-                )
+                created = await catalog_service.create_subcategory(db, user, obj)
                 return _ok(jsonable_encoder(created)), "subcategory_created"
             if action == "update":
-                sub = await crud.subcategory.get(db=db, id=args["id"])
-                if not sub or sub.owner_id != user.id:
-                    return _err("Subcategory not found"), None
-                updated = await crud.subcategory.update(
+                updated = await catalog_service.update_subcategory(
                     db=db,
-                    db_obj=sub,
-                    obj_in=schemas.SubcategoryUpdate(**args.get("data", {})),
+                    user=user,
+                    subcategory_id=args["id"],
+                    subcategory_in=schemas.SubcategoryUpdate(**args.get("data", {})),
                 )
                 return _ok(jsonable_encoder(updated)), "subcategory_updated"
             if action == "delete":
-                sub = await crud.subcategory.get(db=db, id=args["id"])
-                if not sub or sub.owner_id != user.id:
-                    return _err("Subcategory not found"), None
-                await crud.subcategory.remove(db=db, id=args["id"])
+                await catalog_service.delete_subcategory(db, user, args["id"])
                 return _ok({"id": args["id"], "deleted": True}), "subcategory_deleted"
             return _err("Invalid action for manage_subcategory"), None
 
         if tool_name == "list_places":
-            places = await crud.place.get_multi_by_owner(
-                db=db, owner_id=user.id, skip=0, limit=LIST_LIMIT
+            places = await catalog_service.list_places(
+                db, user, skip=0, limit=LIST_LIMIT
             )
             return _ok([_slim_place(p) for p in places]), "places_listed"
 
@@ -614,23 +557,18 @@ async def execute_tool(
             action = args.get("action")
             if action == "create":
                 obj = schemas.PlaceCreate(**args.get("data", {}))
-                created = await crud.place.create_with_owner(
-                    db=db, obj_in=obj, owner_id=user.id
-                )
+                created = await catalog_service.create_place(db, user, obj)
                 return _ok(_slim_place(created)), "place_created"
             if action == "update":
-                place = await crud.place.get(db=db, id=args["id"])
-                if not place or place.owner_id != user.id:
-                    return _err("Place not found"), None
-                updated = await crud.place.update(
-                    db=db, db_obj=place, obj_in=schemas.PlaceUpdate(**args.get("data", {}))
+                updated = await catalog_service.update_place(
+                    db,
+                    user,
+                    args["id"],
+                    schemas.PlaceUpdate(**args.get("data", {})),
                 )
                 return _ok(_slim_place(updated)), "place_updated"
             if action == "delete":
-                place = await crud.place.get(db=db, id=args["id"])
-                if not place or place.owner_id != user.id:
-                    return _err("Place not found"), None
-                await crud.place.remove(db=db, id=args["id"])
+                await catalog_service.delete_place(db, user, args["id"])
                 return _ok({"id": args["id"], "deleted": True}), "place_deleted"
             return _err("Invalid action for manage_place"), None
 
@@ -638,91 +576,52 @@ async def execute_tool(
             data = dict(args)
             data.setdefault("made_from", CHAT_MADE_FROM)
             obj = schemas.ExpenseCreate(**data)
-            created = await crud.expense.create_with_owner(
-                db=db, obj_in=obj, owner_id=user.id
-            )
-            await invalidate_user_cache(user.id)
+            created = await transaction_service.create_expense(db, user, obj)
             return _ok(jsonable_encoder(created)), "expense_created"
 
         if tool_name == "update_expense":
-            expense = await _owned_expense(db, user, args["id"])
             obj_in = schemas.ExpenseUpdate(**(args.get("data") or {}))
-            update_data = _transaction_update_data(obj_in.dict(exclude_unset=True))
-            updated = await crud.expense.update(
-                db=db,
-                db_obj=expense,
-                obj_in=update_data,
+            updated = await transaction_service.update_expense(
+                db, user, args["id"], obj_in
             )
-            await invalidate_user_cache(user.id)
             return _ok(jsonable_encoder(updated)), "expense_updated"
 
         if tool_name == "delete_expense":
-            await _delete_expense_record(db, user, args["id"])
+            await transaction_service.delete_expense(db, user, args["id"])
             return _ok({"id": args["id"], "deleted": True}), "expense_deleted"
 
         if tool_name == "create_income":
             data = dict(args)
             data.setdefault("made_from", CHAT_MADE_FROM)
             obj = schemas.IncomeCreate(**data)
-            created = await crud.income.create_with_owner(
-                db=db, obj_in=obj, owner_id=user.id
-            )
-            await invalidate_user_cache(user.id)
+            created = await transaction_service.create_income(db, user, obj)
             return _ok(jsonable_encoder(created)), "income_created"
 
         if tool_name == "update_income":
-            income = await _owned_income(db, user, args["id"])
             obj_in = schemas.IncomeUpdate(**(args.get("data") or {}))
-            update_data = _transaction_update_data(obj_in.dict(exclude_unset=True))
-            updated = await crud.income.update(
-                db=db,
-                db_obj=income,
-                obj_in=update_data,
+            updated = await transaction_service.update_income(
+                db, user, args["id"], obj_in
             )
-            await invalidate_user_cache(user.id)
             return _ok(jsonable_encoder(updated)), "income_updated"
 
         if tool_name == "delete_income":
-            income = await _owned_income(db, user, args["id"])
-            await crud.income.remove(db=db, id=args["id"])
-            await crud.user.update_balance(
-                db=db, user_id=user.id, is_Expense=False, amount=-income.amount
-            )
-            if income.account_id:
-                await crud.account.update_by_id_and_field(
-                    db=db,
-                    owner_id=user.id,
-                    id=income.account_id,
-                    column="total_incomes",
-                    amount=-income.amount,
-                )
-            await invalidate_user_cache(user.id)
+            await transaction_service.delete_income(db, user, args["id"])
             return _ok({"id": args["id"], "deleted": True}), "income_deleted"
 
         if tool_name == "create_transfer":
             obj = schemas.TransferCreate(**args)
-            created = await crud.transfer.create_with_owner(
-                db=db, obj_in=obj, owner_id=user.id
-            )
-            await invalidate_user_cache(user.id)
+            created = await transaction_service.create_transfer(db, user, obj)
             return _ok(jsonable_encoder(created)), "transfer_created"
 
         if tool_name == "update_transfer":
-            transfer = await _owned_transfer(db, user, args["id"])
             obj_in = schemas.TransferUpdate(**(args.get("data") or {}))
-            update_data = _transaction_update_data(obj_in.dict(exclude_unset=True))
-            updated = await crud.transfer.update(
-                db=db,
-                db_obj=transfer,
-                obj_in=update_data,
+            updated = await transaction_service.update_transfer(
+                db, user, args["id"], obj_in
             )
-            await invalidate_user_cache(user.id)
             return _ok(jsonable_encoder(updated)), "transfer_updated"
 
         if tool_name == "delete_transfer":
-            await _owned_transfer(db, user, args["id"])
-            await crud.transfer.remove(db=db, id=args["id"])
-            await invalidate_user_cache(user.id)
+            await transaction_service.delete_transfer(db, user, args["id"])
             return _ok({"id": args["id"], "deleted": True}), "transfer_deleted"
 
         if tool_name == "search_transactions":
@@ -739,9 +638,9 @@ async def execute_tool(
                 start = date.fromisoformat(start)
             if end and isinstance(end, str):
                 end = date.fromisoformat(end)
-            page = await crud_transaction.get_multi_by_owner_with_filters(
-                db=db,
-                owner_id=user.id,
+            page = await transaction_service.search_transactions(
+                db,
+                user,
                 order=order,
                 search=args.get("search"),
                 amount=args.get("amount"),
@@ -778,116 +677,55 @@ async def execute_tool(
 
         if tool_name == "bulk_create_transactions":
             bulk = schemas.BulkCreate(**args)
-            created_incomes = []
-            created_expenses = []
-            if bulk.incomes:
-                for inc in bulk.incomes:
-                    if isinstance(inc, dict):
-                        inc_data = dict(inc)
-                    elif hasattr(inc, "model_dump"):
-                        inc_data = inc.model_dump()
-                    else:
-                        inc_data = inc.dict()
-                    inc_data.setdefault("made_from", CHAT_MADE_FROM)
-                    created_incomes.append(
-                        await crud.income.create_with_owner(
-                            db=db,
-                            obj_in=schemas.IncomeCreate(**inc_data),
-                            owner_id=user.id,
-                        )
-                    )
-            if bulk.expenses:
-                for exp in bulk.expenses:
-                    if isinstance(exp, dict):
-                        exp_data = dict(exp)
-                    elif hasattr(exp, "model_dump"):
-                        exp_data = exp.model_dump()
-                    else:
-                        exp_data = exp.dict()
-                    exp_data.setdefault("made_from", CHAT_MADE_FROM)
-                    created_expenses.append(
-                        await crud.expense.create_with_owner(
-                            db=db,
-                            obj_in=schemas.ExpenseCreate(**exp_data),
-                            owner_id=user.id,
-                        )
-                    )
-            await invalidate_user_cache(user.id)
+            created = await transaction_service.bulk_create_transactions(
+                db, user, bulk, made_from=CHAT_MADE_FROM
+            )
             return _ok(
                 {
-                    "incomes": jsonable_encoder(created_incomes),
-                    "expenses": jsonable_encoder(created_expenses),
+                    "incomes": jsonable_encoder(created["incomes"]),
+                    "expenses": jsonable_encoder(created["expenses"]),
                 }
             ), "bulk_created"
 
         if tool_name == "bulk_delete_transactions":
-            income_ids = args.get("incomes") or []
-            expense_ids = args.get("expenses") or []
-            deleted_incomes = []
-            deleted_expenses = []
-            for iid in income_ids:
-                await _owned_income(db, user, iid)
-                await crud.income.remove(db=db, id=iid)
-                deleted_incomes.append(iid)
-            for eid in expense_ids:
-                await _delete_expense_record(db, user, eid)
-                deleted_expenses.append(eid)
-            await invalidate_user_cache(user.id)
+            deleted = await transaction_service.bulk_delete_transactions(
+                db, user, schemas.BulkDelete(**args)
+            )
             return _ok(
-                {"incomes": deleted_incomes, "expenses": deleted_expenses}
+                {
+                    "incomes": [item.id for item in deleted["incomes"]],
+                    "expenses": [item.id for item in deleted["expenses"]],
+                }
             ), "bulk_deleted"
 
         if tool_name == "create_balance_adjustment":
             obj = schemas.BalanceAdjustmentCreate(**args)
-            account = await crud.account.get(db=db, id=obj.account_id)
-            if not account or account.owner_id != user.id:
-                return _err("Account not found"), None
-            old_balance = account.current_balance
-            adjustment = await crud.balance_adjustment.create_with_user(
-                db=db,
-                obj_in=obj,
-                owner_id=user.id,
-                old_balance=old_balance,
+            adjustment = await balance_adjustment_service.create_balance_adjustment(
+                db, user, obj
             )
-            account_data = jsonable_encoder(account)
-            account_update = schemas.AccountUpdate(**account_data)
-            account_update.current_balance = obj.new_balance
-            await crud.account.update(db=db, db_obj=account, obj_in=account_update)
-            adjustment_amount = obj.new_balance - old_balance
-            user_data = jsonable_encoder(user)
-            user_update = schemas.UserUpdate(**user_data)
-            user_update.balance_total = user.balance_total + adjustment_amount
-            await crud.user.update(db=db, db_obj=user, obj_in=user_update)
-            await invalidate_user_cache(user.id)
             return _ok(jsonable_encoder(adjustment)), "balance_adjustment_created"
 
         if tool_name == "list_balance_adjustments":
             if args.get("account_id"):
-                account = await crud.account.get_by_id(
-                    db, owner_id=user.id, id=args["account_id"]
+                items = await balance_adjustment_service.list_balance_adjustments_by_account(
+                    db, user, args["account_id"]
                 )
-                if not account:
-                    return _err("Account not found"), None
-                items = await crud.balance_adjustment.get_by_account(
-                    db=db, account_id=args["account_id"]
-                )
-                items = [i for i in items if i.owner_id == user.id]
             else:
-                items = await crud.balance_adjustment.get_by_user(
-                    db=db, owner_id=user.id
+                items = await balance_adjustment_service.list_balance_adjustments(
+                    db, user
                 )
             return _ok(jsonable_encoder(items)), "balance_adjustments_listed"
 
         if tool_name == "submit_feedback":
             obj = schemas.FeedbackCreate(**args)
-            await crud.feedback.create_with_owner(
-                db=db, obj_in=obj, owner_id=user.id
-            )
+            await feedback_service.submit_feedback(db, user, obj)
             return _ok({"submitted": True}), "feedback_submitted"
 
         return _err(f"Unknown tool: {tool_name}"), None
 
     except ToolExecutionError as e:
+        return _err(e.message), None
+    except ServiceError as e:
         return _err(e.message), None
     except Exception as e:
         return _err(str(e)), None

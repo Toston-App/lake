@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.api import deps
-from app.crud import crud_transaction
+from app.services import transactions as transaction_service
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 from app.utilities.wide_events import enrich_event, timed
 from fastapi_pagination import Page
@@ -53,9 +53,9 @@ async def read_transactions(
     )
 
     with timed() as t:
-        transactions = await crud_transaction.get_multi_by_owner_with_filters(
-            db=db,
-            owner_id=current_user.id,
+        transactions = await transaction_service.search_transactions(
+            db,
+            current_user,
             order=order,
             search=search,
             amount=amount,
