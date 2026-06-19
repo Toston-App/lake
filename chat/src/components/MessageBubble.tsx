@@ -1,6 +1,7 @@
 import type { UiMessage } from '../types/chat'
 import { MarkdownContent } from './MarkdownContent'
 import { MessageActions } from './MessageActions'
+import { RenderDirectives } from './render/RenderDirectives'
 import { ThinkingPanel } from './ThinkingPanel'
 import { ToolStepsList } from './ToolStepsList'
 
@@ -38,9 +39,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                   <ToolStepsList steps={message.toolSteps} />
                 )}
                 <MarkdownContent content={message.content} />
-                {message.actions && message.actions.length > 0 && (
+                {message.render && message.render.length > 0 ? (
+                  <RenderDirectives directives={message.render} />
+                ) : message.actions && message.actions.length > 0 ? (
                   <MessageActions actions={message.actions} />
-                )}
+                ) : null}
               </>
             )}
           </>

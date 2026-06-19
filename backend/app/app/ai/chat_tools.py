@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api.deps import DateFilterType
+from app.ai.render_components import RENDER_COMPONENT_IDS, render_catalog_prompt
+from app.ai.web_search import search_web
+from app.core.config import settings
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 from app.services import accounts as account_service
 from app.services import balance_adjustments as balance_adjustment_service
@@ -58,6 +61,7 @@ UI_RENDERED_ACTION_TYPES = frozenset(
         "balance_adjustments_listed",
         "summary_fetched",
         "charts_fetched",
+        "web_searched",
     }
 )
 
@@ -748,6 +752,22 @@ async def execute_tool(
             await feedback_service.submit_feedback(db, user, obj)
             return _ok({"submitted": True}), "feedback_submitted"
 
+        if tool_name == "search_web":
+            query = args.get("query")
+            if not query or not str(query).strip():
+                return _err("query is required"), None
+            if not settings.TAVILY_API_KEY:
+                return _err("Web search is not configured"), None
+            max_results = args.get("max_results")
+            if max_results is not None:
+                max_results = int(max_results)
+            data = await search_web(
+                str(query).strip(),
+                topic=args.get("topic", "general"),
+                max_results=max_results,
+            )
+            return _ok(data), "web_searched"
+
         return _err(f"Unknown tool: {tool_name}"), None
 
     except ToolExecutionError as e:
@@ -758,7 +778,7 @@ async def execute_tool(
         return _err(str(e)), None
 
 
-TOOL_DEFINITIONS: list[dict] = [
+_CORE_TOOL_DEFINITIONS: list[dict] = [
     {
         "type": "function",
         "function": {
@@ -1129,22 +1149,166 @@ TOOL_DEFINITIONS: list[dict] = [
     },
 ]
 
+_SEARCH_WEB_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "search_web",
+        "description": (
+            "Search the web for current finance information: market data, "
+            "rates, news, regulations, definitions, and comparisons. "
+            "Use for anything not in the user's personal data."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query in the user's language.",
+                },
+                "topic": {
+                    "type": "string",
+                    "enum": ["general", "news", "finance"],
+                    "description": "Search topic hint. Default general.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Max results to return (default 5).",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+_ASK_USER_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "ask_user",
+        "description": (
+            "Ask the user a clarifying question with clickable options when "
+            "the request is ambiguous. The turn ends until the user answers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to display to the user.",
+                },
+                "options": {
+                    "type": "array",
+                    "description": "2-6 selectable options.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "label": {"type": "string"},
+                        },
+                        "required": ["id", "label"],
+                    },
+                },
+                "allow_multiple": {
+                    "type": "boolean",
+                    "description": "Allow selecting more than one option.",
+                },
+            },
+            "required": ["question", "options"],
+        },
+    },
+}
+
+_RENDER_UI_TOOL: dict = {
+    "type": "function",
+    "function": {
+        "name": "render_ui",
+        "description": (
+            "Declare which UI components the app should display for this "
+            "turn. Call once after gathering data. Data-backed components "
+            "use tool results from this turn; model-populated components "
+            "(data_table, stat_cards) require a `data` object. Omit when a "
+            "plain text reply is enough."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "description": "Ordered list of components to render.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "component": {
+                                "type": "string",
+                                "enum": RENDER_COMPONENT_IDS,
+                            },
+                            "from_action": {
+                                "type": "string",
+                                "description": (
+                                    "Optional action type that supplies "
+                                    "this component's data."
+                                ),
+                            },
+                            "data": {
+                                "type": "object",
+                                "description": (
+                                    "Required for model-populated components "
+                                    "(data_table, stat_cards)."
+                                ),
+                            },
+                        },
+                        "required": ["component"],
+                    },
+                }
+            },
+            "required": ["components"],
+        },
+    },
+}
+
+
+def get_tool_definitions() -> list[dict]:
+    """Return OpenAI tool definitions, omitting search when not configured."""
+    tools = list(_CORE_TOOL_DEFINITIONS)
+    if settings.TAVILY_API_KEY:
+        tools.append(_SEARCH_WEB_TOOL)
+    tools.append(_ASK_USER_TOOL)
+    tools.append(_RENDER_UI_TOOL)
+    return tools
+
+
+# Evaluated at import time for backward compatibility.
+TOOL_DEFINITIONS: list[dict] = get_tool_definitions()
+
 
 def build_system_prompt(bootstrap: dict) -> str:
-    return f"""You are Toston, a personal finance assistant. Help the user manage expenses, incomes, transfers, accounts, categories, places, and view summaries.
+    web_search_rule = (
+        "- Use `search_web` for current or external finance information "
+        "(markets, rates, news, regulations, definitions). Cite sources briefly."
+        if settings.TAVILY_API_KEY
+        else "- Web search is unavailable; answer general finance questions from knowledge and note when data may be outdated."
+    )
+    return f"""You are Toston, a comprehensive finance assistant. You help with:
+- Personal finances: expenses, incomes, transfers, accounts, categories, places, summaries, and charts.
+- General finance: markets, rates, investing concepts, budgeting strategies, comparisons, and financial planning.
 
 Rules:
-- Use tools for all factual data and mutations. Never invent account, category, or transaction IDs.
+- Use tools for all personal data and mutations. Never invent account, category, or transaction IDs.
 - Match IDs only from the bootstrap lists below or from prior tool results.
 - Date filter types: date (YYYY-MM-DD), week (YYYY-MM-DD start), month (YYYY-MM), quarter (YYYY-Q1), year (YYYY), range (YYYY-MM-DD:YYYY-MM-DD).
 - Deletes and bulk deletes require user confirmation; when you call those tools, explain what will be deleted and wait for confirmation.
-- Reply in spanish.
-- Be concise and friendly.
-- Never return ids information.
-- When a tool returns data the client shows from actions (lists, search results, period summary, charts), do not enumerate accounts, categories, places, transactions, balances, chart numbers, or summary figures in your reply. Use at most 1-2 short sentences: acknowledgment, context, or a follow-up question.
-- For mutations (create/update/delete), a brief confirmation is fine; avoid repeating every field if the client shows a receipt card.
-- If a tool failed, explain the error in prose.
+{web_search_rule}
+- Use `ask_user` when the request is ambiguous (missing period, account, or intent). Provide 2-6 clear options instead of guessing.
+- Reply in Spanish. Be concise and friendly.
+- Never expose raw IDs to the user.
+- Never do something else that is not finance relating, for example coding, web search for non-related topics, etc.
+- When the client renders structured UI (lists, summaries, charts, tables, stats, sources), do not repeat that data in prose. Only tell user the acknowledgment, insight, or a follow-up.
+- For mutations (create/update/delete), a brief confirmation is fine.
+- If a tool failed, explain the error clearly.
+- After gathering data, call `render_ui` to choose components. Use `data_table` or `stat_cards` with inline `data` for comparisons and key figures from web search or general knowledge. Use `web_sources` after `search_web`. Render only what answers the request.
 - Today is {date.today().isoformat()}.
+
+Available UI components for render_ui:
+{render_catalog_prompt()}
 
 Bootstrap data:
 {json.dumps(bootstrap, ensure_ascii=False)}

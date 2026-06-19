@@ -3,6 +3,7 @@ import { ConversationSidebar } from './components/ConversationSidebar'
 import { LoginForm } from './components/LoginForm'
 import { MessageInput } from './components/MessageInput'
 import { MessageList } from './components/MessageList'
+import { QuestionChips } from './components/QuestionChips'
 import { ToolApprovalCard } from './components/ToolApprovalCard'
 import { useAuth } from './hooks/useAuth'
 import { useChat } from './hooks/useChat'
@@ -58,6 +59,15 @@ function App() {
                 onApprove={(toolArgs) => void chat.confirmPending(toolArgs)}
                 onReject={chat.dismissPending}
                 isConfirming={chat.isConfirming}
+              />
+            </div>
+          )}
+          {chat.pendingQuestion && !chat.pendingConfirmation && (
+            <div className="approval-dock">
+              <QuestionChips
+                pending={chat.pendingQuestion}
+                onAnswer={(labels) => chat.answerQuestion(labels)}
+                disabled={chat.isLoading}
               />
             </div>
           )}

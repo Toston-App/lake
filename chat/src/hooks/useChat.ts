@@ -5,6 +5,8 @@ import type {
   ChatAction,
   ConversationSummary,
   PendingConfirmation,
+  PendingQuestion,
+  RenderDirective,
   ToolStep,
   UiMessage,
 } from '../types/chat'
@@ -27,6 +29,8 @@ export function useChat() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation | null>(null)
+  const [pendingQuestion, setPendingQuestion] =
+    useState<PendingQuestion | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -69,6 +73,7 @@ export function useChat() {
     setConversationId(null)
     setMessages([])
     setPendingConfirmation(null)
+    setPendingQuestion(null)
     setError(null)
   }, [])
 
@@ -77,6 +82,7 @@ export function useChat() {
       setError(null)
       setIsLoading(true)
       setPendingConfirmation(null)
+      setPendingQuestion(null)
       try {
         const detail = await chatApi.getConversation(id)
         setConversationId(detail.id)
@@ -95,6 +101,7 @@ export function useChat() {
       reply: string,
       actions: ChatAction[],
       toolSteps: ToolStep[],
+      render?: RenderDirective[],
     ) => {
       setMessages((prev) => [
         ...prev,
@@ -102,6 +109,7 @@ export function useChat() {
           role: 'assistant',
           content: reply,
           actions: actions.length > 0 ? actions : undefined,
+          render: render && render.length > 0 ? render : undefined,
           toolSteps: toolSteps.length > 0 ? toolSteps : undefined,
         },
       ])
@@ -133,6 +141,7 @@ export function useChat() {
 
       setError(null)
       setPendingConfirmation(null)
+      setPendingQuestion(null)
       const userMessage: UiMessage = { role: 'user', content: trimmed }
       const streamingPlaceholder: UiMessage = {
         role: 'assistant',
@@ -180,6 +189,10 @@ export function useChat() {
                     response.actions.length > 0
                       ? response.actions
                       : undefined,
+                  render:
+                    response.render && response.render.length > 0
+                      ? response.render
+                      : undefined,
                   toolSteps:
                     response.tool_steps.length > 0
                       ? response.tool_steps
@@ -190,6 +203,9 @@ export function useChat() {
               })
               if (response.pending_confirmation) {
                 setPendingConfirmation(response.pending_confirmation)
+              }
+              if (response.pending_question) {
+                setPendingQuestion(response.pending_question)
               }
             },
             onError: (detail) => {
@@ -236,6 +252,7 @@ export function useChat() {
         response.reply,
         response.actions,
         response.tool_steps,
+        response.render,
       )
       await refreshConversations()
     } catch (err) {
@@ -258,6 +275,15 @@ export function useChat() {
     setPendingConfirmation(null)
   }, [])
 
+  const answerQuestion = useCallback(
+    (labels: string[]) => {
+      const answer = labels.filter(Boolean).join(', ')
+      if (!answer) return
+      void sendMessage(answer)
+    },
+    [sendMessage],
+  )
+
   const removeConversation = useCallback(
     async (id: string) => {
       setError(null)
@@ -279,6 +305,7 @@ export function useChat() {
     messages,
     conversations,
     pendingConfirmation,
+    pendingQuestion,
     isLoading,
     isConfirming,
     error,
@@ -287,6 +314,7 @@ export function useChat() {
     startNewChat,
     selectConversation,
     sendMessage,
+    answerQuestion,
     confirmPending,
     dismissPending,
     removeConversation,

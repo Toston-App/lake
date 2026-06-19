@@ -68,8 +68,10 @@ def _turn_to_response(
         conversation_id=conversation_id,
         reply=turn.reply,
         actions=turn.actions,
+        render=turn.render,
         tool_steps=turn.tool_steps,
         pending_confirmation=turn.pending_confirmation,
+        pending_question=turn.pending_question,
     )
 
 

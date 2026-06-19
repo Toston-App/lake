@@ -13,17 +13,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.ai.chat_tools import (
-    TOOL_DEFINITIONS,
     append_ui_rendered_reply_hint,
     build_pending_preview,
     build_system_prompt,
     execute_tool,
     format_confirmation_message,
+    get_tool_definitions,
     load_bootstrap_context,
     requires_confirmation,
 )
+from app.ai.render_components import (
+    component_for_action_type,
+    is_model_data_component,
+    is_valid_component,
+    resolve_render_detail,
+)
 from app.core.config import settings
-from app.schemas.chat import ChatAction, PendingConfirmation, ToolStep, chat_action_detail
+from app.schemas.chat import (
+    ChatAction,
+    PendingConfirmation,
+    PendingQuestion,
+    QuestionOption,
+    RenderDirective,
+    ToolStep,
+    chat_action_detail,
+)
 from app.utilities.redis import store_pending_action
 
 
@@ -31,8 +45,10 @@ from app.utilities.redis import store_pending_action
 class ChatTurnResult:
     reply: str
     actions: list[ChatAction] = field(default_factory=list)
+    render: list[RenderDirective] = field(default_factory=list)
     tool_steps: list[ToolStep] = field(default_factory=list)
     pending_confirmation: Optional[PendingConfirmation] = None
+    pending_question: Optional[PendingQuestion] = None
     new_messages: list[dict] = field(default_factory=list)
 
 
@@ -54,6 +70,8 @@ def _tool_label(tool_name: str, tool_args: dict) -> str:
         "create_income": "Creating income",
         "delete_expense": "Deleting expense",
         "delete_income": "Deleting income",
+        "search_web": "Searching the web",
+        "ask_user": "Asking a question",
     }
     base = labels.get(tool_name, tool_name.replace("_", " ").title())
     if tool_name in ("get_period_summary", "get_period_charts"):
@@ -123,6 +141,7 @@ class _TurnState:
     actions: list[ChatAction]
     tool_steps: list[ToolStep]
     new_messages: list[dict]
+    render: list[RenderDirective] = field(default_factory=list)
 
 
 class ChatAgent:
@@ -216,7 +235,7 @@ class ChatAgent:
         stream = await self.client.chat.completions.create(
             model=self.model,
             messages=state.messages,
-            tools=TOOL_DEFINITIONS,
+            tools=get_tool_definitions(),
             tool_choice="auto",
             stream=True,
             extra_body=self._extra_body(),
@@ -255,6 +274,60 @@ class ChatAgent:
                 "content": reply_text,
             }
 
+    def _apply_render_ui(self, state: _TurnState, tool_args: dict) -> list[str]:
+        """Resolve the model's render_ui selection into state.render.
+
+        Returns the list of component ids that were accepted (valid and backed
+        by data from this turn).
+        """
+        accepted: list[str] = []
+        components = tool_args.get("components") or []
+        for spec in components:
+            if not isinstance(spec, dict):
+                continue
+            component_id = spec.get("component")
+            if not component_id or not is_valid_component(component_id):
+                continue
+            if is_model_data_component(component_id):
+                data = spec.get("data")
+                if not isinstance(data, dict):
+                    continue
+                state.render.append(
+                    RenderDirective(component=component_id, detail=data)
+                )
+                accepted.append(component_id)
+                continue
+            directive = resolve_render_detail(
+                component_id,
+                state.actions,
+                from_action=spec.get("from_action"),
+            )
+            if directive is None:
+                continue
+            state.render.append(directive)
+            accepted.append(component_id)
+        return accepted
+
+    def _finalize_render(self, state: _TurnState) -> list[RenderDirective]:
+        """Return the turn's render plan, falling back to UI-capable actions.
+
+        When the model explicitly selected components via render_ui, that plan is
+        authoritative. Otherwise, derive a plan from the actions produced this
+        turn so behavior is no worse than rendering every action.
+        """
+        if state.render:
+            return state.render
+
+        fallback: list[RenderDirective] = []
+        for action in state.actions:
+            component_id = component_for_action_type(action.type)
+            if component_id is None:
+                continue
+            fallback.append(
+                RenderDirective(component=component_id, detail=action.detail)
+            )
+        return fallback
+
     async def _handle_tool_calls(
         self,
         state: _TurnState,
@@ -280,6 +353,78 @@ class ChatAgent:
                 tool_args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 tool_args = {}
+
+            if tool_name == "render_ui":
+                accepted = self._apply_render_ui(state, tool_args)
+                state.messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": json.dumps(
+                            {"success": True, "rendered": accepted},
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+                continue
+
+            if tool_name == "ask_user":
+                question = str(tool_args.get("question") or "").strip()
+                raw_options = tool_args.get("options") or []
+                allow_multiple = bool(tool_args.get("allow_multiple", False))
+                options: list[QuestionOption] = []
+                for opt in raw_options:
+                    if not isinstance(opt, dict):
+                        continue
+                    opt_id = str(opt.get("id") or "").strip()
+                    label = str(opt.get("label") or "").strip()
+                    if opt_id and label:
+                        options.append(QuestionOption(id=opt_id, label=label))
+                if not question or len(options) < 2:
+                    state.messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc["id"],
+                            "content": json.dumps(
+                                {
+                                    "success": False,
+                                    "error": (
+                                        "ask_user requires a question and at "
+                                        "least 2 options"
+                                    ),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    )
+                    continue
+                step = ToolStep(
+                    tool_name=tool_name,
+                    status="completed",
+                    label=_tool_label(tool_name, tool_args),
+                )
+                state.tool_steps.append(step)
+                if emit_steps:
+                    yield ChatStreamEvent(type="tool_step", tool_step=step)
+                state.new_messages.append(
+                    {"role": "assistant", "content": question}
+                )
+                yield ChatStreamEvent(
+                    type="done",
+                    result=ChatTurnResult(
+                        reply=question,
+                        actions=state.actions,
+                        render=self._finalize_render(state),
+                        tool_steps=state.tool_steps,
+                        pending_question=PendingQuestion(
+                            question=question,
+                            options=options,
+                            allow_multiple=allow_multiple,
+                        ),
+                        new_messages=state.new_messages,
+                    ),
+                )
+                return
 
             if requires_confirmation(tool_name, tool_args) and not confirmed_action:
                 action_id = str(uuid.uuid4())
@@ -309,6 +454,7 @@ class ChatAgent:
                     result=ChatTurnResult(
                         reply=message,
                         actions=state.actions,
+                        render=self._finalize_render(state),
                         tool_steps=state.tool_steps,
                         pending_confirmation=PendingConfirmation(
                             action_id=action_id,
@@ -385,6 +531,7 @@ class ChatAgent:
                     result=ChatTurnResult(
                         reply=reply,
                         actions=state.actions,
+                        render=self._finalize_render(state),
                         tool_steps=state.tool_steps,
                         new_messages=state.new_messages,
                     ),
@@ -415,6 +562,7 @@ class ChatAgent:
             result=ChatTurnResult(
                 reply=reply,
                 actions=state.actions,
+                render=self._finalize_render(state),
                 tool_steps=state.tool_steps,
                 new_messages=state.new_messages,
             ),

@@ -21,12 +21,30 @@ export type PendingConfirmation = {
   message: string
 }
 
+export type QuestionOption = {
+  id: string
+  label: string
+}
+
+export type PendingQuestion = {
+  question: string
+  options: QuestionOption[]
+  allow_multiple: boolean
+}
+
+export type RenderDirective = {
+  component: string
+  detail?: Record<string, unknown>
+}
+
 export type ChatMessageResponse = {
   conversation_id: string
   reply: string
   actions: ChatAction[]
+  render?: RenderDirective[]
   tool_steps: ToolStep[]
   pending_confirmation?: PendingConfirmation
+  pending_question?: PendingQuestion
 }
 
 export type ChatConfirmRequest = {
@@ -64,6 +82,7 @@ export type UiMessage = {
   content: string
   created_at?: string
   actions?: ChatAction[]
+  render?: RenderDirective[]
   toolSteps?: ToolStep[]
   streaming?: boolean
 }

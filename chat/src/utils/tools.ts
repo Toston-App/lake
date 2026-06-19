@@ -24,6 +24,9 @@ const TOOL_LABELS: Record<string, string> = {
   create_balance_adjustment: 'Balance adjustment',
   list_balance_adjustments: 'List adjustments',
   submit_feedback: 'Submit feedback',
+  search_web: 'Web search',
+  ask_user: 'Clarifying question',
+  render_ui: 'Rendering UI',
 }
 
 export function formatToolName(toolName: string): string {

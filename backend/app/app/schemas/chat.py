@@ -23,6 +23,11 @@ class ChatAction(BaseModel):
     detail: Optional[dict[str, Any]] = None
 
 
+class RenderDirective(BaseModel):
+    component: str
+    detail: Optional[dict[str, Any]] = None
+
+
 class ToolStep(BaseModel):
     tool_name: str
     status: str  # completed | failed | pending_confirmation
@@ -36,12 +41,25 @@ class PendingConfirmation(BaseModel):
     message: str
 
 
+class QuestionOption(BaseModel):
+    id: str
+    label: str
+
+
+class PendingQuestion(BaseModel):
+    question: str
+    options: list[QuestionOption]
+    allow_multiple: bool = False
+
+
 class ChatMessageResponse(BaseModel):
     conversation_id: str
     reply: str
     actions: list[ChatAction] = []
+    render: list[RenderDirective] = []
     tool_steps: list[ToolStep] = []
     pending_confirmation: Optional[PendingConfirmation] = None
+    pending_question: Optional[PendingQuestion] = None
 
 
 class ChatStreamMeta(BaseModel):

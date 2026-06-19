@@ -80,31 +80,31 @@ app.add_middleware(
     slow_request_threshold_ms=settings.AXIOM_SLOW_REQUEST_THRESHOLD_MS,
 )
 
-@app.middleware("http")
-async def add_csp_header(request: Request, call_next):
-    response = await call_next(request)
+# @app.middleware("http")
+# async def add_csp_header(request: Request, call_next):
+#     response = await call_next(request)
 
-    csp_directives = [
-        "default-src 'self'",
-        "img-src 'self' data:",
-        "connect-src 'self'",
-        "script-src 'self'",
-        "style-src 'self' 'unsafe-inline'",
-        "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js",
-        "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-        "base-uri 'self'",
-        "font-src 'self' https: data:",
-        "frame-ancestors 'self'",
-        "object-src 'none'",
-        "script-src-attr 'none'",
-    ]
-    if request.url.path not in DOCS_PATHS:
-        csp_directives.append(TRUSTED_TYPES_DIRECTIVE)
+#     csp_directives = [
+#         "default-src 'self'",
+#         "img-src 'self' data:",
+#         "connect-src 'self'",
+#         "script-src 'self'",
+#         "style-src 'self' 'unsafe-inline'",
+#         "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js",
+#         "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+#         "base-uri 'self'",
+#         "font-src 'self' https: data:",
+#         "frame-ancestors 'self'",
+#         "object-src 'none'",
+#         "script-src-attr 'none'",
+#     ]
+#     if request.url.path not in DOCS_PATHS:
+#         csp_directives.append(TRUSTED_TYPES_DIRECTIVE)
 
-    csp_policy = "; ".join(csp_directives)
-    response.headers["Content-Security-Policy"] = csp_policy
+#     csp_policy = "; ".join(csp_directives)
+#     response.headers["Content-Security-Policy"] = csp_policy
 
-    return response
+#     return response
 
 security = HTTPBasic()
 
@@ -116,6 +116,7 @@ security = HTTPBasic()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "*",
         "https://www.cleverbill.ing",
         "https://cleverbill.ing",
         "https://api.cleverbill.ing",

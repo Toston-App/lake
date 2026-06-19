@@ -6,16 +6,35 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.chat_agent import ChatAgent, ChatStreamEvent, ChatTurnResult
+from app.ai.chat_agent import ChatAgent, ChatStreamEvent, ChatTurnResult, _TurnState
 from app.schemas.chat import ToolStep
 from app.ai.chat_tools import (
     _transaction_update_data,
     execute_tool,
+    get_tool_definitions,
     is_destructive_tool,
     requires_confirmation,
 )
+from app.ai.render_components import (
+    RENDER_COMPONENT_IDS,
+    render_catalog_prompt,
+    resolve_render_detail,
+)
 from app.core.config import settings
-from app.schemas.chat import ChatAction, chat_action_detail
+from app.schemas.chat import ChatAction, RenderDirective, chat_action_detail
+
+
+def _turn_state(actions: list[ChatAction]) -> _TurnState:
+    return _TurnState(
+        messages=[],
+        actions=actions,
+        tool_steps=[],
+        new_messages=[],
+    )
+
+
+def _agent() -> ChatAgent:
+    return ChatAgent(client=MagicMock())
 
 
 @pytest.mark.asyncio
@@ -148,6 +167,250 @@ async def test_send_message_stream_mocked_agent(
     done_data = events[-1][1]
     assert done_data["reply"] == "Your balance looks good."
     assert len(done_data["actions"]) == 1
+
+
+def test_resolve_render_detail_pairs_component_with_action():
+    actions = [
+        ChatAction(type="accounts_listed", detail={"items": [{"id": 1}]}),
+        ChatAction(type="summary_fetched", detail={"period_net": 100}),
+    ]
+    directive = resolve_render_detail("period_summary", actions)
+    assert directive is not None
+    assert directive.component == "period_summary"
+    assert directive.detail == {"period_net": 100}
+
+
+def test_resolve_render_detail_rejects_unknown_component():
+    assert resolve_render_detail("does_not_exist", []) is None
+
+
+def test_render_catalog_prompt_lists_all_components():
+    prompt = render_catalog_prompt()
+    for component_id in RENDER_COMPONENT_IDS:
+        assert component_id in prompt
+
+
+def test_apply_render_ui_selects_requested_components():
+    agent = _agent()
+    state = _turn_state(
+        [
+            ChatAction(type="accounts_listed", detail={"items": [{"id": 1}]}),
+            ChatAction(type="summary_fetched", detail={"period_net": 100}),
+        ]
+    )
+    accepted = agent._apply_render_ui(
+        state, {"components": [{"component": "period_summary"}]}
+    )
+    assert accepted == ["period_summary"]
+    assert len(state.render) == 1
+    assert state.render[0].component == "period_summary"
+    assert state.render[0].detail == {"period_net": 100}
+
+
+def test_apply_render_ui_accepts_model_data_components():
+    agent = _agent()
+    state = _turn_state([])
+    accepted = agent._apply_render_ui(
+        state,
+        {
+            "components": [
+                {
+                    "component": "data_table",
+                    "data": {
+                        "title": "Rates",
+                        "columns": ["Bank", "Rate"],
+                        "rows": [["A", "5%"]],
+                    },
+                }
+            ]
+        },
+    )
+    assert accepted == ["data_table"]
+    assert state.render[0].component == "data_table"
+    assert state.render[0].detail == {
+        "title": "Rates",
+        "columns": ["Bank", "Rate"],
+        "rows": [["A", "5%"]],
+    }
+
+
+def test_apply_render_ui_drops_invalid_components():
+    agent = _agent()
+    state = _turn_state(
+        [ChatAction(type="summary_fetched", detail={"period_net": 100})]
+    )
+    accepted = agent._apply_render_ui(
+        state,
+        {
+            "components": [
+                {"component": "bogus_component"},
+                {"component": "period_summary"},
+                "not-a-dict",
+            ]
+        },
+    )
+    assert accepted == ["period_summary"]
+    assert [d.component for d in state.render] == ["period_summary"]
+
+
+def test_finalize_render_prefers_explicit_selection():
+    agent = _agent()
+    state = _turn_state(
+        [ChatAction(type="accounts_listed", detail={"items": []})]
+    )
+    state.render = [RenderDirective(component="period_summary", detail={"x": 1})]
+    plan = agent._finalize_render(state)
+    assert [d.component for d in plan] == ["period_summary"]
+
+
+def test_finalize_render_falls_back_to_actions():
+    agent = _agent()
+    state = _turn_state(
+        [
+            ChatAction(type="accounts_listed", detail={"items": [{"id": 1}]}),
+            ChatAction(type="expense_created", detail={"id": 5}),
+        ]
+    )
+    plan = agent._finalize_render(state)
+    # accounts_listed maps to accounts_list; expense_created has no component.
+    assert [d.component for d in plan] == ["accounts_list"]
+    assert plan[0].detail == {"items": [{"id": 1}]}
+
+
+@pytest.mark.asyncio
+async def test_send_message_returns_render_directives(
+    client: AsyncClient,
+    normal_user_token_headers: dict[str, str],
+):
+    mock_turn = ChatTurnResult(
+        reply="Aquí tienes tu resumen.",
+        actions=[ChatAction(type="summary_fetched", detail={"period_net": 100})],
+        render=[
+            RenderDirective(component="period_summary", detail={"period_net": 100})
+        ],
+        new_messages=[
+            {"role": "user", "content": "resumen"},
+            {"role": "assistant", "content": "Aquí tienes tu resumen."},
+        ],
+    )
+    with patch("app.api.api_v1.endpoints.chat.get_chat_agent") as mock_get_agent:
+        mock_agent = MagicMock(spec=ChatAgent)
+        mock_agent.run_turn = AsyncMock(return_value=mock_turn)
+        mock_get_agent.return_value = mock_agent
+        with patch(
+            "app.api.api_v1.endpoints.chat.save_conversation",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            with patch(
+                "app.api.api_v1.endpoints.chat.get_conversation",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                response = await client.post(
+                    f"{settings.API_V1_STR}/chat/messages",
+                    headers=normal_user_token_headers,
+                    json={"message": "resumen"},
+                )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["render"] == [
+        {"component": "period_summary", "detail": {"period_net": 100}}
+    ]
+
+
+def test_get_tool_definitions_omits_search_without_api_key():
+    with patch.object(settings, "TAVILY_API_KEY", None):
+        names = [t["function"]["name"] for t in get_tool_definitions()]
+    assert "search_web" not in names
+    assert "ask_user" in names
+    assert "render_ui" in names
+
+
+def test_get_tool_definitions_includes_search_with_api_key():
+    with patch.object(settings, "TAVILY_API_KEY", "tvly-test"):
+        names = [t["function"]["name"] for t in get_tool_definitions()]
+    assert "search_web" in names
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_search_web_mocked():
+    with patch.object(settings, "TAVILY_API_KEY", "tvly-test"):
+        with patch(
+            "app.ai.chat_tools.search_web",
+            new_callable=AsyncMock,
+            return_value={
+                "query": "USD MXN rate",
+                "answer": "18.5",
+                "results": [{"title": "Banxico", "url": "https://example.com"}],
+            },
+        ):
+            result, action_type = await execute_tool(
+                "search_web",
+                {"query": "USD MXN rate", "topic": "finance"},
+                AsyncMock(),
+                MagicMock(),
+            )
+    assert result["success"] is True
+    assert action_type == "web_searched"
+    assert result["data"]["answer"] == "18.5"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_search_web_requires_api_key():
+    with patch.object(settings, "TAVILY_API_KEY", None):
+        result, action_type = await execute_tool(
+            "search_web",
+            {"query": "test"},
+            AsyncMock(),
+            MagicMock(),
+        )
+    assert action_type is None
+    assert result["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_ask_user_ends_turn_with_pending_question():
+    agent = _agent()
+    state = _turn_state([])
+    tool_calls = [
+        {
+            "id": "tc-ask",
+            "type": "function",
+            "function": {
+                "name": "ask_user",
+                "arguments": json.dumps(
+                    {
+                        "question": "¿Qué período quieres ver?",
+                        "options": [
+                            {"id": "month", "label": "Este mes"},
+                            {"id": "year", "label": "Este año"},
+                        ],
+                    }
+                ),
+            },
+        }
+    ]
+
+    events = []
+    async for event in agent._handle_tool_calls(
+        state,
+        tool_calls,
+        None,
+        db=AsyncMock(),
+        user=MagicMock(),
+        conversation_id="conv-1",
+        confirmed_action=None,
+        emit_steps=False,
+    ):
+        events.append(event)
+
+    assert len(events) == 1
+    assert events[0].type == "done"
+    assert events[0].result is not None
+    assert events[0].result.pending_question is not None
+    assert events[0].result.pending_question.question == "¿Qué período quieres ver?"
+    assert len(events[0].result.pending_question.options) == 2
 
 
 @pytest.mark.asyncio
