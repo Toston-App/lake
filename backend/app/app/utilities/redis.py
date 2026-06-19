@@ -265,6 +265,7 @@ async def store_pending_action(
     tool_args: dict,
     preview: dict,
     expire_time: int = CHAT_PENDING_TTL,
+    turn_id: int | None = None,
 ) -> bool:
     try:
         payload = {
@@ -273,6 +274,7 @@ async def store_pending_action(
             "tool_name": tool_name,
             "tool_args": tool_args,
             "preview": preview,
+            "turn_id": turn_id,
         }
         key = _chat_pending_key(action_id)
         await r.set(key, json.dumps(payload, cls=DateEncoder))

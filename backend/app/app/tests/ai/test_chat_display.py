@@ -63,6 +63,7 @@ async def test_handle_tool_calls_appends_ui_rendered_hint():
             conversation_id="conv-1",
             confirmed_action=None,
             emit_steps=False,
+            round_index=0,
         ):
             events.append(event)
 

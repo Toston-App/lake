@@ -34,7 +34,32 @@ from app.utilities.redis import (
     list_user_conversations,
     save_conversation,
 )
+from app.utilities.observability import (
+    finalize_turn,
+    record_tool_call,
+    start_turn,
+    upsert_conversation,
+)
 from app.utilities.wide_events import enrich_event, timed
+
+
+def _trace_ids(request: Request) -> tuple[str | None, str | None]:
+    request_id = getattr(request.state, "request_id", None)
+    wide_event = getattr(request.state, "wide_event", None)
+    trace_id = None
+    if isinstance(wide_event, dict):
+        trace_id = wide_event.get("trace_id")
+    return trace_id, request_id
+
+
+def _status_for_turn(turn: ChatTurnResult) -> str:
+    if turn.max_rounds_reached:
+        return "max_rounds"
+    if turn.pending_question is not None:
+        return "pending_question"
+    if turn.pending_confirmation is not None:
+        return "pending_confirmation"
+    return "ok"
 
 router = APIRouter()
 _agent: ChatAgent | None = None
@@ -118,6 +143,16 @@ async def send_chat_message(
         },
     )
 
+    trace_id, request_id = _trace_ids(request)
+    turn_id = await start_turn(
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        user_message=body.message,
+        model=agent.model,
+        trace_id=trace_id,
+        request_id=request_id,
+    )
+
     with timed() as t:
         turn = await agent.run_turn(
             db,
@@ -125,7 +160,23 @@ async def send_chat_message(
             body.message,
             history,
             conversation_id=conversation_id,
+            turn_id=turn_id,
         )
+
+    await finalize_turn(
+        turn_id,
+        status=_status_for_turn(turn),
+        assistant_reply=turn.reply,
+        duration_ms=t.ms,
+        rounds_count=turn.rounds_count,
+        actions_count=len(turn.actions),
+        pending_confirmation=turn.pending_confirmation is not None,
+        pending_question=turn.pending_question is not None,
+        total_prompt_tokens=turn.total_prompt_tokens,
+        total_completion_tokens=turn.total_completion_tokens,
+        total_tokens=turn.total_tokens,
+        total_cost_usd=turn.total_cost_usd,
+    )
 
     enrich_event(
         request,
@@ -144,6 +195,9 @@ async def send_chat_message(
         updated_messages,
         title,
         settings.CHAT_CONVERSATION_TTL_SECONDS,
+    )
+    await upsert_conversation(
+        conversation_id, current_user.id, title, len(updated_messages)
     )
 
     return _turn_to_response(conversation_id, turn)
@@ -178,6 +232,16 @@ async def send_chat_message_stream(
         },
     )
 
+    trace_id, request_id = _trace_ids(request)
+    turn_id = await start_turn(
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        user_message=body.message,
+        model=agent.model,
+        trace_id=trace_id,
+        request_id=request_id,
+    )
+
     async def event_generator() -> AsyncIterator[str]:
         with timed() as t:
             yield _sse_event(
@@ -191,6 +255,7 @@ async def send_chat_message_stream(
                     body.message,
                     history,
                     conversation_id=conversation_id,
+                    turn_id=turn_id,
                 ):
                     if event.type == "token" and event.delta:
                         yield _sse_event(
@@ -213,6 +278,27 @@ async def send_chat_message_stream(
                             title,
                             settings.CHAT_CONVERSATION_TTL_SECONDS,
                         )
+                        await upsert_conversation(
+                            conversation_id,
+                            current_user.id,
+                            title,
+                            len(updated_messages),
+                        )
+                        await finalize_turn(
+                            turn_id,
+                            status=_status_for_turn(turn),
+                            assistant_reply=turn.reply,
+                            duration_ms=t.ms,
+                            rounds_count=turn.rounds_count,
+                            actions_count=len(turn.actions),
+                            pending_confirmation=turn.pending_confirmation
+                            is not None,
+                            pending_question=turn.pending_question is not None,
+                            total_prompt_tokens=turn.total_prompt_tokens,
+                            total_completion_tokens=turn.total_completion_tokens,
+                            total_tokens=turn.total_tokens,
+                            total_cost_usd=turn.total_cost_usd,
+                        )
                         response = _turn_to_response(conversation_id, turn)
                         enrich_event(
                             request,
@@ -227,6 +313,12 @@ async def send_chat_message_stream(
                         )
                         yield _sse_event("done", response.model_dump(mode="json"))
             except Exception as exc:
+                await finalize_turn(
+                    turn_id,
+                    status="error",
+                    error=str(exc),
+                    duration_ms=t.ms,
+                )
                 enrich_event(
                     request,
                     ai={
@@ -345,6 +437,8 @@ async def confirm_chat_action(
         body.tool_args,
     )
 
+    orig_turn_id = pending.get("turn_id")
+
     with timed() as t:
         result, action_type = await execute_tool(
             pending["tool_name"],
@@ -355,6 +449,24 @@ async def confirm_chat_action(
         )
 
     await delete_pending_action(body.action_id)
+
+    success = bool(result.get("success"))
+    await record_tool_call(
+        turn_id=orig_turn_id,
+        round_index=0,
+        tool_name=pending["tool_name"],
+        arguments=tool_args,
+        result=result,
+        status="completed" if success else "failed",
+        duration_ms=t.ms,
+        error=None if success else result.get("error"),
+    )
+    await finalize_turn(
+        orig_turn_id,
+        status="ok" if success else "error",
+        pending_confirmation=False,
+        error=None if success else result.get("error"),
+    )
 
     enrich_event(
         request,
@@ -390,6 +502,9 @@ async def confirm_chat_action(
         updated_messages,
         title,
         settings.CHAT_CONVERSATION_TTL_SECONDS,
+    )
+    await upsert_conversation(
+        conversation_id, current_user.id, title, len(updated_messages)
     )
 
     return ChatMessageResponse(

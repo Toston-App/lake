@@ -50,7 +50,10 @@ class User(UserInDBBase):
     pass
 
 class UserGetMe(BaseModel):
+    id: Optional[int] = None
+    email: Optional[EmailStr] = None
     country: Optional[str] = None
+    is_superuser: bool = False
 
 # Additional properties stored in DB
 class UserInDB(UserInDBBase):

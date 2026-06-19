@@ -402,6 +402,7 @@ async def test_ask_user_ends_turn_with_pending_question():
         conversation_id="conv-1",
         confirmed_action=None,
         emit_steps=False,
+        round_index=0,
     ):
         events.append(event)
 
