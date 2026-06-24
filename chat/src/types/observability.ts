@@ -109,4 +109,5 @@ export type UserMe = {
   email: string | null
   country: string | null
   is_superuser: boolean
+  subscription_tier: string | null
 }

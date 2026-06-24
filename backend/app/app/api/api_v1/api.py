@@ -5,16 +5,18 @@ from app.api.api_v1.endpoints import (
     # ai, # Disabled OCR AI endpoint
     admin_observability,
     balance_adjustments,
-    chat,
     categories,
+    chat,
     demo_data,
     expenses,
     imports,
     incomes,
     login,
     places,
+    polar,
     recap,
     subcategories,
+    subscriptions,
     transactions,
     transfers,
     users,
@@ -51,6 +53,12 @@ api_router.include_router(waha.router, prefix="/waha", tags=["whatsapp", "waha"]
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(recap.router, prefix="/recap", tags=["recap"])
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
+api_router.include_router(
+    subscriptions.router,
+    prefix="/subscriptions",
+    tags=["subscriptions"],
+)
+api_router.include_router(polar.router, prefix="/polar", tags=["polar"])
 api_router.include_router(
     admin_observability.router,
     prefix="/admin/observability",

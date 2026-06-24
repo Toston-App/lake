@@ -9,4 +9,5 @@ from app.models import (  # noqa
     ChatObsTurn,
     Item,
     User,
+    UserSubscription,
 )

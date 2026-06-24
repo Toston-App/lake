@@ -320,9 +320,53 @@ async def invalidate_user_cache(user_id: int) -> bool:
                     await r.delete(*keys)
                 if cursor == 0:
                     break
+        # Also drop the entitlement cache so a fresh webhook is reflected
+        # immediately on the next chat turn.
+        await r.delete(_entitlement_key(user_id))
         return True
     except Exception as e:
         logging.error(
             f"Redis error invalidating cache for user {user_id}: {str(e)}"
         )
+        return False
+
+
+# ==================== Subscription entitlement cache ====================
+
+ENTITLEMENT_PREFIX = "chat:ent"
+ENTITLEMENT_TTL = 3600  # 1 hour
+
+
+def _entitlement_key(user_id: int) -> str:
+    return f"{ENTITLEMENT_PREFIX}:{user_id}"
+
+
+async def get_entitlement(user_id: int) -> dict | None:
+    """Read the cached entitlement payload (tier, status, period window)."""
+    try:
+        cached = await r.get(_entitlement_key(user_id))
+        if cached:
+            return json.loads(cached)
+        return None
+    except Exception as e:
+        logging.error(f"Redis error reading entitlement {user_id}: {e}")
+        return None
+
+
+async def set_entitlement(user_id: int, payload: dict) -> bool:
+    try:
+        await r.set(_entitlement_key(user_id), json.dumps(payload, default=str))
+        await r.expire(_entitlement_key(user_id), ENTITLEMENT_TTL)
+        return True
+    except Exception as e:
+        logging.error(f"Redis error writing entitlement {user_id}: {e}")
+        return False
+
+
+async def invalidate_entitlement(user_id: int) -> bool:
+    try:
+        await r.delete(_entitlement_key(user_id))
+        return True
+    except Exception as e:
+        logging.error(f"Redis error deleting entitlement {user_id}: {e}")
         return False

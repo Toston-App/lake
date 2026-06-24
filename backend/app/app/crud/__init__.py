@@ -11,6 +11,7 @@ from .crud_user import user
 from .crud_import import imports
 from .crud_feedback import feedback
 from . import observability
+from . import crud_subscription
 
 # For a new basic set of CRUD operations you could just do
 

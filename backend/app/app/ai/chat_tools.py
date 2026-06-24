@@ -10,10 +10,18 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
-from app.api.deps import DateFilterType
 from app.ai.render_components import RENDER_COMPONENT_IDS, render_catalog_prompt
 from app.ai.web_search import search_web
+from app.api.deps import DateFilterType
 from app.core.config import settings
+from app.core.tiers import (
+    FEATURE_ADVANCED_ANALYTICS,
+    FEATURE_BULK_OPERATIONS,
+    FEATURE_CHARTS,
+    FEATURE_SEARCH_WEB,
+    Tier,
+    has_feature,
+)
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 from app.services import accounts as account_service
 from app.services import balance_adjustments as balance_adjustment_service
@@ -64,6 +72,16 @@ UI_RENDERED_ACTION_TYPES = frozenset(
         "web_searched",
     }
 )
+
+# Tools gated behind subscription features. A tool listed here is only exposed
+# to the model when the current tier has the corresponding feature.
+TOOL_FEATURE_GATE: dict[str, str] = {
+    "search_web": FEATURE_SEARCH_WEB,
+    "get_period_summary": FEATURE_ADVANCED_ANALYTICS,
+    "get_period_charts": FEATURE_ADVANCED_ANALYTICS,
+    "bulk_create_transactions": FEATURE_BULK_OPERATIONS,
+    "bulk_delete_transactions": FEATURE_BULK_OPERATIONS,
+}
 
 UI_RENDERED_REPLY_HINT = (
     "The user's app already displays the tool results as structured cards from "
@@ -1266,27 +1284,77 @@ _RENDER_UI_TOOL: dict = {
 }
 
 
-def get_tool_definitions() -> list[dict]:
-    """Return OpenAI tool definitions, omitting search when not configured."""
-    tools = list(_CORE_TOOL_DEFINITIONS)
-    if settings.TAVILY_API_KEY:
+def get_tool_definitions(tier: Tier = Tier.tier3) -> list[dict]:
+    """Return the OpenAI tool definitions available to `tier`.
+
+    Tools are filtered by the subscription feature gate (`TOOL_FEATURE_GATE`)
+    and `search_web` additionally requires `TAVILY_API_KEY` to be configured.
+    `ask_user` and `render_ui` are always available.
+    """
+    tools: list[dict] = []
+    for tool in _CORE_TOOL_DEFINITIONS:
+        name = tool["function"]["name"]
+        required_feature = TOOL_FEATURE_GATE.get(name)
+        if required_feature is not None and not has_feature(tier, required_feature):
+            continue
+        tools.append(tool)
+    if settings.TAVILY_API_KEY and has_feature(tier, FEATURE_SEARCH_WEB):
         tools.append(_SEARCH_WEB_TOOL)
     tools.append(_ASK_USER_TOOL)
     tools.append(_RENDER_UI_TOOL)
     return tools
 
 
-# Evaluated at import time for backward compatibility.
+# Evaluated at import time for backward compatibility (defaults to the top
+# tier so existing callers that don't pass a tier keep full tool access).
 TOOL_DEFINITIONS: list[dict] = get_tool_definitions()
 
 
-def build_system_prompt(bootstrap: dict) -> str:
-    web_search_rule = (
-        "- Use `search_web` for current or external finance information "
-        "(markets, rates, news, regulations, definitions). Cite sources briefly."
-        if settings.TAVILY_API_KEY
-        else "- Web search is unavailable; answer general finance questions from knowledge and note when data may be outdated."
-    )
+def build_system_prompt(bootstrap: dict, tier: Tier = Tier.tier3) -> str:
+    if settings.TAVILY_API_KEY and has_feature(tier, FEATURE_SEARCH_WEB):
+        web_search_rule = (
+            "- Use `search_web` for current or external finance information "
+            "(markets, rates, news, regulations, definitions). Cite sources briefly."
+        )
+    else:
+        web_search_rule = (
+            "- Web search is unavailable; answer general finance questions from "
+            "knowledge and note when data may be outdated."
+        )
+
+    if has_feature(tier, FEATURE_CHARTS):
+        charts_rule = (
+            "- After gathering data, call `render_ui` to choose components. Use "
+            "`data_table` or `stat_cards` with inline `data` for comparisons and "
+            "key figures. Use chart components (`bar_chart`, `line_chart`, "
+            "`pie_chart`) for trends and distributions. Use `web_sources` after "
+            "`search_web`."
+        )
+    else:
+        charts_rule = (
+            "- After gathering data, call `render_ui` to choose components. Use "
+            "`data_table` or `stat_cards` with inline `data` for comparisons and "
+            "key figures. Do NOT use chart components (`bar_chart`, `line_chart`, "
+            "`pie_chart`); they are not available on this plan. Use `web_sources` "
+            "after `search_web`."
+        )
+
+    if has_feature(tier, FEATURE_ADVANCED_ANALYTICS):
+        analytics_rule = (
+            "- Use `get_period_summary` and `get_period_charts` for the user's "
+            "personal finance summaries and trends over a date period."
+        )
+    else:
+        analytics_rule = (
+            "- Period summaries and charts tools are not available on this plan; "
+            "answer summary questions from listed transactions where possible."
+        )
+
+    if has_feature(tier, FEATURE_BULK_OPERATIONS):
+        bulk_rule = "- Use bulk tools (`bulk_create_transactions`, `bulk_delete_transactions`) for multi-item operations."
+    else:
+        bulk_rule = "- Bulk operations tools are not available on this plan."
+
     return f"""You are Toston, a comprehensive finance assistant. You help with:
 - Personal finances: expenses, incomes, transfers, accounts, categories, places, summaries, and charts.
 - General finance: markets, rates, investing concepts, budgeting strategies, comparisons, and financial planning.
@@ -1297,6 +1365,8 @@ Rules:
 - Date filter types: date (YYYY-MM-DD), week (YYYY-MM-DD start), month (YYYY-MM), quarter (YYYY-Q1), year (YYYY), range (YYYY-MM-DD:YYYY-MM-DD).
 - Deletes and bulk deletes require user confirmation; when you call those tools, explain what will be deleted and wait for confirmation.
 {web_search_rule}
+{analytics_rule}
+{bulk_rule}
 - Use `ask_user` when the request is ambiguous (missing period, account, or intent). Provide 2-6 clear options instead of guessing.
 - Reply in Spanish. Be concise and friendly.
 - Never expose raw IDs to the user.
@@ -1304,7 +1374,8 @@ Rules:
 - When the client renders structured UI (lists, summaries, charts, tables, stats, sources), do not repeat that data in prose. Only tell user the acknowledgment, insight, or a follow-up.
 - For mutations (create/update/delete), a brief confirmation is fine.
 - If a tool failed, explain the error clearly.
-- After gathering data, call `render_ui` to choose components. Use `data_table` or `stat_cards` with inline `data` for comparisons and key figures from web search or general knowledge. Use `web_sources` after `search_web`. Render only what answers the request.
+{charts_rule}
+- Render only what answers the request.
 - Today is {date.today().isoformat()}.
 
 Available UI components for render_ui:

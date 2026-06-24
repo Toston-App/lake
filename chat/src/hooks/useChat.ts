@@ -10,6 +10,7 @@ import type {
   ToolStep,
   UiMessage,
 } from '../types/chat'
+import type { QuotaErrorDetail } from '../types/subscription'
 
 function toUiMessages(
   messages: { role: string; content: string; created_at?: string }[],
@@ -34,6 +35,25 @@ export function useChat() {
   const [isLoading, setIsLoading] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [quotaError, setQuotaError] = useState<QuotaErrorDetail | null>(null)
+
+  /** Detect a 402 quota-exceeded response and surface it as a structured
+   * quota error (so the UI can show an upgrade banner). Returns true when
+   * the error was a quota error (already handled). */
+  const maybeQuotaError = useCallback((err: unknown): boolean => {
+    if (err instanceof ApiError && err.status === 402) {
+      try {
+        const parsed = JSON.parse(err.detail) as QuotaErrorDetail
+        if (parsed && parsed.usage) {
+          setQuotaError(parsed)
+          return true
+        }
+      } catch {
+        // detail wasn't JSON; fall through to generic error
+      }
+    }
+    return false
+  }, [])
 
   const formatError = useCallback((err: unknown): string => {
     if (err instanceof ApiError) {
@@ -140,6 +160,7 @@ export function useChat() {
       if (!trimmed || isLoading) return
 
       setError(null)
+      setQuotaError(null)
       setPendingConfirmation(null)
       setPendingQuestion(null)
       const userMessage: UiMessage = { role: 'user', content: trimmed }
@@ -218,8 +239,12 @@ export function useChat() {
           await refreshConversations()
         }
       } catch (err) {
-        setMessages((prev) => prev.slice(0, -2))
-        setError(formatError(err))
+        if (maybeQuotaError(err)) {
+          setMessages((prev) => prev.slice(0, -2))
+        } else {
+          setMessages((prev) => prev.slice(0, -2))
+          setError(formatError(err))
+        }
       } finally {
         if (streamFailed) {
           setMessages((prev) => prev.slice(0, -2))
@@ -231,6 +256,7 @@ export function useChat() {
       conversationId,
       formatError,
       isLoading,
+      maybeQuotaError,
       refreshConversations,
       updateStreamingAssistant,
     ],
@@ -241,6 +267,7 @@ export function useChat() {
     if (!pendingConfirmation || !conversationId || isConfirming) return
 
     setError(null)
+    setQuotaError(null)
     setIsConfirming(true)
     try {
       const response = await chatApi.confirmAction(conversationId, {
@@ -256,7 +283,9 @@ export function useChat() {
       )
       await refreshConversations()
     } catch (err) {
-      setError(formatError(err))
+      if (!maybeQuotaError(err)) {
+        setError(formatError(err))
+      }
     } finally {
       setIsConfirming(false)
     }
@@ -265,14 +294,19 @@ export function useChat() {
     conversationId,
     formatError,
     isConfirming,
+    maybeQuotaError,
     pendingConfirmation,
     refreshConversations,
     appendAssistantMessage,
   ],
-  )
+)
 
   const dismissPending = useCallback(() => {
     setPendingConfirmation(null)
+  }, [])
+
+  const clearQuotaError = useCallback(() => {
+    setQuotaError(null)
   }, [])
 
   const answerQuestion = useCallback(
@@ -310,6 +344,8 @@ export function useChat() {
     isConfirming,
     error,
     setError,
+    quotaError,
+    clearQuotaError,
     loadConversations,
     startNewChat,
     selectConversation,

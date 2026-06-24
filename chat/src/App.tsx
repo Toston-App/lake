@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchMe } from './api/observability'
 import { ApiError } from './api/client'
+import { AccountView } from './components/AccountView'
 import { ObservabilityDashboard } from './components/admin/ObservabilityDashboard'
 import { ConversationSidebar } from './components/ConversationSidebar'
 import { LoginForm } from './components/LoginForm'
@@ -8,14 +9,18 @@ import { MessageInput } from './components/MessageInput'
 import { MessageList } from './components/MessageList'
 import { QuestionChips } from './components/QuestionChips'
 import { ToolApprovalCard } from './components/ToolApprovalCard'
+import { UpgradeBanner } from './components/UpgradeBanner'
+import { UsageIndicator } from './components/UsageIndicator'
 import { useAuth } from './hooks/useAuth'
 import { useChat } from './hooks/useChat'
+import { useSubscription } from './hooks/useSubscription'
 
-type View = 'chat' | 'admin'
+type View = 'chat' | 'admin' | 'account'
 
 function App() {
   const { isAuthenticated, loginError, isLoggingIn, login, logout } = useAuth()
   const chat = useChat()
+  const subscription = useSubscription(isAuthenticated)
   const { loadConversations } = chat
   const [isSuperuser, setIsSuperuser] = useState(false)
   const [view, setView] = useState<View>('chat')
@@ -54,11 +59,30 @@ function App() {
     return <ObservabilityDashboard onBack={() => setView('chat')} />
   }
 
+  if (view === 'account') {
+    return (
+      <AccountView
+        data={subscription.data}
+        tiers={subscription.tiers}
+        loading={subscription.loading}
+        onChooseTier={(tier) => subscription.openCheckout(tier)}
+        onManage={() => subscription.openPortal()}
+        onBack={() => setView('chat')}
+      />
+    )
+  }
+
+  const openAccount = () => {
+    chat.clearQuotaError()
+    setView('account')
+  }
+
   return (
     <div className="app app-chat">
       <header className="chat-header">
         <h1>Toston Chat</h1>
         <div className="chat-header-actions">
+          <UsageIndicator data={subscription.data} onUpgrade={openAccount} />
           {isSuperuser && (
             <button
               type="button"
@@ -68,6 +92,13 @@ function App() {
               Observability
             </button>
           )}
+          <button
+            type="button"
+            className="logout-btn"
+            onClick={openAccount}
+          >
+            Account
+          </button>
           <button type="button" className="logout-btn" onClick={logout}>
             Log out
           </button>
@@ -84,6 +115,12 @@ function App() {
         <main className="chat-main">
           {chat.error && (
             <p className="error-banner chat-error">{chat.error}</p>
+          )}
+          {chat.quotaError && (
+            <UpgradeBanner
+              reason={chat.quotaError.reason}
+              onUpgrade={openAccount}
+            />
           )}
           <MessageList messages={chat.messages} isLoading={chat.isLoading} />
           {chat.pendingConfirmation && (
@@ -110,7 +147,8 @@ function App() {
             disabled={
               chat.isLoading ||
               chat.isConfirming ||
-              chat.pendingConfirmation !== null
+              chat.pendingConfirmation !== null ||
+              chat.quotaError !== null
             }
           />
         </main>

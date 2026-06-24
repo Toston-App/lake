@@ -30,6 +30,7 @@ from app.ai.render_components import (
     resolve_render_detail,
 )
 from app.core.config import settings
+from app.core.tiers import Tier
 from app.schemas.chat import (
     ChatAction,
     PendingConfirmation,
@@ -197,6 +198,7 @@ class _TurnState:
     total_completion_tokens: int = 0
     total_tokens: int = 0
     total_cost_usd: float = 0.0
+    tier: Tier = Tier.tier3
 
 
 class ChatAgent:
@@ -220,9 +222,10 @@ class ChatAgent:
         *,
         confirmed_action: Optional[dict] = None,
         turn_id: Optional[int] = None,
+        tier: Tier = Tier.tier3,
     ) -> _TurnState:
         bootstrap = await load_bootstrap_context(db, user)
-        system_prompt = build_system_prompt(bootstrap)
+        system_prompt = build_system_prompt(bootstrap, tier)
 
         messages: list[dict] = [{"role": "system", "content": system_prompt}]
         for msg in history:
@@ -292,6 +295,7 @@ class ChatAgent:
             tool_steps=tool_steps,
             new_messages=new_messages,
             turn_id=turn_id,
+            tier=tier,
         )
 
     async def _completion_round(
@@ -304,7 +308,7 @@ class ChatAgent:
         stream = await self.client.chat.completions.create(
             model=self.model,
             messages=state.messages,
-            tools=get_tool_definitions(),
+            tools=get_tool_definitions(state.tier),
             tool_choice="auto",
             stream=True,
             stream_options={"include_usage": True},
@@ -654,6 +658,7 @@ class ChatAgent:
         conversation_id: str,
         confirmed_action: Optional[dict] = None,
         turn_id: Optional[int] = None,
+        tier: Tier = Tier.tier3,
     ) -> AsyncIterator[ChatStreamEvent]:
         state = await self._prepare_turn(
             db,
@@ -662,6 +667,7 @@ class ChatAgent:
             history,
             confirmed_action=confirmed_action,
             turn_id=turn_id,
+            tier=tier,
         )
 
         for _ in range(self.max_rounds):
@@ -770,6 +776,7 @@ class ChatAgent:
         conversation_id: str,
         confirmed_action: Optional[dict] = None,
         turn_id: Optional[int] = None,
+        tier: Tier = Tier.tier3,
     ) -> ChatTurnResult:
         result: ChatTurnResult | None = None
         async for event in self.stream_turn(
@@ -780,6 +787,7 @@ class ChatAgent:
             conversation_id=conversation_id,
             confirmed_action=confirmed_action,
             turn_id=turn_id,
+            tier=tier,
         ):
             if event.type == "done" and event.result is not None:
                 result = event.result

@@ -13,6 +13,7 @@ from app.ai.chat_agent import ChatAgent, ChatTurnResult
 from app.ai.chat_tools import execute_tool, merge_confirm_tool_args
 from app.api import deps
 from app.core.config import settings
+from app.core.tiers import Tier
 from app.schemas.chat import (
     ChatAction,
     ChatConfirmRequest,
@@ -23,8 +24,15 @@ from app.schemas.chat import (
     ConversationDetail,
     ConversationMessage,
     ConversationSummary,
-    chat_action_detail,
     ToolStep,
+    chat_action_detail,
+)
+from app.services.entitlements import check_quota
+from app.utilities.observability import (
+    finalize_turn,
+    record_tool_call,
+    start_turn,
+    upsert_conversation,
 )
 from app.utilities.redis import (
     delete_conversation,
@@ -33,12 +41,6 @@ from app.utilities.redis import (
     get_pending_action,
     list_user_conversations,
     save_conversation,
-)
-from app.utilities.observability import (
-    finalize_turn,
-    record_tool_call,
-    start_turn,
-    upsert_conversation,
 )
 from app.utilities.wide_events import enrich_event, timed
 
@@ -75,6 +77,26 @@ def get_chat_agent() -> ChatAgent:
 def _require_chat_enabled() -> None:
     if not settings.CHAT_ENABLED:
         raise HTTPException(status_code=503, detail="Chat is disabled")
+
+
+async def _enforce_quota(db: AsyncSession, user: models.User) -> tuple[bool, Tier, dict]:
+    """Check the user's subscription quota before a chat turn.
+
+    Returns (allowed, tier, usage_dict). Raises HTTPException(402) when over
+    the message/token cap so the client can prompt an upgrade.
+    """
+    quota = await check_quota(db, user)
+    if not quota.allowed:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "reason": quota.reason or "quota_exceeded",
+                "usage": quota.usage.model_dump(mode="json"),
+                "tier": quota.tier.value,
+                "upgrade_url": "/account",
+            },
+        )
+    return True, quota.tier, quota.usage.model_dump(mode="json")
 
 
 def _conversation_title(message: str) -> str:
@@ -123,6 +145,7 @@ async def send_chat_message(
     agent: ChatAgent = Depends(get_chat_agent),
 ) -> Any:
     _require_chat_enabled()
+    _, tier, _usage = await _enforce_quota(db, current_user)
 
     conversation_id = body.conversation_id or str(uuid.uuid4())
     history: list[dict] = []
@@ -135,7 +158,11 @@ async def send_chat_message(
 
     enrich_event(
         request,
-        user={"id": current_user.id, "email": current_user.email},
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "subscription_tier": tier.value,
+        },
         operation={
             "type": "chat_message",
             "conversation_id": conversation_id,
@@ -161,6 +188,7 @@ async def send_chat_message(
             history,
             conversation_id=conversation_id,
             turn_id=turn_id,
+            tier=tier,
         )
 
     await finalize_turn(
@@ -212,6 +240,10 @@ async def send_chat_message_stream(
     agent: ChatAgent = Depends(get_chat_agent),
 ) -> StreamingResponse:
     _require_chat_enabled()
+    # Quota is checked before returning the StreamingResponse so a 402 still
+    # surfaces as a normal JSON error (once streaming starts we can't change
+    # the status code).
+    _, tier, _usage = await _enforce_quota(db, current_user)
 
     conversation_id = body.conversation_id or str(uuid.uuid4())
     history: list[dict] = []
@@ -224,7 +256,11 @@ async def send_chat_message_stream(
 
     enrich_event(
         request,
-        user={"id": current_user.id, "email": current_user.email},
+        user={
+            "id": current_user.id,
+            "email": current_user.email,
+            "subscription_tier": tier.value,
+        },
         operation={
             "type": "chat_message_stream",
             "conversation_id": conversation_id,
@@ -256,6 +292,7 @@ async def send_chat_message_stream(
                     history,
                     conversation_id=conversation_id,
                     turn_id=turn_id,
+                    tier=tier,
                 ):
                     if event.type == "token" and event.delta:
                         yield _sse_event(
@@ -414,6 +451,7 @@ async def confirm_chat_action(
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     _require_chat_enabled()
+    await _enforce_quota(db, current_user)
 
     pending = await get_pending_action(body.action_id, current_user.id)
     if not pending:

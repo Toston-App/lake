@@ -202,6 +202,58 @@ class Settings(BaseSettings):
     DEPLOYMENT_ID: Optional[str] = None  # For tracking deployments
     REGION: Optional[str] = None  # e.g., "us-east-1", "eu-west-1"
 
+    # ---------- Polar.sh subscriptions ----------
+    # Master switch. When False, the chat works without Polar: every user is
+    # granted the tier in SUBSCRIPTIONS_DEV_DEFAULT_TIER (defaults to tier3 so
+    # devs get full chat). Set to True in environments with real Polar creds.
+    SUBSCRIPTIONS_ENABLED: bool = False
+    POLAR_ACCESS_TOKEN: Optional[str] = None
+    POLAR_WEBHOOK_SECRET: Optional[str] = None
+    POLAR_ORGANIZATION_ID: Optional[str] = None
+    # "sandbox" targets api.sandbox.polar.sh; "production" targets api.polar.sh.
+    POLAR_SERVER: str = "sandbox"
+    # Used only when SUBSCRIPTIONS_ENABLED is False.
+    SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier3"
+    # Public base URL of this backend, used to build Polar success_url for
+    # checkout. Falls back to SERVER_HOST when not set.
+    POLAR_SUCCESS_URL_BASE: Optional[str] = None
+    # Polar product ids per paying tier. Optional: only required to actually
+    # create checkouts. The webhook maps incoming product ids back to tiers.
+    POLAR_PRODUCT_TIER1_ID: Optional[str] = None
+    POLAR_PRODUCT_TIER2_ID: Optional[str] = None
+    POLAR_PRODUCT_TIER3_ID: Optional[str] = None
+
+    @field_validator("POLAR_SERVER")
+    def _polar_server_value(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in ("sandbox", "production"):
+            return "sandbox"
+        return v
+
+    @field_validator("SUBSCRIPTIONS_DEV_DEFAULT_TIER")
+    def _dev_default_tier_value(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in ("free", "tier1", "tier2", "tier3"):
+            return "tier3"
+        return v
+
+    @field_validator("SUBSCRIPTIONS_ENABLED", mode="before")
+    def _subscriptions_enabled_requires_creds(
+        cls, v: Any, info: dict[str, Any]
+    ) -> bool:
+        enabled = bool(v)
+        if enabled:
+            missing = [
+                name
+                for name in ("POLAR_ACCESS_TOKEN", "POLAR_WEBHOOK_SECRET", "POLAR_ORGANIZATION_ID")
+                if not (info.data.get(name) or "").strip()
+            ]
+            if missing:
+                raise ValueError(
+                    "SUBSCRIPTIONS_ENABLED=true requires: " + ", ".join(missing)
+                )
+        return enabled
+
     @field_validator("WHATSAPP_ENABLED", mode='before')
     def get_whatsapp_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
         return bool(

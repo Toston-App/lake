@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .subcategory import Subcategory  # noqa: F401
     from .transfer import Transfer  # noqa: F401
     from .feedback import Feedback  # noqa: F401
+    from .subscription import UserSubscription  # noqa: F401
 
 
 class User(Base):
@@ -31,6 +32,9 @@ class User(Base):
     hashed_password: str = Column(String, nullable=True)
     is_active: bool = Column(Boolean(), default=True)
     is_superuser: bool = Column(Boolean(), default=False)
+    # Polar customer id, populated on first checkout. Used to create
+    # subsequent checkout/portal sessions without re-looking-up the customer.
+    polar_customer_id: str | None = Column(String, index=True, nullable=True)
     balance_total: float = Column(Float, default=0.0)
     balance_income: float = Column(Float, default=0.0)
     balance_outcome: float = Column(Float, default=0.0)
@@ -70,4 +74,7 @@ class User(Base):
     )
     balance_adjustments: list["BalanceAdjustment"] = relationship(
         "BalanceAdjustment", back_populates="owner", cascade="all, delete-orphan"
+    )
+    subscription: "UserSubscription" = relationship(
+        "UserSubscription", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
