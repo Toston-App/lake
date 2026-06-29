@@ -139,7 +139,6 @@ async def ensure_customer(db: AsyncSession, user: User) -> str:
                     "external_id": ext_id,
                     "email": user.email or "",
                     "name": user.name or "",
-                    "organization_id": settings.POLAR_ORGANIZATION_ID,
                     "metadata": {"toston_user_id": str(user.id)},
                 }
             )
@@ -161,8 +160,12 @@ async def create_checkout(db: AsyncSession, user: User, tier: Tier) -> CheckoutO
     if tier == Tier.free:
         raise HTTPException(status_code=400, detail="Cannot subscribe to the free tier")
 
+    print("create_checkout", tier)
+
     _configure_product_ids()
     cfg = get_tier_config(tier)
+    print("cfg.polar_product_id", cfg.polar_product_id)
+    
     if not cfg.polar_product_id:
         raise HTTPException(
             status_code=409,
@@ -217,7 +220,7 @@ async def handle_polar_event(db: AsyncSession, event: Any) -> None:
     `event` is the pydantic model returned by `polar_sdk.webhooks.validate_event`.
     Each payload has a `.type` string and a `.data` object.
     """
-    event_type: str = getattr(event, "type", "") or ""
+    event_type: str = (getattr(event, "TYPE", None) or getattr(event, "type", "") or "")
     data: Any = getattr(event, "data", None)
 
     _configure_product_ids()
@@ -228,7 +231,7 @@ async def handle_polar_event(db: AsyncSession, event: Any) -> None:
         await _handle_customer_event(db, data)
     else:
         # Acknowledge but ignore (checkout.*, order.*, benefit_grant.*, etc.)
-        logger.debug("Ignoring Polar event %s", event_type)
+        logger.info("Ignoring Polar event %s", event_type)
 
 
 def _coerce_dt(value: Any) -> Optional[Any]:
@@ -242,13 +245,29 @@ async def _resolve_user_from_polar_customer(
 ) -> Optional[User]:
     """Find our User from a Polar customer id.
 
-    1. Look for a UserSubscription row with this polar_customer_id.
-    2. Otherwise call Polar to fetch the customer's external_id and resolve.
+    Resolution order:
+    0. Fast path: `User.polar_customer_id` is denormalized at checkout (and
+       by `customer.created`/`updated` webhooks), so a single indexed lookup
+       resolves the user with no network calls.
+    1. Look for a `UserSubscription` row with this polar_customer_id.
+    2. Fall back to the Polar API to fetch the customer's external_id and
+       resolve via `_resolve_user_by_external_id` (Clerk UUID or numeric id).
     """
     from sqlalchemy import select
 
     from app.models.subscription import UserSubscription
+    from app.models.user import User as UserModel
 
+    # 0. Fast path: User row already carries polar_customer_id.
+    user = (
+        await db.execute(
+            select(UserModel).where(UserModel.polar_customer_id == polar_customer_id)
+        )
+    ).scalars().first()
+    if user is not None:
+        return user
+
+    # 1. Subscription row lookup (kept for resilience / older rows).
     row = (
         await db.execute(
             select(UserSubscription).where(
@@ -261,7 +280,7 @@ async def _resolve_user_from_polar_customer(
         if user is not None:
             return user
 
-    # Fall back to Polar API to discover the external id.
+    # 2. Fall back to Polar API to discover the external id.
     polar = get_polar_client()
     if polar is None:
         return None
@@ -270,9 +289,16 @@ async def _resolve_user_from_polar_customer(
     except Exception as exc:
         logger.warning("polar.customers.get(%s) failed: %s", polar_customer_id, exc)
         return None
-    external_id = getattr(customer, "external_id", None)
-    if not external_id:
-        return None
+    try:
+        from polar_sdk.types import UNSET  # type: ignore[import-not-found]
+
+        external_id = getattr(customer, "external_id", None)
+        if external_id is UNSET or external_id is None:
+            return None
+    except ImportError:
+        external_id = getattr(customer, "external_id", None)
+        if not external_id:
+            return None
     user = await _resolve_user_by_external_id(db, external_id)
     if user is not None:
         # Cache for next time.
@@ -301,6 +327,19 @@ async def _handle_subscription_event(
     product_id: Optional[str] = getattr(data, "product_id", None)
     # Map the event type to a status string we persist.
     status = _subscription_status_for_event(event_type, data)
+    # Derive the tier we'll persist from the configured product id.
+    from app.core.tiers import tier_for_product
+
+    resolved_tier = tier_for_product(product_id)
+
+    logger.info(
+        "Polar %s: resolved user_id=%s polar_customer_id=%s status=%s tier=%s",
+        event_type,
+        user.id,
+        polar_customer_id,
+        status,
+        resolved_tier.value,
+    )
 
     await crud_subscription.upsert_from_webhook(
         db,

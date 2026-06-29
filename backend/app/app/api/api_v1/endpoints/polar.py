@@ -51,7 +51,7 @@ async def polar_webhook(
 
     try:
         event = validate_event(
-            payload=payload,
+            body=payload,
             headers=dict(request.headers),
             secret=settings.POLAR_WEBHOOK_SECRET or "",
         )
@@ -75,7 +75,9 @@ async def polar_webhook(
             request,
             webhook={
                 "outcome": "handler_error",
-                "event_type": getattr(event, "type", None),
+                "event_type": getattr(event, "TYPE", None) or getattr(event, "type", None),
+                "polar_customer_id": getattr(getattr(event, "data", None), "customer_id", None)
+                or getattr(getattr(event, "data", None), "id", None),
                 "error": str(exc),
             },
         )
