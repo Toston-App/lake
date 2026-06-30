@@ -16,7 +16,7 @@ async def read_places(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 200,
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
