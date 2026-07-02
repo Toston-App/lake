@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 
 from fastapi.encoders import jsonable_encoder
+from fastapi_pagination import Params
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
@@ -700,6 +701,7 @@ async def execute_tool(
                 categories=args.get("categories"),
                 places=args.get("places"),
                 transaction_type=types,
+                params=Params(page=1, size=SEARCH_LIMIT),
             )
             items = jsonable_encoder(page.items)[:SEARCH_LIMIT]
             return _ok(

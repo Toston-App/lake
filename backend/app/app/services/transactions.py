@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
+from fastapi_pagination.bases import AbstractParams
 from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,9 +107,49 @@ async def _adjust_income_totals(
             await _adjust_total(db, category, amount)
 
 
+async def _ensure_owned_optional(
+    db: AsyncSession, user: models.User, crud_obj: Any, obj_id: int | None
+) -> int | None:
+    """Return obj_id when it is owned by user (or user is superuser); None otherwise.
+
+    Helper for create/validate flows where optional foreign-key fields that are
+    missing or owned by someone else are silently skipped (set to None).
+    """
+    if not obj_id:
+        return None
+    obj = await crud_obj.get(db=db, id=obj_id)
+    if not obj or (not _is_superuser(user) and obj.owner_id != user.id):
+        return None
+    return obj_id
+
+
+async def _require_owned(
+    db: AsyncSession, user: models.User, crud_obj: Any, obj_id: int, label: str
+) -> Any:
+    """Fetch a required foreign-key entity, enforcing existence and ownership."""
+    obj = await crud_obj.get(db=db, id=obj_id)
+    if not obj:
+        raise NotFoundError(f"{label} not found")
+    if not _is_superuser(user) and obj.owner_id != user.id:
+        raise PermissionDeniedError("Not enough permissions")
+    return obj
+
+
 async def create_expense(
     db: AsyncSession, user: models.User, expense_in: schemas.ExpenseCreate
 ):
+    expense_in.account_id = await _ensure_owned_optional(
+        db, user, crud.account, expense_in.account_id
+    )
+    expense_in.category_id = await _ensure_owned_optional(
+        db, user, crud.category, expense_in.category_id
+    )
+    expense_in.subcategory_id = await _ensure_owned_optional(
+        db, user, crud.subcategory, expense_in.subcategory_id
+    )
+    expense_in.place_id = await _ensure_owned_optional(
+        db, user, crud.place, expense_in.place_id
+    )
     expense = await crud.expense.create_with_owner(
         db=db, obj_in=expense_in, owner_id=user.id
     )
@@ -140,21 +181,21 @@ async def update_expense(
 
     if expense_in.place_id:
         place = await crud.place.get(db=db, id=expense_in.place_id)
-        if not place:
+        if not place or (not _is_superuser(user) and place.owner_id != user.id):
             expense_in.place_id = expense.place_id
     if expense_in.category_id:
         category = await crud.category.get(db=db, id=expense_in.category_id)
-        if not category:
+        if not category or (not _is_superuser(user) and category.owner_id != user.id):
             expense_in.category_id = expense.category_id
     if expense_in.subcategory_id:
         subcategory = await crud.subcategory.get(db=db, id=expense_in.subcategory_id)
-        if not subcategory:
+        if not subcategory or (not _is_superuser(user) and subcategory.owner_id != user.id):
             expense_in.subcategory_id = expense.subcategory_id
     if expense_in.date:
         expense_in.date = _parse_transaction_date(expense_in.date, expense.date)
     if expense_in.account_id:
         account = await crud.account.get(db=db, id=expense_in.account_id)
-        if not account:
+        if not account or (not _is_superuser(user) and account.owner_id != user.id):
             expense_in.account_id = expense.account_id
 
     expense_in.updated_at = datetime.now(timezone.utc)
@@ -253,6 +294,15 @@ async def delete_expenses_bulk(
 async def create_income(
     db: AsyncSession, user: models.User, income_in: schemas.IncomeCreate
 ):
+    income_in.account_id = await _ensure_owned_optional(
+        db, user, crud.account, income_in.account_id
+    )
+    income_in.subcategory_id = await _ensure_owned_optional(
+        db, user, crud.subcategory, income_in.subcategory_id
+    )
+    income_in.place_id = await _ensure_owned_optional(
+        db, user, crud.place, income_in.place_id
+    )
     income = await crud.income.create_with_owner(
         db=db, obj_in=income_in, owner_id=user.id
     )
@@ -283,17 +333,17 @@ async def update_income(
 
     if income_in.place_id:
         place = await crud.place.get(db=db, id=income_in.place_id)
-        if not place:
+        if not place or (not _is_superuser(user) and place.owner_id != user.id):
             income_in.place_id = income.place_id
     if income_in.subcategory_id:
         subcategory = await crud.subcategory.get(db=db, id=income_in.subcategory_id)
-        if not subcategory:
+        if not subcategory or (not _is_superuser(user) and subcategory.owner_id != user.id):
             income_in.subcategory_id = income.subcategory_id
     if income_in.date:
         income_in.date = _parse_transaction_date(income_in.date, income.date)
     if income_in.account_id:
         account = await crud.account.get(db=db, id=income_in.account_id)
-        if not account:
+        if not account or (not _is_superuser(user) and account.owner_id != user.id):
             income_in.account_id = income.account_id
 
     income_in.updated_at = datetime.now(timezone.utc)
@@ -382,6 +432,8 @@ async def delete_incomes_bulk(
 async def create_transfer(
     db: AsyncSession, user: models.User, transfer_in: schemas.TransferCreate
 ):
+    await _require_owned(db, user, crud.account, transfer_in.from_acc, "Account")
+    await _require_owned(db, user, crud.account, transfer_in.to_acc, "Account")
     transfer = await crud.transfer.create_with_owner(
         db=db, obj_in=transfer_in, owner_id=user.id
     )
@@ -407,6 +459,14 @@ async def update_transfer(
     )
     if "date" in provided_fields:
         transfer_in.date = _parse_transaction_date(transfer_in.date, existing_transfer.date)
+    if transfer_in.from_acc is not None:
+        from_acc = await crud.account.get(db=db, id=transfer_in.from_acc)
+        if not from_acc or (not _is_superuser(user) and from_acc.owner_id != user.id):
+            transfer_in.from_acc = existing_transfer.from_acc
+    if transfer_in.to_acc is not None:
+        to_acc = await crud.account.get(db=db, id=transfer_in.to_acc)
+        if not to_acc or (not _is_superuser(user) and to_acc.owner_id != user.id):
+            transfer_in.to_acc = existing_transfer.to_acc
     transfer_in.updated_at = datetime.now(timezone.utc)
     try:
         updated_transfer = await crud.transfer.update(
@@ -548,6 +608,7 @@ async def search_transactions(
     categories: list[int] | None = None,
     places: list[int] | None = None,
     transaction_type: list[TransactionType] | None = None,
+    params: AbstractParams | None = None,
 ):
     return await crud_transaction.get_multi_by_owner_with_filters(
         db=db,
@@ -562,4 +623,5 @@ async def search_transactions(
         categories=categories,
         places=places,
         transaction_type=transaction_type,
+        params=params,
     )
