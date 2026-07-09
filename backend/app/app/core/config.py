@@ -198,7 +198,7 @@ class Settings(BaseSettings):
     AXIOM_ENABLED: bool = False
     AXIOM_SAMPLE_RATE: float = 0.05  # Sample 5% of successful requests
     AXIOM_SLOW_REQUEST_THRESHOLD_MS: int = 2000  # Consider requests >2s as slow
-    
+
     DEPLOYMENT_ID: Optional[str] = None  # For tracking deployments
     REGION: Optional[str] = None  # e.g., "us-east-1", "eu-west-1"
 
@@ -241,7 +241,7 @@ class Settings(BaseSettings):
     def _subscriptions_enabled_requires_creds(
         cls, v: Any, info: dict[str, Any]
     ) -> bool:
-        enabled = bool(v)
+        enabled = bool(info.data.get("POLAR_ACCESS_TOKEN"))
         if enabled:
             missing = [
                 name
@@ -261,7 +261,7 @@ class Settings(BaseSettings):
             and info.data.get("WHATSAPP_PHONE_NUMBER_ID")
             and bool(info.data.get("WHATSAPP_VERIFY_TOKEN"))
         )
-    
+
     @field_validator("AXIOM_ENABLED", mode='before')
     def get_axiom_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
         return bool(info.data.get("AXIOM_API_TOKEN"))
