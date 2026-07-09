@@ -203,17 +203,11 @@ class Settings(BaseSettings):
     REGION: Optional[str] = None  # e.g., "us-east-1", "eu-west-1"
 
     # ---------- Polar.sh subscriptions ----------
-    # Master switch. When False, the chat works without Polar: every user is
-    # granted the tier in SUBSCRIPTIONS_DEV_DEFAULT_TIER (defaults to tier3 so
-    # devs get full chat). Set to True in environments with real Polar creds.
-    SUBSCRIPTIONS_ENABLED: bool = False
     POLAR_ACCESS_TOKEN: Optional[str] = None
     POLAR_WEBHOOK_SECRET: Optional[str] = None
     POLAR_ORGANIZATION_ID: Optional[str] = None
     # "sandbox" targets api.sandbox.polar.sh; "production" targets api.polar.sh.
     POLAR_SERVER: str = "sandbox"
-    # Used only when SUBSCRIPTIONS_ENABLED is False.
-    SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier3"
     # Public base URL of this backend, used to build Polar success_url for
     # checkout. Falls back to SERVER_HOST when not set.
     POLAR_SUCCESS_URL_BASE: Optional[str] = None
@@ -222,6 +216,12 @@ class Settings(BaseSettings):
     POLAR_PRODUCT_TIER1_ID: Optional[str] = None
     POLAR_PRODUCT_TIER2_ID: Optional[str] = None
     POLAR_PRODUCT_TIER3_ID: Optional[str] = None
+    # Master switch. When False, the chat works without Polar: every user is
+    # granted the tier in SUBSCRIPTIONS_DEV_DEFAULT_TIER (defaults to tier3 so
+    # devs get full chat). Set to True in environments with real Polar creds.
+    SUBSCRIPTIONS_ENABLED: bool = False
+    # Used only when SUBSCRIPTIONS_ENABLED is False.
+    SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier3"
 
     @field_validator("POLAR_SERVER")
     def _polar_server_value(cls, v: str) -> str:
