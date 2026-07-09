@@ -1,15 +1,18 @@
-import json
+import time
 import uuid
-from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.run import AgentRunResult
+from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.ai.chat_agent import ChatAgent, ChatTurnResult
+from app.ai.agent import ChatDeps, build_obs_hooks, build_toolset
+from app.ai.agent import get_chat_agent as get_pydantic_agent
 from app.ai.chat_tools import execute_tool, merge_confirm_tool_args
 from app.api import deps
 from app.core.config import settings
@@ -17,10 +20,7 @@ from app.core.tiers import Tier
 from app.schemas.chat import (
     ChatAction,
     ChatConfirmRequest,
-    ChatMessageRequest,
     ChatMessageResponse,
-    ChatStreamMeta,
-    ChatStreamToken,
     ConversationDetail,
     ConversationMessage,
     ConversationSummary,
@@ -54,24 +54,7 @@ def _trace_ids(request: Request) -> tuple[str | None, str | None]:
     return trace_id, request_id
 
 
-def _status_for_turn(turn: ChatTurnResult) -> str:
-    if turn.max_rounds_reached:
-        return "max_rounds"
-    if turn.pending_question is not None:
-        return "pending_question"
-    if turn.pending_confirmation is not None:
-        return "pending_confirmation"
-    return "ok"
-
 router = APIRouter()
-_agent: ChatAgent | None = None
-
-
-def get_chat_agent() -> ChatAgent:
-    global _agent
-    if _agent is None:
-        _agent = ChatAgent()
-    return _agent
 
 
 def _require_chat_enabled() -> None:
@@ -104,24 +87,6 @@ def _conversation_title(message: str) -> str:
     return text[:60] + ("…" if len(text) > 60 else "")
 
 
-def _sse_event(event_type: str, data: dict) -> str:
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-def _turn_to_response(
-    conversation_id: str, turn: ChatTurnResult
-) -> ChatMessageResponse:
-    return ChatMessageResponse(
-        conversation_id=conversation_id,
-        reply=turn.reply,
-        actions=turn.actions,
-        render=turn.render,
-        tool_steps=turn.tool_steps,
-        pending_confirmation=turn.pending_confirmation,
-        pending_question=turn.pending_question,
-    )
-
-
 def _merge_messages(
     existing: list[dict], new_messages: list[dict]
 ) -> list[dict]:
@@ -136,25 +101,61 @@ def _merge_messages(
     return merged
 
 
-@router.post("/messages", response_model=ChatMessageResponse)
-async def send_chat_message(
+
+
+# Vercel AI SDK UI Message Stream Protocol endpoint (Pydantic AI + VercelAIAdapter)
+#
+# This single POST /chat endpoint replaces the legacy /messages and
+# /messages/stream endpoints for frontends using `@ai-sdk/react`'s `useChat`.
+# It speaks the Vercel AI data-stream protocol (SSE chunks: text-start/delta/end,
+# tool-input/output, start-step/finish-step, finish, tool-approval-request [v6]).
+# The legacy endpoints below are kept for the not-yet-migrated frontend.
+# --------------------------------------------------------------------------- #
+
+
+def _last_user_text(messages: list[Any]) -> str:
+    """Extract the most recent user prompt text from the adapter's messages."""
+    for msg in reversed(messages):
+        if isinstance(msg, ModelRequest):
+            for part in msg.parts:
+                if isinstance(part, UserPromptPart):
+                    return str(part.content)
+    return ""
+
+
+def _last_assistant_text(messages: list[Any]) -> str:
+    """Extract the most recent assistant text part from the run result."""
+    for msg in reversed(messages):
+        if isinstance(msg, ModelResponse):
+            for part in msg.parts:
+                if isinstance(part, TextPart):
+                    return part.content
+    return ""
+
+
+@router.post("")
+async def chat_vercel(
     request: Request,
-    body: ChatMessageRequest,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
-    agent: ChatAgent = Depends(get_chat_agent),
-) -> Any:
+) -> Response:
+    """Vercel AI data-stream chat endpoint (sdk_version=6).
+
+    Quota is enforced before the stream starts so a 402 still surfaces as a
+    normal JSON error. Once streaming begins, the VercelAIAdapter owns the SSE
+    response and emits the protocol chunks that `useChat` consumes.
+    """
     _require_chat_enabled()
     _, tier, _usage = await _enforce_quota(db, current_user)
 
-    conversation_id = body.conversation_id or str(uuid.uuid4())
-    history: list[dict] = []
-    title = _conversation_title(body.message)
+    agent = get_pydantic_agent()
+    adapter = await VercelAIAdapter.from_request(
+        request, agent=agent, sdk_version=6
+    )
 
-    existing = await get_conversation(conversation_id, current_user.id)
-    if existing:
-        history = existing.get("messages") or []
-        title = existing.get("title") or title
+    conversation_id = adapter.conversation_id or str(uuid.uuid4())
+    user_msg = _last_user_text(adapter.messages)
+    title = _conversation_title(user_msg) if user_msg else "Conversation"
 
     enrich_event(
         request,
@@ -164,9 +165,9 @@ async def send_chat_message(
             "subscription_tier": tier.value,
         },
         operation={
-            "type": "chat_message",
+            "type": "chat_vercel",
             "conversation_id": conversation_id,
-            "message_length": len(body.message),
+            "message_length": len(user_msg),
         },
     )
 
@@ -174,208 +175,72 @@ async def send_chat_message(
     turn_id = await start_turn(
         conversation_id=conversation_id,
         user_id=current_user.id,
-        user_message=body.message,
-        model=agent.model,
+        user_message=user_msg,
+        model=settings.CHAT_MODEL or settings.OPENROUTER_MODEL,
         trace_id=trace_id,
         request_id=request_id,
     )
 
-    with timed() as t:
-        turn = await agent.run_turn(
-            db,
-            current_user,
-            body.message,
-            history,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            tier=tier,
+    deps = ChatDeps(
+        db=db,
+        user=current_user,
+        tier=tier,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+    )
+    started = time.perf_counter()
+
+    async def on_complete(result: AgentRunResult) -> None:
+        """Persist conversation + finalize observability after a successful run."""
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        is_pending = deps.had_pending_confirmation
+        usage = result.usage
+        all_msgs = result.all_messages()
+        assistant_reply = _last_assistant_text(all_msgs)
+        status = "pending_confirmation" if is_pending else "ok"
+        await finalize_turn(
+            turn_id,
+            status=status,
+            assistant_reply=assistant_reply,
+            duration_ms=duration_ms,
+            pending_confirmation=is_pending,
+            total_prompt_tokens=usage.input_tokens,
+            total_completion_tokens=usage.output_tokens,
+            total_tokens=usage.input_tokens + usage.output_tokens,
+        )
+        try:
+            ui_msgs = VercelAIAdapter.dump_messages(all_msgs, sdk_version=6)
+            await save_conversation(
+                conversation_id,
+                current_user.id,
+                [m.model_dump() for m in ui_msgs],
+                title,
+                settings.CHAT_CONVERSATION_TTL_SECONDS,
+            )
+            await upsert_conversation(
+                conversation_id, current_user.id, title, len(ui_msgs)
+            )
+        except Exception:
+            # Persistence is best-effort; never break the stream on a Redis hiccup.
+            pass
+        enrich_event(
+            request,
+            ai={
+                "provider": "openrouter",
+                "duration_ms": duration_ms,
+                "pending_confirmation": is_pending,
+                "streaming": True,
+                "protocol": "vercel-ai",
+            },
         )
 
-    await finalize_turn(
-        turn_id,
-        status=_status_for_turn(turn),
-        assistant_reply=turn.reply,
-        duration_ms=t.ms,
-        rounds_count=turn.rounds_count,
-        actions_count=len(turn.actions),
-        pending_confirmation=turn.pending_confirmation is not None,
-        pending_question=turn.pending_question is not None,
-        total_prompt_tokens=turn.total_prompt_tokens,
-        total_completion_tokens=turn.total_completion_tokens,
-        total_tokens=turn.total_tokens,
-        total_cost_usd=turn.total_cost_usd,
+    event_stream = adapter.run_stream(
+        deps=deps,
+        toolsets=[build_toolset(tier)],
+        capabilities=[build_obs_hooks()],
+        on_complete=on_complete,
     )
-
-    enrich_event(
-        request,
-        ai={
-            "provider": "openrouter",
-            "duration_ms": t.ms,
-            "actions_count": len(turn.actions),
-            "pending_confirmation": turn.pending_confirmation is not None,
-        },
-    )
-
-    updated_messages = _merge_messages(history, turn.new_messages)
-    await save_conversation(
-        conversation_id,
-        current_user.id,
-        updated_messages,
-        title,
-        settings.CHAT_CONVERSATION_TTL_SECONDS,
-    )
-    await upsert_conversation(
-        conversation_id, current_user.id, title, len(updated_messages)
-    )
-
-    return _turn_to_response(conversation_id, turn)
-
-
-@router.post("/messages/stream")
-async def send_chat_message_stream(
-    request: Request,
-    body: ChatMessageRequest,
-    db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
-    agent: ChatAgent = Depends(get_chat_agent),
-) -> StreamingResponse:
-    _require_chat_enabled()
-    # Quota is checked before returning the StreamingResponse so a 402 still
-    # surfaces as a normal JSON error (once streaming starts we can't change
-    # the status code).
-    _, tier, _usage = await _enforce_quota(db, current_user)
-
-    conversation_id = body.conversation_id or str(uuid.uuid4())
-    history: list[dict] = []
-    title = _conversation_title(body.message)
-
-    existing = await get_conversation(conversation_id, current_user.id)
-    if existing:
-        history = existing.get("messages") or []
-        title = existing.get("title") or title
-
-    enrich_event(
-        request,
-        user={
-            "id": current_user.id,
-            "email": current_user.email,
-            "subscription_tier": tier.value,
-        },
-        operation={
-            "type": "chat_message_stream",
-            "conversation_id": conversation_id,
-            "message_length": len(body.message),
-        },
-    )
-
-    trace_id, request_id = _trace_ids(request)
-    turn_id = await start_turn(
-        conversation_id=conversation_id,
-        user_id=current_user.id,
-        user_message=body.message,
-        model=agent.model,
-        trace_id=trace_id,
-        request_id=request_id,
-    )
-
-    async def event_generator() -> AsyncIterator[str]:
-        with timed() as t:
-            yield _sse_event(
-                "meta",
-                ChatStreamMeta(conversation_id=conversation_id).model_dump(),
-            )
-            try:
-                async for event in agent.stream_turn(
-                    db,
-                    current_user,
-                    body.message,
-                    history,
-                    conversation_id=conversation_id,
-                    turn_id=turn_id,
-                    tier=tier,
-                ):
-                    if event.type == "token" and event.delta:
-                        yield _sse_event(
-                            "token",
-                            ChatStreamToken(delta=event.delta).model_dump(),
-                        )
-                    elif event.type == "tool_step" and event.tool_step:
-                        yield _sse_event(
-                            "tool_step", event.tool_step.model_dump()
-                        )
-                    elif event.type == "done" and event.result:
-                        turn = event.result
-                        updated_messages = _merge_messages(
-                            history, turn.new_messages
-                        )
-                        await save_conversation(
-                            conversation_id,
-                            current_user.id,
-                            updated_messages,
-                            title,
-                            settings.CHAT_CONVERSATION_TTL_SECONDS,
-                        )
-                        await upsert_conversation(
-                            conversation_id,
-                            current_user.id,
-                            title,
-                            len(updated_messages),
-                        )
-                        await finalize_turn(
-                            turn_id,
-                            status=_status_for_turn(turn),
-                            assistant_reply=turn.reply,
-                            duration_ms=t.ms,
-                            rounds_count=turn.rounds_count,
-                            actions_count=len(turn.actions),
-                            pending_confirmation=turn.pending_confirmation
-                            is not None,
-                            pending_question=turn.pending_question is not None,
-                            total_prompt_tokens=turn.total_prompt_tokens,
-                            total_completion_tokens=turn.total_completion_tokens,
-                            total_tokens=turn.total_tokens,
-                            total_cost_usd=turn.total_cost_usd,
-                        )
-                        response = _turn_to_response(conversation_id, turn)
-                        enrich_event(
-                            request,
-                            ai={
-                                "provider": "openrouter",
-                                "duration_ms": t.ms,
-                                "actions_count": len(turn.actions),
-                                "pending_confirmation": turn.pending_confirmation
-                                is not None,
-                                "streaming": True,
-                            },
-                        )
-                        yield _sse_event("done", response.model_dump(mode="json"))
-            except Exception as exc:
-                await finalize_turn(
-                    turn_id,
-                    status="error",
-                    error=str(exc),
-                    duration_ms=t.ms,
-                )
-                enrich_event(
-                    request,
-                    ai={
-                        "provider": "openrouter",
-                        "duration_ms": t.ms,
-                        "streaming": True,
-                        "error": str(exc),
-                    },
-                )
-                yield _sse_event("error", {"detail": str(exc)})
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return adapter.streaming_response(event_stream)
 
 
 @router.get("/conversations", response_model=list[ConversationSummary])
@@ -406,25 +271,61 @@ async def get_conversation_detail(
     conv = await get_conversation(conversation_id, current_user.id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    messages = [
-        ConversationMessage(
-            role=m["role"],
-            content=m.get("content", ""),
-            created_at=datetime.fromisoformat(m["created_at"])
-            if m.get("created_at")
-            else None,
-        )
-        for m in conv.get("messages", [])
-    ]
+
+    raw_messages = conv.get("messages", [])
+    ui_messages: list[dict[str, Any]] = []
+    messages: list[ConversationMessage] = []
+
+    # Conversations may mix UI-format messages ({id, role, parts}, saved by the
+    # Pydantic AI flow) and legacy ones ({role, content, created_at}). Handle
+    # each message by its own shape so the sidebar + detail view stay correct
+    # during the transient mixed-format window after a /confirm.
+    for m in raw_messages:
+        if not isinstance(m, dict):
+            continue
+        if "parts" in m:
+            ui_messages.append(m)
+            messages.append(
+                ConversationMessage(
+                    role=m.get("role", "assistant"),
+                    content=_ui_message_text(m),
+                    created_at=None,
+                )
+            )
+        else:
+            messages.append(
+                ConversationMessage(
+                    role=m.get("role", "assistant"),
+                    content=m.get("content", ""),
+                    created_at=datetime.fromisoformat(m["created_at"])
+                    if m.get("created_at")
+                    else None,
+                )
+            )
+
     updated = conv.get("updated_at")
     return ConversationDetail(
         id=conversation_id,
         title=conv.get("title") or "Conversation",
         messages=messages,
+        ui_messages=ui_messages or None,
         updated_at=datetime.fromisoformat(updated)
         if updated
         else datetime.now(timezone.utc),
     )
+
+
+def _ui_message_text(ui_message: dict[str, Any]) -> str:
+    """Flatten text parts of a Vercel AI UI message into a single string."""
+    parts = ui_message.get("parts") or []
+    chunks: list[str] = []
+    for part in parts:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text = part.get("text")
+            if text:
+                chunks.append(str(text))
+    return "".join(chunks)
+
 
 
 @router.delete("/conversations/{conversation_id}")
@@ -476,6 +377,8 @@ async def confirm_chat_action(
     )
 
     orig_turn_id = pending.get("turn_id")
+
+    print(f"🚀 [CONFIRM_CHAT_ACTION] Confirming tool {pending['tool_name']} with args {tool_args} for user {current_user.id} in conversation {conversation_id}")
 
     with timed() as t:
         result, action_type = await execute_tool(
@@ -545,6 +448,12 @@ async def confirm_chat_action(
         conversation_id, current_user.id, title, len(updated_messages)
     )
 
+    ui_msg = {
+        "id": str(uuid.uuid4()),
+        "role": "assistant",
+        "parts": [{"type": "text", "text": reply}],
+    }
+
     return ChatMessageResponse(
         conversation_id=conversation_id,
         reply=reply,
@@ -557,4 +466,5 @@ async def confirm_chat_action(
             )
         ],
         pending_confirmation=None,
+        ui_message=ui_msg,
     )

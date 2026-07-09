@@ -60,29 +60,10 @@ class ChatMessageResponse(BaseModel):
     tool_steps: list[ToolStep] = []
     pending_confirmation: Optional[PendingConfirmation] = None
     pending_question: Optional[PendingQuestion] = None
-
-
-class ChatStreamMeta(BaseModel):
-    conversation_id: str
-
-
-class ChatStreamToken(BaseModel):
-    delta: str
-
-
-class ChatStreamError(BaseModel):
-    detail: str
-
-
-class ChatStreamEvent(BaseModel):
-    """SSE payload helper; event name is the `type` field value."""
-
-    type: str  # meta | tool_step | token | done | error
-    conversation_id: Optional[str] = None
-    delta: Optional[str] = None
-    tool_step: Optional[ToolStep] = None
-    detail: Optional[str] = None
-    response: Optional[ChatMessageResponse] = None
+    # Vercel AI UI message (id/role/parts) for the new @ai-sdk/react frontend.
+    # The frontend appends this to `useChat` messages via setMessages after a
+    # successful /confirm. Absent for legacy clients (they use reply/actions).
+    ui_message: Optional[dict[str, Any]] = None
 
 
 class ChatConfirmRequest(BaseModel):
@@ -107,4 +88,9 @@ class ConversationDetail(BaseModel):
     id: str
     title: str
     messages: list[ConversationMessage]
+    # Vercel AI UI messages (id/role/parts) when the conversation was persisted
+    # by the Pydantic AI + VercelAIAdapter flow. Present only for conversations
+    # saved via POST /chat; absent for legacy conversations. The new frontend
+    # seeds `useChat` from this when present and ignores `messages`.
+    ui_messages: Optional[list[dict[str, Any]]] = None
     updated_at: datetime

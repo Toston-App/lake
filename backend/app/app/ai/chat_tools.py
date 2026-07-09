@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 from fastapi_pagination import Params
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
-from app.ai.render_components import RENDER_COMPONENT_IDS, render_catalog_prompt
+from app.ai.render_components import render_catalog_prompt
+from app.ai.tools import TOOL_ARG_MODELS
 from app.ai.web_search import search_web
 from app.api.deps import DateFilterType
 from app.core.config import settings
@@ -60,44 +61,6 @@ TRANSACTION_WRITE_TOOLS = frozenset(
     }
 )
 
-# Action types whose payload the chat client renders as structured UI cards.
-UI_RENDERED_ACTION_TYPES = frozenset(
-    {
-        "accounts_listed",
-        "categories_listed",
-        "places_listed",
-        "transactions_searched",
-        "balance_adjustments_listed",
-        "summary_fetched",
-        "charts_fetched",
-        "web_searched",
-    }
-)
-
-# Tools gated behind subscription features. A tool listed here is only exposed
-# to the model when the current tier has the corresponding feature.
-TOOL_FEATURE_GATE: dict[str, str] = {
-    "search_web": FEATURE_SEARCH_WEB,
-    "get_period_summary": FEATURE_ADVANCED_ANALYTICS,
-    "get_period_charts": FEATURE_ADVANCED_ANALYTICS,
-    "bulk_create_transactions": FEATURE_BULK_OPERATIONS,
-    "bulk_delete_transactions": FEATURE_BULK_OPERATIONS,
-}
-
-UI_RENDERED_REPLY_HINT = (
-    "The user's app already displays the tool results as structured cards from "
-    "actions. Reply in Spanish in at most 2 short sentences. Do not list, bullet, "
-    "or repeat names, amounts, or balances from the tool output."
-)
-
-
-def append_ui_rendered_reply_hint(messages: list[dict], action_types: list[str]) -> bool:
-    """Append an ephemeral model hint when UI-rendered actions are present."""
-    if not any(t in UI_RENDERED_ACTION_TYPES for t in action_types):
-        return False
-    messages.append({"role": "developer", "content": UI_RENDERED_REPLY_HINT})
-    return True
-
 
 class ToolExecutionError(Exception):
     def __init__(self, message: str):
@@ -120,7 +83,7 @@ def requires_confirmation(tool_name: str, args: dict) -> bool:
 
 
 def merge_confirm_tool_args(
-    tool_name: str, stored_args: dict, override: Optional[dict]
+    tool_name: str, stored_args: dict, override: dict | None
 ) -> dict:
     if not override:
         return stored_args
@@ -136,15 +99,15 @@ def merge_confirm_tool_args(
 
 
 async def _label_account(
-    db: AsyncSession, user: models.User, account_id: Optional[int]
-) -> Optional[str]:
+    db: AsyncSession, user: models.User, account_id: int | None
+) -> str | None:
     if account_id is None:
         return None
     account = await crud.account.get_by_id(db, owner_id=user.id, id=account_id)
     return account.name if account else f"Account #{account_id}"
 
 
-async def _label_category(db: AsyncSession, category_id: Optional[int]) -> Optional[str]:
+async def _label_category(db: AsyncSession, category_id: int | None) -> str | None:
     if category_id is None:
         return None
     category = await crud.category.get(db=db, id=category_id)
@@ -152,15 +115,15 @@ async def _label_category(db: AsyncSession, category_id: Optional[int]) -> Optio
 
 
 async def _label_subcategory(
-    db: AsyncSession, subcategory_id: Optional[int]
-) -> Optional[str]:
+    db: AsyncSession, subcategory_id: int | None
+) -> str | None:
     if subcategory_id is None:
         return None
     sub = await crud.subcategory.get(db=db, id=subcategory_id)
     return sub.name if sub else f"Subcategory #{subcategory_id}"
 
 
-async def _label_place(db: AsyncSession, place_id: Optional[int]) -> Optional[str]:
+async def _label_place(db: AsyncSession, place_id: int | None) -> str | None:
     if place_id is None:
         return None
     place = await crud.place.get(db=db, id=place_id)
@@ -233,7 +196,7 @@ def _serialize_record(record: Any) -> dict:
     return data
 
 
-def _parse_transaction_date(value: Any) -> Optional[date]:
+def _parse_transaction_date(value: Any) -> date | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -473,7 +436,7 @@ async def load_bootstrap_context(db: AsyncSession, user: models.User) -> dict:
     }
 
 
-def _ok(data: Any, action_type: Optional[str] = None) -> dict:
+def _ok(data: Any, action_type: str | None = None) -> dict:
     result = {"success": True, "data": jsonable_encoder(data)}
     if action_type:
         result["action_type"] = action_type
@@ -516,174 +479,104 @@ async def execute_tool(
     user: models.User,
     *,
     confirmed: bool = False,
-) -> tuple[dict, Optional[str]]:
+) -> tuple[dict, str | None]:
     """
     Run a tool. Returns (result_dict, action_type for ChatAction).
-    Raises ToolExecutionError on validation failures.
+    Validates ``args`` against the typed model in ``TOOL_ARG_MODELS`` (see
+    ``app/ai/tools.py``) before dispatching, then constructs the domain
+    schemas (``schemas.AccountCreate`` …) which enforce the remaining
+    invariants (rounding, positivity, ``made_from`` whitelisting, …).
     """
     _ = confirmed
     try:
-        if tool_name == "get_user_profile":
-            return _ok({"country": user.country, "name": user.name, "id": user.id}), "profile_fetched"
-
-        if tool_name == "list_accounts":
-            accounts = await account_service.list_accounts(
-                db, user, skip=0, limit=LIST_LIMIT
-            )
-            return _ok([_slim_account(a) for a in accounts]), "accounts_listed"
+        arg_model_cls = TOOL_ARG_MODELS.get(tool_name)
+        if arg_model_cls is None:
+            # Tools with no model-facing params (readers / profile).
+            return await _execute_no_arg_tool(tool_name, db, user)
+        try:
+            arg_model = arg_model_cls(**args)
+        except Exception as exc:  # ValidationError or sibling
+            return _err(f"Invalid arguments for {tool_name}: {exc}"), None
 
         if tool_name == "manage_account":
-            action = args.get("action")
-            if action == "create":
-                obj = schemas.AccountCreate(**args.get("data", {}))
-                created = await account_service.create_account(db, user, obj)
-                return _ok(_slim_account(created)), "account_created"
-            if action == "update":
-                acc_id = args["id"]
-                updated = await account_service.update_account(
-                    db,
-                    user,
-                    acc_id,
-                    account_in=schemas.AccountUpdate(**args.get("data", {})),
-                )
-                return _ok(_slim_account(updated)), "account_updated"
-            if action == "delete":
-                acc_id = args["id"]
-                await account_service.delete_account(db, user, acc_id)
-                return _ok({"id": acc_id, "deleted": True}), "account_deleted"
-            return _err("Invalid action for manage_account"), None
-
-        if tool_name == "list_categories":
-            categories = await catalog_service.list_categories(
-                db, user, skip=0, limit=LIST_LIMIT
-            )
-            return _ok([_slim_category(c) for c in categories]), "categories_listed"
+            return await _execute_manage_account(db, user, arg_model)
 
         if tool_name == "manage_category":
-            action = args.get("action")
-            if action == "create":
-                obj = schemas.CategoryCreate(**args.get("data", {}))
-                created = await catalog_service.create_category(db, user, obj)
-                return _ok(jsonable_encoder(created)), "category_created"
-            if action == "update":
-                updated = await catalog_service.update_category(
-                    db,
-                    user,
-                    args["id"],
-                    schemas.CategoryUpdate(**args.get("data", {})),
-                )
-                return _ok(jsonable_encoder(updated)), "category_updated"
-            if action == "delete":
-                await catalog_service.delete_category(db, user, args["id"])
-                return _ok({"id": args["id"], "deleted": True}), "category_deleted"
-            return _err("Invalid action for manage_category"), None
+            return await _execute_manage_category(db, user, arg_model)
 
         if tool_name == "manage_subcategory":
-            action = args.get("action")
-            if action == "create":
-                obj = schemas.SubcategoryCreate(**args.get("data", {}))
-                created = await catalog_service.create_subcategory(db, user, obj)
-                return _ok(jsonable_encoder(created)), "subcategory_created"
-            if action == "update":
-                updated = await catalog_service.update_subcategory(
-                    db=db,
-                    user=user,
-                    subcategory_id=args["id"],
-                    subcategory_in=schemas.SubcategoryUpdate(**args.get("data", {})),
-                )
-                return _ok(jsonable_encoder(updated)), "subcategory_updated"
-            if action == "delete":
-                await catalog_service.delete_subcategory(db, user, args["id"])
-                return _ok({"id": args["id"], "deleted": True}), "subcategory_deleted"
-            return _err("Invalid action for manage_subcategory"), None
-
-        if tool_name == "list_places":
-            places = await catalog_service.list_places(
-                db, user, skip=0, limit=LIST_LIMIT
-            )
-            return _ok([_slim_place(p) for p in places]), "places_listed"
+            return await _execute_manage_subcategory(db, user, arg_model)
 
         if tool_name == "manage_place":
-            action = args.get("action")
-            if action == "create":
-                obj = schemas.PlaceCreate(**args.get("data", {}))
-                created = await catalog_service.create_place(db, user, obj)
-                return _ok(_slim_place(created)), "place_created"
-            if action == "update":
-                updated = await catalog_service.update_place(
-                    db,
-                    user,
-                    args["id"],
-                    schemas.PlaceUpdate(**args.get("data", {})),
-                )
-                return _ok(_slim_place(updated)), "place_updated"
-            if action == "delete":
-                await catalog_service.delete_place(db, user, args["id"])
-                return _ok({"id": args["id"], "deleted": True}), "place_deleted"
-            return _err("Invalid action for manage_place"), None
+            return await _execute_manage_place(db, user, arg_model)
 
         if tool_name == "create_expense":
-            data = dict(args)
+            data = arg_model.model_dump(exclude_none=True)
             data.setdefault("made_from", CHAT_MADE_FROM)
             obj = schemas.ExpenseCreate(**data)
             created = await transaction_service.create_expense(db, user, obj)
             return _ok(jsonable_encoder(created)), "expense_created"
 
         if tool_name == "update_expense":
-            obj_in = schemas.ExpenseUpdate(**(args.get("data") or {}))
+            obj_in = schemas.ExpenseUpdate(**(arg_model.data or {}))
             updated = await transaction_service.update_expense(
-                db, user, args["id"], obj_in
+                db, user, arg_model.id, obj_in
             )
             return _ok(jsonable_encoder(updated)), "expense_updated"
 
         if tool_name == "delete_expense":
-            await transaction_service.delete_expense(db, user, args["id"])
-            return _ok({"id": args["id"], "deleted": True}), "expense_deleted"
+            await transaction_service.delete_expense(db, user, arg_model.id)
+            return _ok({"id": arg_model.id, "deleted": True}), "expense_deleted"
 
         if tool_name == "create_income":
-            data = dict(args)
+            data = arg_model.model_dump(exclude_none=True)
             data.setdefault("made_from", CHAT_MADE_FROM)
             obj = schemas.IncomeCreate(**data)
             created = await transaction_service.create_income(db, user, obj)
             return _ok(jsonable_encoder(created)), "income_created"
 
         if tool_name == "update_income":
-            obj_in = schemas.IncomeUpdate(**(args.get("data") or {}))
+            obj_in = schemas.IncomeUpdate(**(arg_model.data or {}))
             updated = await transaction_service.update_income(
-                db, user, args["id"], obj_in
+                db, user, arg_model.id, obj_in
             )
             return _ok(jsonable_encoder(updated)), "income_updated"
 
         if tool_name == "delete_income":
-            await transaction_service.delete_income(db, user, args["id"])
-            return _ok({"id": args["id"], "deleted": True}), "income_deleted"
+            await transaction_service.delete_income(db, user, arg_model.id)
+            return _ok({"id": arg_model.id, "deleted": True}), "income_deleted"
 
         if tool_name == "create_transfer":
-            obj = schemas.TransferCreate(**args)
+            data = arg_model.model_dump(exclude_none=True)
+            obj = schemas.TransferCreate(**data)
             created = await transaction_service.create_transfer(db, user, obj)
             return _ok(jsonable_encoder(created)), "transfer_created"
 
         if tool_name == "update_transfer":
-            obj_in = schemas.TransferUpdate(**(args.get("data") or {}))
+            obj_in = schemas.TransferUpdate(**(arg_model.data or {}))
             updated = await transaction_service.update_transfer(
-                db, user, args["id"], obj_in
+                db, user, arg_model.id, obj_in
             )
             return _ok(jsonable_encoder(updated)), "transfer_updated"
 
         if tool_name == "delete_transfer":
-            await transaction_service.delete_transfer(db, user, args["id"])
-            return _ok({"id": args["id"], "deleted": True}), "transfer_deleted"
+            await transaction_service.delete_transfer(db, user, arg_model.id)
+            return _ok({"id": arg_model.id, "deleted": True}), "transfer_deleted"
 
         if tool_name == "search_transactions":
-            order = OrderDirection(args.get("order", "desc"))
-            amount_op = None
-            if args.get("amount_operator"):
-                amount_op = AmountOperator(args["amount_operator"])
-            types = None
-            if args.get("transaction_type"):
-                types = [TransactionType(t) for t in args["transaction_type"]]
-            start = args.get("start_date")
-            end = args.get("end_date")
+            order = OrderDirection(arg_model.order or "desc")
+            amount_op = (
+                AmountOperator(arg_model.amount_operator)
+                if arg_model.amount_operator
+                else None
+            )
+            types = (
+                [TransactionType(t) for t in arg_model.transaction_type]
+                if arg_model.transaction_type
+                else None
+            )
+            start = arg_model.start_date
+            end = arg_model.end_date
             if start and isinstance(start, str):
                 start = date.fromisoformat(start)
             if end and isinstance(end, str):
@@ -692,14 +585,14 @@ async def execute_tool(
                 db,
                 user,
                 order=order,
-                search=args.get("search"),
-                amount=args.get("amount"),
+                search=arg_model.search,
+                amount=arg_model.amount,
                 amount_operator=amount_op,
                 start_date=start,
                 end_date=end,
-                accounts=args.get("accounts"),
-                categories=args.get("categories"),
-                places=args.get("places"),
+                accounts=arg_model.accounts,
+                categories=arg_model.categories,
+                places=arg_model.places,
                 transaction_type=types,
                 params=Params(page=1, size=SEARCH_LIMIT),
             )
@@ -713,21 +606,21 @@ async def execute_tool(
             ), "transactions_searched"
 
         if tool_name == "get_period_summary":
-            dft = DateFilterType(args["date_filter_type"])
+            dft = DateFilterType(arg_model.date_filter_type)
             summary = await fetch_period_summary(
-                db, user, dft, args["date"], args.get("account_id")
+                db, user, dft, arg_model.date, arg_model.account_id
             )
             return _ok(summary.model_dump()), "summary_fetched"
 
         if tool_name == "get_period_charts":
-            dft = DateFilterType(args["date_filter_type"])
+            dft = DateFilterType(arg_model.date_filter_type)
             charts = await fetch_period_charts(
-                db, user, dft, args["date"], args.get("account_id")
+                db, user, dft, arg_model.date, arg_model.account_id
             )
             return _ok(charts.model_dump()), "charts_fetched"
 
         if tool_name == "bulk_create_transactions":
-            bulk = schemas.BulkCreate(**args)
+            bulk = schemas.BulkCreate(**arg_model.model_dump(exclude_none=True))
             created = await transaction_service.bulk_create_transactions(
                 db, user, bulk, made_from=CHAT_MADE_FROM
             )
@@ -740,7 +633,7 @@ async def execute_tool(
 
         if tool_name == "bulk_delete_transactions":
             deleted = await transaction_service.bulk_delete_transactions(
-                db, user, schemas.BulkDelete(**args)
+                db, user, schemas.BulkDelete(**arg_model.model_dump(exclude_none=True))
             )
             return _ok(
                 {
@@ -750,16 +643,18 @@ async def execute_tool(
             ), "bulk_deleted"
 
         if tool_name == "create_balance_adjustment":
-            obj = schemas.BalanceAdjustmentCreate(**args)
+            obj = schemas.BalanceAdjustmentCreate(
+                **arg_model.model_dump(exclude_none=True)
+            )
             adjustment = await balance_adjustment_service.create_balance_adjustment(
                 db, user, obj
             )
             return _ok(jsonable_encoder(adjustment)), "balance_adjustment_created"
 
         if tool_name == "list_balance_adjustments":
-            if args.get("account_id"):
+            if arg_model.account_id:
                 items = await balance_adjustment_service.list_balance_adjustments_by_account(
-                    db, user, args["account_id"]
+                    db, user, arg_model.account_id
                 )
             else:
                 items = await balance_adjustment_service.list_balance_adjustments(
@@ -768,23 +663,20 @@ async def execute_tool(
             return _ok(jsonable_encoder(items)), "balance_adjustments_listed"
 
         if tool_name == "submit_feedback":
-            obj = schemas.FeedbackCreate(**args)
+            obj = schemas.FeedbackCreate(**arg_model.model_dump(exclude_none=True))
             await feedback_service.submit_feedback(db, user, obj)
             return _ok({"submitted": True}), "feedback_submitted"
 
         if tool_name == "search_web":
-            query = args.get("query")
-            if not query or not str(query).strip():
+            query = arg_model.query
+            if not str(query).strip():
                 return _err("query is required"), None
             if not settings.TAVILY_API_KEY:
                 return _err("Web search is not configured"), None
-            max_results = args.get("max_results")
-            if max_results is not None:
-                max_results = int(max_results)
             data = await search_web(
                 str(query).strip(),
-                topic=args.get("topic", "general"),
-                max_results=max_results,
+                topic=arg_model.topic,
+                max_results=arg_model.max_results,
             )
             return _ok(data), "web_searched"
 
@@ -798,518 +690,112 @@ async def execute_tool(
         return _err(str(e)), None
 
 
-_CORE_TOOL_DEFINITIONS: list[dict] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_user_profile",
-            "description": "Get the current user's profile (country, name).",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_accounts",
-            "description": "List all accounts for the user.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "manage_account",
-            "description": "Create, update, or delete an account.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["create", "update", "delete"]},
-                    "id": {"type": "integer", "description": "Required for update/delete"},
-                    "data": {"type": "object", "description": "Fields for create/update"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_categories",
-            "description": "List categories with nested subcategories.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "manage_category",
-            "description": "Create, update, or delete a category.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["create", "update", "delete"]},
-                    "id": {"type": "integer"},
-                    "data": {"type": "object"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "manage_subcategory",
-            "description": "Create, update, or delete a subcategory.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["create", "update", "delete"]},
-                    "id": {"type": "integer"},
-                    "data": {"type": "object"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_places",
-            "description": "List places (merchants/locations).",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "manage_place",
-            "description": "Create, update, or delete a place.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["create", "update", "delete"]},
-                    "id": {"type": "integer"},
-                    "data": {"type": "object"},
-                },
-                "required": ["action"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_expense",
-            "description": "Create an expense. amount is required. User must confirm in chat before saving.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "amount": {"type": "number"},
-                    "date": {"type": "string", "description": "YYYY-MM-DD"},
-                    "account_id": {"type": "integer"},
-                    "category_id": {"type": "integer"},
-                    "subcategory_id": {"type": "integer"},
-                    "place_id": {"type": "integer"},
-                    "description": {"type": "string"},
-                },
-                "required": ["amount", "date"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_expense",
-            "description": "Update an expense by id. User must confirm changes in chat before saving.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer"},
-                    "data": {"type": "object"},
-                },
-                "required": ["id", "data"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_expense",
-            "description": "Permanently delete an expense by id. Requires user confirmation in chat.",
-            "parameters": {
-                "type": "object",
-                "properties": {"id": {"type": "integer"}},
-                "required": ["id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_income",
-            "description": "Create an income. amount is required. if no date is provided, today's date will be used. User must confirm in chat before saving.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "amount": {"type": "number"},
-                    "date": {"type": "string"},
-                    "account_id": {"type": "integer"},
-                    "subcategory_id": {"type": "integer"},
-                    "place_id": {"type": "integer"},
-                    "description": {"type": "string"},
-                },
-                "required": ["amount"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_income",
-            "description": "Update an income by id. User must confirm changes in chat before saving.",
-            "parameters": {
-                "type": "object",
-                "properties": {"id": {"type": "integer"}, "data": {"type": "object"}},
-                "required": ["id", "data"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_income",
-            "description": "Permanently delete an income by id. Requires user confirmation.",
-            "parameters": {
-                "type": "object",
-                "properties": {"id": {"type": "integer"}},
-                "required": ["id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_transfer",
-            "description": "Transfer money between accounts. User must confirm in chat before saving.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "amount": {"type": "number"},
-                    "from_acc": {"type": "integer"},
-                    "to_acc": {"type": "integer"},
-                    "date": {"type": "string"},
-                    "description": {"type": "string"},
-                },
-                "required": ["amount", "from_acc", "to_acc"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_transfer",
-            "description": "Update a transfer by id. User must confirm changes in chat before saving.",
-            "parameters": {
-                "type": "object",
-                "properties": {"id": {"type": "integer"}, "data": {"type": "object"}},
-                "required": ["id", "data"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_transfer",
-            "description": "Delete a transfer by id. Requires user confirmation.",
-            "parameters": {
-                "type": "object",
-                "properties": {"id": {"type": "integer"}},
-                "required": ["id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_transactions",
-            "description": "Search expenses, incomes, and transfers with filters.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "search": {"type": "string"},
-                    "amount": {"type": "number"},
-                    "amount_operator": {
-                        "type": "string",
-                        "enum": ["equal", "less", "greater"],
-                    },
-                    "start_date": {"type": "string"},
-                    "end_date": {"type": "string"},
-                    "accounts": {"type": "array", "items": {"type": "integer"}},
-                    "categories": {"type": "array", "items": {"type": "integer"}},
-                    "places": {"type": "array", "items": {"type": "integer"}},
-                    "transaction_type": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": ["expense", "income", "transfer"]},
-                    },
-                    "order": {"type": "string", "enum": ["asc", "desc"]},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_period_summary",
-            "description": "Get financial summary for a period.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date_filter_type": {
-                        "type": "string",
-                        "enum": ["date", "week", "month", "quarter", "year", "range"],
-                    },
-                    "date": {
-                        "type": "string",
-                        "description": "YYYY-MM-DD, YYYY-MM, YYYY-Q1, YYYY, or start:end",
-                    },
-                    "account_id": {"type": "integer"},
-                },
-                "required": ["date_filter_type", "date"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_period_charts",
-            "description": "Get chart data for a period.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "date_filter_type": {
-                        "type": "string",
-                        "enum": ["date", "week", "month", "quarter", "year", "range"],
-                    },
-                    "date": {"type": "string"},
-                    "account_id": {"type": "integer"},
-                },
-                "required": ["date_filter_type", "date"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "bulk_create_transactions",
-            "description": "Create multiple incomes and/or expenses.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "incomes": {"type": "array", "items": {"type": "object"}},
-                    "expenses": {"type": "array", "items": {"type": "object"}},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "bulk_delete_transactions",
-            "description": "Delete multiple incomes/expenses by id. Requires confirmation.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "incomes": {"type": "array", "items": {"type": "integer"}},
-                    "expenses": {"type": "array", "items": {"type": "integer"}},
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_balance_adjustment",
-            "description": "Set an account balance to a new value.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "account_id": {"type": "integer"},
-                    "new_balance": {"type": "number"},
-                    "adjustment_date": {"type": "string"},
-                    "description": {"type": "string"},
-                },
-                "required": ["account_id", "new_balance"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_balance_adjustments",
-            "description": "List balance adjustments, optionally for one account.",
-            "parameters": {
-                "type": "object",
-                "properties": {"account_id": {"type": "integer"}},
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "submit_feedback",
-            "description": "Submit user feedback to the team.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                    "sentiment": {"type": "string"},
-                },
-                "required": ["message"],
-            },
-        },
-    },
-]
-
-_SEARCH_WEB_TOOL: dict = {
-    "type": "function",
-    "function": {
-        "name": "search_web",
-        "description": (
-            "Search the web for current finance information: market data, "
-            "rates, news, regulations, definitions, and comparisons. "
-            "Use for anything not in the user's personal data."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query in the user's language.",
-                },
-                "topic": {
-                    "type": "string",
-                    "enum": ["general", "news", "finance"],
-                    "description": "Search topic hint. Default general.",
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Max results to return (default 5).",
-                },
-            },
-            "required": ["query"],
-        },
-    },
-}
-
-_ASK_USER_TOOL: dict = {
-    "type": "function",
-    "function": {
-        "name": "ask_user",
-        "description": (
-            "Ask the user a clarifying question with clickable options when "
-            "the request is ambiguous. The turn ends until the user answers."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "question": {
-                    "type": "string",
-                    "description": "The question to display to the user.",
-                },
-                "options": {
-                    "type": "array",
-                    "description": "2-6 selectable options.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "label": {"type": "string"},
-                        },
-                        "required": ["id", "label"],
-                    },
-                },
-                "allow_multiple": {
-                    "type": "boolean",
-                    "description": "Allow selecting more than one option.",
-                },
-            },
-            "required": ["question", "options"],
-        },
-    },
-}
-
-_RENDER_UI_TOOL: dict = {
-    "type": "function",
-    "function": {
-        "name": "render_ui",
-        "description": (
-            "Declare which UI components the app should display for this "
-            "turn. Call once after gathering data. Data-backed components "
-            "use tool results from this turn; model-populated components "
-            "(data_table, stat_cards) require a `data` object. Omit when a "
-            "plain text reply is enough."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "components": {
-                    "type": "array",
-                    "description": "Ordered list of components to render.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "component": {
-                                "type": "string",
-                                "enum": RENDER_COMPONENT_IDS,
-                            },
-                            "from_action": {
-                                "type": "string",
-                                "description": (
-                                    "Optional action type that supplies "
-                                    "this component's data."
-                                ),
-                            },
-                            "data": {
-                                "type": "object",
-                                "description": (
-                                    "Required for model-populated components "
-                                    "(data_table, stat_cards)."
-                                ),
-                            },
-                        },
-                        "required": ["component"],
-                    },
-                }
-            },
-            "required": ["components"],
-        },
-    },
-}
+async def _execute_manage_account(
+    db: AsyncSession, user: models.User, arg_model
+) -> tuple[dict, str | None]:
+    action = arg_model.action
+    data = arg_model.data.model_dump(exclude_none=True) if arg_model.data else {}
+    if action == "create":
+        obj = schemas.AccountCreate(**data)
+        created = await account_service.create_account(db, user, obj)
+        return _ok(_slim_account(created)), "account_created"
+    if action == "update":
+        updated = await account_service.update_account(
+            db, user, arg_model.id, account_in=schemas.AccountUpdate(**data)
+        )
+        return _ok(_slim_account(updated)), "account_updated"
+    if action == "delete":
+        await account_service.delete_account(db, user, arg_model.id)
+        return _ok({"id": arg_model.id, "deleted": True}), "account_deleted"
+    return _err("Invalid action for manage_account"), None
 
 
-def get_tool_definitions(tier: Tier = Tier.tier3) -> list[dict]:
-    """Return the OpenAI tool definitions available to `tier`.
+async def _execute_manage_category(
+    db: AsyncSession, user: models.User, arg_model
+) -> tuple[dict, str | None]:
+    action = arg_model.action
+    data = arg_model.data.model_dump(exclude_none=True) if arg_model.data else {}
+    if action == "create":
+        obj = schemas.CategoryCreate(**data)
+        created = await catalog_service.create_category(db, user, obj)
+        return _ok(jsonable_encoder(created)), "category_created"
+    if action == "update":
+        updated = await catalog_service.update_category(
+            db, user, arg_model.id, schemas.CategoryUpdate(**data)
+        )
+        return _ok(jsonable_encoder(updated)), "category_updated"
+    if action == "delete":
+        await catalog_service.delete_category(db, user, arg_model.id)
+        return _ok({"id": arg_model.id, "deleted": True}), "category_deleted"
+    return _err("Invalid action for manage_category"), None
 
-    Tools are filtered by the subscription feature gate (`TOOL_FEATURE_GATE`)
-    and `search_web` additionally requires `TAVILY_API_KEY` to be configured.
-    `ask_user` and `render_ui` are always available.
-    """
-    tools: list[dict] = []
-    for tool in _CORE_TOOL_DEFINITIONS:
-        name = tool["function"]["name"]
-        required_feature = TOOL_FEATURE_GATE.get(name)
-        if required_feature is not None and not has_feature(tier, required_feature):
-            continue
-        tools.append(tool)
-    if settings.TAVILY_API_KEY and has_feature(tier, FEATURE_SEARCH_WEB):
-        tools.append(_SEARCH_WEB_TOOL)
-    tools.append(_ASK_USER_TOOL)
-    tools.append(_RENDER_UI_TOOL)
-    return tools
+
+async def _execute_manage_subcategory(
+    db: AsyncSession, user: models.User, arg_model
+) -> tuple[dict, str | None]:
+    action = arg_model.action
+    data = arg_model.data.model_dump(exclude_none=True) if arg_model.data else {}
+    if action == "create":
+        obj = schemas.SubcategoryCreate(**data)
+        created = await catalog_service.create_subcategory(db, user, obj)
+        return _ok(jsonable_encoder(created)), "subcategory_created"
+    if action == "update":
+        updated = await catalog_service.update_subcategory(
+            db=db,
+            user=user,
+            subcategory_id=arg_model.id,
+            subcategory_in=schemas.SubcategoryUpdate(**data),
+        )
+        return _ok(jsonable_encoder(updated)), "subcategory_updated"
+    if action == "delete":
+        await catalog_service.delete_subcategory(db, user, arg_model.id)
+        return _ok({"id": arg_model.id, "deleted": True}), "subcategory_deleted"
+    return _err("Invalid action for manage_subcategory"), None
 
 
-# Evaluated at import time for backward compatibility (defaults to the top
-# tier so existing callers that don't pass a tier keep full tool access).
-TOOL_DEFINITIONS: list[dict] = get_tool_definitions()
+async def _execute_manage_place(
+    db: AsyncSession, user: models.User, arg_model
+) -> tuple[dict, str | None]:
+    action = arg_model.action
+    data = arg_model.data.model_dump(exclude_none=True) if arg_model.data else {}
+    if action == "create":
+        obj = schemas.PlaceCreate(**data)
+        created = await catalog_service.create_place(db, user, obj)
+        return _ok(_slim_place(created)), "place_created"
+    if action == "update":
+        updated = await catalog_service.update_place(
+            db, user, arg_model.id, schemas.PlaceUpdate(**data)
+        )
+        return _ok(_slim_place(updated)), "place_updated"
+    if action == "delete":
+        await catalog_service.delete_place(db, user, arg_model.id)
+        return _ok({"id": arg_model.id, "deleted": True}), "place_deleted"
+    return _err("Invalid action for manage_place"), None
+
+
+async def _execute_no_arg_tool(
+    tool_name: str, db: AsyncSession, user: models.User
+) -> tuple[dict, str | None]:
+    if tool_name == "get_user_profile":
+        return _ok({"country": user.country, "name": user.name, "id": user.id}), "profile_fetched"
+    if tool_name == "list_accounts":
+        accounts = await account_service.list_accounts(
+            db, user, skip=0, limit=LIST_LIMIT
+        )
+        return _ok([_slim_account(a) for a in accounts]), "accounts_listed"
+    if tool_name == "list_categories":
+        categories = await catalog_service.list_categories(
+            db, user, skip=0, limit=LIST_LIMIT
+        )
+        return _ok([_slim_category(c) for c in categories]), "categories_listed"
+    if tool_name == "list_places":
+        places = await catalog_service.list_places(
+            db, user, skip=0, limit=LIST_LIMIT
+        )
+        return _ok([_slim_place(p) for p in places]), "places_listed"
+    return _err(f"Unknown tool: {tool_name}"), None
+
+
 
 
 def build_system_prompt(bootstrap: dict, tier: Tier = Tier.tier3) -> str:
@@ -1366,6 +852,7 @@ Rules:
 - Match IDs only from the bootstrap lists below or from prior tool results.
 - Date filter types: date (YYYY-MM-DD), week (YYYY-MM-DD start), month (YYYY-MM), quarter (YYYY-Q1), year (YYYY), range (YYYY-MM-DD:YYYY-MM-DD).
 - Deletes and bulk deletes require user confirmation; when you call those tools, explain what will be deleted and wait for confirmation.
+- ALL mutations (create/update/delete of transactions, accounts, categories, subcategories, places, transfers, balance adjustments, and bulk operations) return a confirmation draft for the user to review. After calling any mutation tool, STOP: do not call further tools or produce additional output until the user confirms or cancels. The user's app renders an editable approval card from the draft.
 {web_search_rule}
 {analytics_rule}
 {bulk_rule}

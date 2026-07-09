@@ -1,16 +1,21 @@
 import { useEffect, useRef } from 'react'
-import type { UiMessage } from '../types/chat'
+import type { UIMessage } from '@ai-sdk/react'
 import { MessageBubble } from './MessageBubble'
 import { ThinkingPanel } from './ThinkingPanel'
 
 type MessageListProps = {
-  messages: UiMessage[]
+  messages: UIMessage[]
   isLoading: boolean
 }
 
 export function MessageList({ messages, isLoading }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
-  const hasStreamingMessage = messages.some((m) => m.streaming)
+  const hasStreamingMessage = messages.some((m) =>
+    m.parts.some((p) => {
+      const state = (p as { state?: string }).state
+      return state === 'input-streaming' || state === 'streaming'
+    }),
+  )
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -23,11 +28,8 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
           Ask about your accounts, expenses, or finances.
         </p>
       )}
-      {messages.map((msg, index) => (
-        <MessageBubble
-          key={`${index}-${msg.role}-${msg.content.slice(0, 24)}`}
-          message={msg}
-        />
+      {messages.map((msg) => (
+        <MessageBubble key={msg.id} message={msg} />
       ))}
       {isLoading && !hasStreamingMessage && (
         <div className="message message-assistant">

@@ -1,4 +1,3 @@
-import type { RenderDirective } from '../../types/chat'
 import { ChartsPanel } from '../charts/ChartsPanel'
 import { SummaryCard } from '../charts/SummaryCard'
 import { AccountsList } from './AccountsList'
@@ -10,60 +9,62 @@ import { SourcesList } from './SourcesList'
 import { StatCards } from './StatCards'
 import { TransactionsList } from './TransactionsList'
 
-type RenderDirectivesProps = {
-  directives: RenderDirective[]
+export type DataPart = {
+  type: string
+  data: unknown
 }
 
-function GenericRenderCard({ directive }: { directive: RenderDirective }) {
+type RenderDirectivesProps = {
+  parts: DataPart[]
+}
+
+function GenericRenderCard({ part }: { part: DataPart }) {
+  const label = part.type.replace(/^data-/, '').replace(/_/g, ' ')
   return (
     <details className="action-card action-card-generic">
-      <summary>{directive.component.replace(/_/g, ' ')}</summary>
-      {directive.detail ? (
-        <pre className="action-raw">
-          {JSON.stringify(directive.detail, null, 2)}
-        </pre>
+      <summary>{label}</summary>
+      {part.data != null ? (
+        <pre className="action-raw">{JSON.stringify(part.data, null, 2)}</pre>
       ) : null}
     </details>
   )
 }
 
-function RenderDirectiveItem({ directive }: { directive: RenderDirective }) {
-  switch (directive.component) {
-    case 'accounts_list':
-      return <AccountsList detail={directive.detail} />
-    case 'categories_list':
-      return <CategoriesList detail={directive.detail} />
-    case 'places_list':
-      return <PlacesList detail={directive.detail} />
-    case 'transactions_list':
-      return <TransactionsList detail={directive.detail} />
-    case 'balance_adjustments_list':
-      return <BalanceAdjustmentsList detail={directive.detail} />
-    case 'period_summary':
-      return <SummaryCard detail={directive.detail} />
-    case 'charts':
-      return <ChartsPanel detail={directive.detail} />
-    case 'web_sources':
-      return <SourcesList detail={directive.detail} />
-    case 'data_table':
-      return <DataTable detail={directive.detail} />
-    case 'stat_cards':
-      return <StatCards detail={directive.detail} />
+function RenderPartItem({ part }: { part: DataPart }) {
+  // `part.type` is `data-<component-id>` (e.g. "data-accounts-list").
+  switch (part.type) {
+    case 'data-accounts-list':
+      return <AccountsList detail={part.data} />
+    case 'data-categories-list':
+      return <CategoriesList detail={part.data} />
+    case 'data-places-list':
+      return <PlacesList detail={part.data} />
+    case 'data-transactions-list':
+      return <TransactionsList detail={part.data} />
+    case 'data-balance-adjustments-list':
+      return <BalanceAdjustmentsList detail={part.data} />
+    case 'data-period-summary':
+      return <SummaryCard detail={part.data} />
+    case 'data-charts':
+      return <ChartsPanel detail={part.data} />
+    case 'data-web-sources':
+      return <SourcesList detail={part.data} />
+    case 'data-data_table':
+      return <DataTable detail={part.data} />
+    case 'data-stat_cards':
+      return <StatCards detail={part.data} />
     default:
-      return <GenericRenderCard directive={directive} />
+      return <GenericRenderCard part={part} />
   }
 }
 
-export function RenderDirectives({ directives }: RenderDirectivesProps) {
-  if (directives.length === 0) return null
+export function RenderDirectives({ parts }: RenderDirectivesProps) {
+  if (parts.length === 0) return null
 
   return (
     <div className="message-render">
-      {directives.map((directive, i) => (
-        <RenderDirectiveItem
-          key={`${directive.component}-${i}`}
-          directive={directive}
-        />
+      {parts.map((part, i) => (
+        <RenderPartItem key={`${part.type}-${i}`} part={part} />
       ))}
     </div>
   )

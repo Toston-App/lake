@@ -1,122 +1,48 @@
-import { apiFetch, ApiError, getApiBaseUrl, getToken } from './client'
+import { DefaultChatTransport } from 'ai'
+import { apiFetch, getApiBaseUrl, getToken } from './client'
 import type {
   ChatConfirmRequest,
-  ChatMessageRequest,
   ChatMessageResponse,
-  ChatStreamHandlers,
   ConversationDetail,
   ConversationSummary,
-  ToolStep,
 } from '../types/chat'
 
 const CHAT_PREFIX = '/api/v1/chat'
 
-export function sendMessage(
-  body: ChatMessageRequest,
-): Promise<ChatMessageResponse> {
-  return apiFetch<ChatMessageResponse>(`${CHAT_PREFIX}/messages`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
-}
-
-function parseSseBlock(block: string): { event: string; data: string } | null {
-  let event = 'message'
-  let data: string | null = null
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event: ')) {
-      event = line.slice(7)
-    } else if (line.startsWith('data: ')) {
-      data = line.slice(6)
-    }
-  }
-  if (data === null) return null
-  return { event, data }
-}
-
-export async function sendMessageStream(
-  body: ChatMessageRequest,
-  handlers: ChatStreamHandlers,
-  signal?: AbortSignal,
-): Promise<void> {
-  const token = getToken()
-  if (!token) {
-    throw new ApiError(401, 'Not authenticated')
-  }
-
-  const url = `${getApiBaseUrl()}${CHAT_PREFIX}/messages/stream`
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+/**
+ * Vercel AI SDK transport for `useChat`. Targets the Pydantic AI
+ * `VercelAIAdapter` endpoint at POST /api/v1/chat (data-stream protocol).
+ *
+ * The chat `id` (useChat's `id`) is sent as the request body `id` field, which
+ * the backend reads as `conversation_id`. Auth is the same bearer token used by
+ * the REST calls. A custom `fetch` intercepts 402 quota-exceeded responses and
+ * forwards the structured `detail` to `on402` so the UI shows the upgrade
+ * banner instead of a generic stream error.
+ */
+export function chatTransport(on402?: (detail: unknown) => void) {
+  return new DefaultChatTransport({
+    api: `${getApiBaseUrl()}${CHAT_PREFIX}`,
+    credentials: 'include',
+    headers: (): Record<string, string> => {
+      const token = getToken()
+      return token ? { Authorization: `Bearer ${token}` } : {}
     },
-    body: JSON.stringify(body),
-    signal,
-  })
-
-  if (!response.ok) {
-    let detail = response.statusText
-    try {
-      const errBody = await response.json()
-      detail =
-        typeof errBody.detail === 'string'
-          ? errBody.detail
-          : JSON.stringify(errBody.detail ?? errBody)
-    } catch {
-      // ignore
-    }
-    throw new ApiError(response.status, detail)
-  }
-
-  const reader = response.body?.getReader()
-  if (!reader) {
-    throw new Error('No response body')
-  }
-
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  const dispatchBlock = (block: string) => {
-    const parsed = parseSseBlock(block)
-    if (!parsed) return
-    const payload = JSON.parse(parsed.data) as Record<string, unknown>
-    switch (parsed.event) {
-      case 'meta':
-        handlers.onMeta(String(payload.conversation_id))
-        break
-      case 'token':
-        handlers.onToken(String(payload.delta ?? ''))
-        break
-      case 'tool_step':
-        handlers.onToolStep(payload as ToolStep)
-        break
-      case 'done':
-        handlers.onDone(payload as ChatMessageResponse)
-        break
-      case 'error':
-        handlers.onError(String(payload.detail ?? 'Stream failed'))
-        break
-      default:
-        break
-    }
-  }
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const blocks = buffer.split('\n\n')
-      buffer = blocks.pop() ?? ''
-      for (const block of blocks) {
-        if (block.trim()) dispatchBlock(block)
+    prepareSendMessagesRequest: ({ id, messages, trigger }) => ({
+      body: { id, messages, trigger },
+    }),
+    fetch: async (input, init) => {
+      const res = await fetch(input, init)
+      if (res.status === 402 && on402) {
+        try {
+          const body = await res.clone().json()
+          on402(body.detail)
+        } catch {
+          // ignore parse errors; the generic stream error will surface
+        }
       }
-    }
-    if (buffer.trim()) dispatchBlock(buffer)
-  } finally {
-    reader.releaseLock()
-  }
+      return res
+    },
+  })
 }
 
 export function listConversations(): Promise<ConversationSummary[]> {

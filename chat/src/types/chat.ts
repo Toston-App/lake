@@ -1,6 +1,8 @@
-export type ChatMessageRequest = {
-  message: string
-  conversation_id?: string
+import type { UIMessage } from 'ai'
+
+export type TokenResponse = {
+  access_token: string
+  token_type: string
 }
 
 export type ChatAction = {
@@ -37,6 +39,11 @@ export type RenderDirective = {
   detail?: Record<string, unknown>
 }
 
+export type ChatConfirmRequest = {
+  action_id: string
+  tool_args?: Record<string, unknown>
+}
+
 export type ChatMessageResponse = {
   conversation_id: string
   reply: string
@@ -45,11 +52,8 @@ export type ChatMessageResponse = {
   tool_steps: ToolStep[]
   pending_confirmation?: PendingConfirmation
   pending_question?: PendingQuestion
-}
-
-export type ChatConfirmRequest = {
-  action_id: string
-  tool_args?: Record<string, unknown>
+  /** Vercel AI UI message the new frontend appends after a /confirm. */
+  ui_message?: UIMessage
 }
 
 export type ConversationMessage = {
@@ -69,30 +73,10 @@ export type ConversationDetail = {
   id: string
   title: string
   messages: ConversationMessage[]
+  /** UI messages (id/role/parts) for seeding `useChat`; present for
+   * conversations saved by the Pydantic AI flow, absent for legacy ones. */
+  ui_messages?: UIMessage[]
   updated_at: string
-}
-
-export type TokenResponse = {
-  access_token: string
-  token_type: string
-}
-
-export type UiMessage = {
-  role: 'user' | 'assistant'
-  content: string
-  created_at?: string
-  actions?: ChatAction[]
-  render?: RenderDirective[]
-  toolSteps?: ToolStep[]
-  streaming?: boolean
-}
-
-export type ChatStreamHandlers = {
-  onMeta: (conversationId: string) => void
-  onToken: (delta: string) => void
-  onToolStep: (step: ToolStep) => void
-  onDone: (response: ChatMessageResponse) => void
-  onError: (detail: string) => void
 }
 
 export type Balance = {
@@ -136,4 +120,14 @@ export type ChartsResponse = {
   net: LineBarChartData | unknown[]
   income_vs_expense: LineBarChartData | unknown[]
   categories: CategoryChartData | unknown[] | null
+}
+
+/**
+ * A Vercel AI `data-*` part emitted by the backend via `DataChunk`. The
+ * `type` is `data-<component-id>` (e.g. `data-accounts-list`); `data` carries
+ * the render payload. The MessageBubble parts dispatcher switches on `type`.
+ */
+export type ChatDataPart = {
+  type: string
+  data: unknown
 }

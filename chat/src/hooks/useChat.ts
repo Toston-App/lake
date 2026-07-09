@@ -1,45 +1,54 @@
-import { useCallback, useEffect, useState } from 'react'
-import * as chatApi from '../api/chat'
+import { useCallback, useMemo, useState } from 'react'
+import { useChat as useAIChat, type UIMessage } from '@ai-sdk/react'
+import {
+  chatTransport,
+  confirmAction,
+  deleteConversation,
+  getConversation,
+  listConversations,
+} from '../api/chat'
 import { ApiError } from '../api/client'
 import type {
-  ChatAction,
   ConversationSummary,
   PendingConfirmation,
   PendingQuestion,
-  RenderDirective,
-  ToolStep,
-  UiMessage,
 } from '../types/chat'
 import type { QuotaErrorDetail } from '../types/subscription'
 
-function toUiMessages(
-  messages: { role: string; content: string; created_at?: string }[],
-): UiMessage[] {
-  return messages
-    .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-      created_at: m.created_at,
-    }))
+/** Find the most recent `data-<type>` part on any assistant message. */
+function lastDataPart<T>(messages: UIMessage[], type: string): T | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role !== 'assistant') continue
+    for (let j = m.parts.length - 1; j >= 0; j--) {
+      const p = m.parts[j] as { type: string; data?: unknown }
+      if (p.type === type && p.data != null) return p.data as T
+    }
+  }
+  return null
 }
 
 export function useChat() {
   const [conversationId, setConversationId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<UiMessage[]>([])
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
-  const [pendingConfirmation, setPendingConfirmation] =
-    useState<PendingConfirmation | null>(null)
-  const [pendingQuestion, setPendingQuestion] =
-    useState<PendingQuestion | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
   const [isConfirming, setIsConfirming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [quotaError, setQuotaError] = useState<QuotaErrorDetail | null>(null)
+  // Action ids the user has confirmed/cancelled so their approval cards stop
+  // re-rendering from the persisted `data-pending-confirmation` part.
+  const [dismissedActions, setDismissedActions] = useState<Set<string>>(
+    () => new Set(),
+  )
 
-  /** Detect a 402 quota-exceeded response and surface it as a structured
-   * quota error (so the UI can show an upgrade banner). Returns true when
-   * the error was a quota error (already handled). */
+  const formatError = useCallback((err: unknown): string => {
+    if (err instanceof ApiError) {
+      if (err.status === 503) return 'Chat is disabled on the server.'
+      return err.detail
+    }
+    if (err instanceof Error) return err.message
+    return 'Something went wrong'
+  }, [])
+
   const maybeQuotaError = useCallback((err: unknown): boolean => {
     if (err instanceof ApiError && err.status === 402) {
       try {
@@ -49,36 +58,50 @@ export function useChat() {
           return true
         }
       } catch {
-        // detail wasn't JSON; fall through to generic error
+        // fall through
       }
     }
     return false
   }, [])
 
-  const formatError = useCallback((err: unknown): string => {
-    if (err instanceof ApiError) {
-      if (err.status === 503) {
-        return 'Chat is disabled on the server (CHAT_ENABLED=false).'
-      }
-      return err.detail
-    }
-    if (err instanceof Error) return err.message
-    return 'Something went wrong'
-  }, [])
-
   const refreshConversations = useCallback(async () => {
     try {
-      const list = await chatApi.listConversations()
-      setConversations(list)
+      setConversations(await listConversations())
     } catch (err) {
       setError(formatError(err))
     }
   }, [formatError])
 
-  useEffect(() => {
-    if (conversationId === null) return
-    void refreshConversations()
-  }, [conversationId, refreshConversations])
+  // The transport intercepts 402 in its fetch wrapper and surfaces the
+  // structured quota detail (so the UI shows the upgrade banner, not a generic
+  // "stream failed"). Created once; getToken() is read per-request.
+  const transport = useMemo(
+    () =>
+      chatTransport((detail) => {
+        if (detail) setQuotaError(detail as QuotaErrorDetail)
+      }),
+    [],
+  )
+
+  const {
+    messages,
+    sendMessage,
+    status,
+    error: chatError,
+    setMessages,
+    stop,
+  } = useAIChat({
+    id: conversationId ?? undefined,
+    transport,
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+    },
+    onFinish: () => {
+      void refreshConversations()
+    },
+  })
+
+  const isLoading = status === 'submitted' || status === 'streaming'
 
   const loadConversations = useCallback(async () => {
     setError(null)
@@ -92,240 +115,108 @@ export function useChat() {
   const startNewChat = useCallback(() => {
     setConversationId(null)
     setMessages([])
-    setPendingConfirmation(null)
-    setPendingQuestion(null)
+    setDismissedActions(new Set())
     setError(null)
-  }, [])
+  }, [setMessages])
 
   const selectConversation = useCallback(
     async (id: string) => {
       setError(null)
-      setIsLoading(true)
-      setPendingConfirmation(null)
-      setPendingQuestion(null)
+      setDismissedActions(new Set())
+      setConversationId(id)
       try {
-        const detail = await chatApi.getConversation(id)
-        setConversationId(detail.id)
-        setMessages(toUiMessages(detail.messages))
+        const detail = await getConversation(id)
+        setMessages(detail.ui_messages ?? [])
       } catch (err) {
         setError(formatError(err))
-      } finally {
-        setIsLoading(false)
       }
     },
-    [formatError],
+    [formatError, setMessages],
   )
 
-  const appendAssistantMessage = useCallback(
-    (
-      reply: string,
-      actions: ChatAction[],
-      toolSteps: ToolStep[],
-      render?: RenderDirective[],
-    ) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: reply,
-          actions: actions.length > 0 ? actions : undefined,
-          render: render && render.length > 0 ? render : undefined,
-          toolSteps: toolSteps.length > 0 ? toolSteps : undefined,
-        },
-      ])
-    },
-    [],
-  )
-
-  const updateStreamingAssistant = useCallback(
-    (
-      updater: (msg: UiMessage) => UiMessage,
-    ) => {
-      setMessages((prev) => {
-        const idx = prev.findLastIndex(
-          (m) => m.role === 'assistant' && m.streaming,
-        )
-        if (idx < 0) return prev
-        const next = [...prev]
-        next[idx] = updater(next[idx])
-        return next
-      })
-    },
-    [],
-  )
-
-  const sendMessage = useCallback(
-    async (text: string) => {
+  const sendMessageText = useCallback(
+    (text: string) => {
       const trimmed = text.trim()
       if (!trimmed || isLoading) return
-
       setError(null)
       setQuotaError(null)
-      setPendingConfirmation(null)
-      setPendingQuestion(null)
-      const userMessage: UiMessage = { role: 'user', content: trimmed }
-      const streamingPlaceholder: UiMessage = {
-        role: 'assistant',
-        content: '',
-        streaming: true,
-        toolSteps: [],
-      }
-      setMessages((prev) => [...prev, userMessage, streamingPlaceholder])
-      setIsLoading(true)
+      void sendMessage({ text: trimmed })
+    },
+    [isLoading, sendMessage],
+  )
 
-      let streamFailed = false
+  const rawPendingConfirmation = lastDataPart<PendingConfirmation>(
+    messages,
+    'data-pending-confirmation',
+  )
+  const pendingConfirmation =
+    rawPendingConfirmation &&
+    !dismissedActions.has(rawPendingConfirmation.action_id)
+      ? rawPendingConfirmation
+      : null
+  const pendingQuestion = lastDataPart<PendingQuestion>(
+    messages,
+    'data-pending-question',
+  )
 
+  const confirmPending = useCallback(
+    async (toolArgs?: Record<string, unknown>) => {
+      if (!pendingConfirmation || !conversationId || isConfirming) return
+      setError(null)
+      setQuotaError(null)
+      setIsConfirming(true)
       try {
-        await chatApi.sendMessageStream(
-          {
-            message: trimmed,
-            conversation_id: conversationId ?? undefined,
-          },
-          {
-            onMeta: (id) => setConversationId(id),
-            onToken: (delta) => {
-              updateStreamingAssistant((m) => ({
-                ...m,
-                content: m.content + delta,
-              }))
-            },
-            onToolStep: (step) => {
-              updateStreamingAssistant((m) => ({
-                ...m,
-                toolSteps: [...(m.toolSteps ?? []), step],
-              }))
-            },
-            onDone: (response) => {
-              setConversationId(response.conversation_id)
-              setMessages((prev) => {
-                const idx = prev.findLastIndex(
-                  (m) => m.role === 'assistant' && m.streaming,
-                )
-                if (idx < 0) return prev
-                const next = [...prev]
-                next[idx] = {
-                  role: 'assistant',
-                  content: response.reply,
-                  actions:
-                    response.actions.length > 0
-                      ? response.actions
-                      : undefined,
-                  render:
-                    response.render && response.render.length > 0
-                      ? response.render
-                      : undefined,
-                  toolSteps:
-                    response.tool_steps.length > 0
-                      ? response.tool_steps
-                      : undefined,
-                  streaming: false,
-                }
-                return next
-              })
-              if (response.pending_confirmation) {
-                setPendingConfirmation(response.pending_confirmation)
-              }
-              if (response.pending_question) {
-                setPendingQuestion(response.pending_question)
-              }
-            },
-            onError: (detail) => {
-              streamFailed = true
-              setError(detail)
-            },
-          },
+        const res = await confirmAction(conversationId, {
+          action_id: pendingConfirmation.action_id,
+          tool_args: toolArgs,
+        })
+        setDismissedActions(
+          (prev) => new Set(prev).add(pendingConfirmation.action_id),
         )
-        if (!streamFailed) {
-          await refreshConversations()
+        if (res.ui_message) {
+          setMessages((prev) => [...prev, res.ui_message as UIMessage])
         }
+        await refreshConversations()
       } catch (err) {
-        if (maybeQuotaError(err)) {
-          setMessages((prev) => prev.slice(0, -2))
-        } else {
-          setMessages((prev) => prev.slice(0, -2))
-          setError(formatError(err))
-        }
+        if (!maybeQuotaError(err)) setError(formatError(err))
       } finally {
-        if (streamFailed) {
-          setMessages((prev) => prev.slice(0, -2))
-        }
-        setIsLoading(false)
+        setIsConfirming(false)
       }
     },
     [
       conversationId,
       formatError,
-      isLoading,
+      isConfirming,
       maybeQuotaError,
+      pendingConfirmation,
       refreshConversations,
-      updateStreamingAssistant,
+      setMessages,
     ],
   )
 
-  const confirmPending = useCallback(
-    async (toolArgs?: Record<string, unknown>) => {
-    if (!pendingConfirmation || !conversationId || isConfirming) return
-
-    setError(null)
-    setQuotaError(null)
-    setIsConfirming(true)
-    try {
-      const response = await chatApi.confirmAction(conversationId, {
-        action_id: pendingConfirmation.action_id,
-        tool_args: toolArgs,
-      })
-      setPendingConfirmation(null)
-      appendAssistantMessage(
-        response.reply,
-        response.actions,
-        response.tool_steps,
-        response.render,
-      )
-      await refreshConversations()
-    } catch (err) {
-      if (!maybeQuotaError(err)) {
-        setError(formatError(err))
-      }
-    } finally {
-      setIsConfirming(false)
-    }
-  },
-  [
-    conversationId,
-    formatError,
-    isConfirming,
-    maybeQuotaError,
-    pendingConfirmation,
-    refreshConversations,
-    appendAssistantMessage,
-  ],
-)
-
   const dismissPending = useCallback(() => {
-    setPendingConfirmation(null)
-  }, [])
-
-  const clearQuotaError = useCallback(() => {
-    setQuotaError(null)
-  }, [])
+    if (pendingConfirmation) {
+      setDismissedActions(
+        (prev) => new Set(prev).add(pendingConfirmation.action_id),
+      )
+    }
+  }, [pendingConfirmation])
 
   const answerQuestion = useCallback(
     (labels: string[]) => {
       const answer = labels.filter(Boolean).join(', ')
       if (!answer) return
-      void sendMessage(answer)
+      void sendMessageText(answer)
     },
-    [sendMessage],
+    [sendMessageText],
   )
 
   const removeConversation = useCallback(
     async (id: string) => {
       setError(null)
       try {
-        await chatApi.deleteConversation(id)
-        if (conversationId === id) {
-          startNewChat()
-        }
+        await deleteConversation(id)
+        if (conversationId === id) startNewChat()
         await refreshConversations()
       } catch (err) {
         setError(formatError(err))
@@ -333,6 +224,8 @@ export function useChat() {
     },
     [conversationId, formatError, refreshConversations, startNewChat],
   )
+
+  const clearQuotaError = useCallback(() => setQuotaError(null), [])
 
   return {
     conversationId,
@@ -342,17 +235,18 @@ export function useChat() {
     pendingQuestion,
     isLoading,
     isConfirming,
-    error,
+    error: error ?? (chatError ? String(chatError) : null),
     setError,
     quotaError,
     clearQuotaError,
     loadConversations,
     startNewChat,
     selectConversation,
-    sendMessage,
+    sendMessage: sendMessageText,
     answerQuestion,
     confirmPending,
     dismissPending,
     removeConversation,
+    stop,
   }
 }

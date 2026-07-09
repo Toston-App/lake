@@ -168,6 +168,25 @@ def _chat_pending_key(action_id: str) -> str:
     return f"{CHAT_PENDING_PREFIX}:{action_id}"
 
 
+def _message_preview(msg: dict) -> str:
+    """Best-effort text preview for the sidebar.
+
+    Handles both legacy messages (``{role, content}``) and Vercel AI UI
+    messages (``{id, role, parts}``) saved by the Pydantic AI flow.
+    """
+    content = msg.get("content")
+    if isinstance(content, str) and content:
+        return content
+    parts = msg.get("parts") or []
+    chunks: list[str] = []
+    for part in parts:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text = part.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+    return "".join(chunks)
+
+
 async def get_conversation(conversation_id: str, user_id: int) -> dict | None:
     """Load a conversation if it belongs to the user."""
     try:
@@ -228,7 +247,7 @@ async def list_user_conversations(user_id: int) -> list[dict]:
             preview = None
             if conv and conv.get("messages"):
                 last = conv["messages"][-1]
-                preview = (last.get("content") or "")[:120]
+                preview = _message_preview(last)[:120]
             result.append(
                 {
                     "id": conv_id,
