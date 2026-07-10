@@ -42,6 +42,8 @@ class UserSubscription(Base):
     current_period_start = Column(DateTime(timezone=True), nullable=True)
     current_period_end = Column(DateTime(timezone=True), nullable=True)
     canceled_at = Column(DateTime(timezone=True), nullable=True)
+    # Timestamp of the newest Polar event applied to this row (ordering guard).
+    last_event_at = Column(DateTime(timezone=True), nullable=True)
     # Raw Polar payload (last webhook event) for debugging/auditing.
     polar_metadata = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

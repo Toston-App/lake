@@ -216,11 +216,12 @@ class Settings(BaseSettings):
     POLAR_PRODUCT_TIER1_ID: Optional[str] = None
     POLAR_PRODUCT_TIER2_ID: Optional[str] = None
     POLAR_PRODUCT_TIER3_ID: Optional[str] = None
-    # Master switch. When False, the chat works without Polar: every user is
-    # granted the tier in SUBSCRIPTIONS_DEV_DEFAULT_TIER (defaults to tier3 so
-    # devs get full chat). Set to True in environments with real Polar creds.
-    SUBSCRIPTIONS_ENABLED: bool = False
-    # Used only when SUBSCRIPTIONS_ENABLED is False.
+    # Master switch. None/unset = auto-enable when POLAR_ACCESS_TOKEN is set.
+    # Explicit false always disables (even if a token is present). Explicit true
+    # (or auto-enable) requires access token + webhook secret + org id.
+    SUBSCRIPTIONS_ENABLED: Optional[bool] = None
+    # Used only when SUBSCRIPTIONS_ENABLED is False. Sandbox/dev default is
+    # tier3 for full chat locally; production always forces free (see validator).
     SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier3"
 
     @field_validator("POLAR_SERVER")
@@ -231,21 +232,42 @@ class Settings(BaseSettings):
         return v
 
     @field_validator("SUBSCRIPTIONS_DEV_DEFAULT_TIER")
-    def _dev_default_tier_value(cls, v: str) -> str:
+    def _dev_default_tier_value(cls, v: str, info: dict[str, Any]) -> str:
         v = (v or "").strip().lower()
         if v not in ("free", "tier1", "tier2", "tier3"):
-            return "tier3"
+            v = "tier3"
+        # Fail closed in production: never grant a paid tier when Polar is off.
+        if info.data.get("POLAR_SERVER") == "production":
+            return "free"
         return v
 
     @field_validator("SUBSCRIPTIONS_ENABLED", mode="before")
     def _subscriptions_enabled_requires_creds(
         cls, v: Any, info: dict[str, Any]
     ) -> bool:
-        enabled = bool(info.data.get("POLAR_ACCESS_TOKEN"))
+        has_token = bool((info.data.get("POLAR_ACCESS_TOKEN") or "").strip())
+
+        if v is None or (isinstance(v, str) and not v.strip()):
+            enabled = has_token
+        elif v is False or (
+            isinstance(v, str) and v.strip().lower() in ("false", "0", "no", "off")
+        ):
+            enabled = False
+        elif v is True or (
+            isinstance(v, str) and v.strip().lower() in ("true", "1", "yes", "on")
+        ):
+            enabled = True
+        else:
+            enabled = has_token
+
         if enabled:
             missing = [
                 name
-                for name in ("POLAR_ACCESS_TOKEN", "POLAR_WEBHOOK_SECRET", "POLAR_ORGANIZATION_ID")
+                for name in (
+                    "POLAR_ACCESS_TOKEN",
+                    "POLAR_WEBHOOK_SECRET",
+                    "POLAR_ORGANIZATION_ID",
+                )
                 if not (info.data.get(name) or "").strip()
             ]
             if missing:

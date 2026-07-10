@@ -36,7 +36,6 @@ def _tier_to_out(cfg: TierConfig) -> TierOut:
         monthly_message_limit=cfg.monthly_message_limit,
         monthly_token_limit=cfg.monthly_token_limit,
         features=sorted(cfg.features),
-        polar_product_id=cfg.polar_product_id,
         price_hint=cfg.price_hint,
         available=bool(cfg.polar_product_id) or not settings.SUBSCRIPTIONS_ENABLED,
     )
@@ -76,28 +75,23 @@ async def get_my_subscription(
             status="active",
             current_period_start=quota.period_start,
             current_period_end=None,
-            polar_customer_id=None,
-            manage_url=None,
+            can_manage=False,
         )
     else:
         from app.crud import crud_subscription
 
         row = await crud_subscription.get_by_user(db, current_user.id)
-        manage_url: str | None = None
-        if row and row.status in ("active", "trialing"):
-            try:
-                portal = await create_portal_session(current_user, request=request)
-                manage_url = portal.url
-            except HTTPException:
-                # Portal may fail if there's no customer yet; ignore.
-                manage_url = None
+        can_manage = bool(
+            current_user.polar_customer_id
+            and row
+            and row.status in ("active", "trialing")
+        )
         sub = SubscriptionOut(
             tier=quota.tier.value,
             status=row.status if row else "free",
             current_period_start=row.current_period_start if row else quota.period_start,
             current_period_end=row.current_period_end if row else None,
-            polar_customer_id=row.polar_customer_id if row else None,
-            manage_url=manage_url,
+            can_manage=can_manage,
         )
 
     enrich_event(

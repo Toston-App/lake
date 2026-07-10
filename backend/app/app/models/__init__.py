@@ -10,6 +10,7 @@ from .item import Item
 from .user import User
 from .imports import Import
 from .subscription import UserSubscription
+from .polar_webhook_event import PolarWebhookEvent
 from .chat_observability import (
     ChatModelPricing,
     ChatObsConversation,

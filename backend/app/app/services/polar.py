@@ -14,6 +14,7 @@ Async convention: the polar-sdk exposes async variants with an `_async` suffix
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
@@ -153,7 +154,6 @@ async def ensure_customer(
                     "external_id": ext_id,
                     "email": user.email or "",
                     "name": user.name or "",
-                    # "organization_id": settings.POLAR_ORGANIZATION_ID,
                     "metadata": {"toston_user_id": str(user.id)},
                 }
             )
@@ -167,7 +167,20 @@ async def ensure_customer(
             )
             raise HTTPException(status_code=502, detail="Failed to create Polar customer") from create_exc
 
-    await crud_subscription.set_polar_customer_id(db, user.id, customer_id)
+    try:
+        await crud_subscription.set_polar_customer_id(db, user.id, customer_id)
+    except ValueError as exc:
+        _polar_log(
+            request,
+            level="error",
+            op="customers.bind",
+            error=str(exc),
+            polar_customer_id=customer_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Polar customer is already linked to another account",
+        ) from exc
     # Keep the in-memory user in sync for the rest of the request.
     user.polar_customer_id = customer_id
     return customer_id
@@ -270,6 +283,24 @@ def _coerce_dt(value: Any) -> Optional[Any]:
     return value
 
 
+def _event_at(data: Any, request: Optional[Request] = None) -> datetime:
+    """Best-effort event time for out-of-order webhook protection."""
+    for attr in ("modified_at", "updated_at", "created_at"):
+        value = getattr(data, attr, None) if data is not None else None
+        if value is None:
+            continue
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if request is not None:
+        ts = request.headers.get("webhook-timestamp")
+        if ts:
+            try:
+                return datetime.fromtimestamp(float(ts), tz=timezone.utc)
+            except (TypeError, ValueError, OSError):
+                pass
+    return datetime.now(timezone.utc)
+
+
 async def _resolve_user_from_polar_customer(
     db: AsyncSession,
     polar_customer_id: str,
@@ -339,9 +370,18 @@ async def _resolve_user_from_polar_customer(
             return None
     user = await _resolve_user_by_external_id(db, external_id)
     if user is not None:
-        # Cache for next time.
-        await crud_subscription.set_polar_customer_id(db, user.id, polar_customer_id)
-        user.polar_customer_id = polar_customer_id
+        try:
+            await crud_subscription.set_polar_customer_id(db, user.id, polar_customer_id)
+            user.polar_customer_id = polar_customer_id
+        except ValueError as exc:
+            _polar_log(
+                request,
+                level="error",
+                op="customers.bind",
+                error=str(exc),
+                polar_customer_id=polar_customer_id,
+            )
+            return None
     return user
 
 
@@ -397,7 +437,7 @@ async def _handle_subscription_event(
         tier=resolved_tier.value,
     )
 
-    await crud_subscription.upsert_from_webhook(
+    row = await crud_subscription.upsert_from_webhook(
         db,
         user_id=user.id,
         polar_customer_id=polar_customer_id,
@@ -408,7 +448,18 @@ async def _handle_subscription_event(
         current_period_end=_coerce_dt(getattr(data, "current_period_end", None)),
         canceled_at=_coerce_dt(getattr(data, "canceled_at", None)),
         metadata={"event_type": event_type},
+        event_at=_event_at(data, request),
     )
+    if row is None:
+        _polar_log(
+            request,
+            level="info",
+            op="subscription_event_skipped",
+            event_type=event_type,
+            user_id=user.id,
+            reason="stale_event",
+        )
+        return
     # Drop the cached entitlement so the next chat turn reflects the change.
     from app.utilities.redis import invalidate_entitlement
 
@@ -444,4 +495,8 @@ async def _handle_customer_event(db: AsyncSession, data: Any) -> None:
     user = await _resolve_user_by_external_id(db, external_id)
     if user is None:
         return
-    await crud_subscription.set_polar_customer_id(db, user.id, polar_customer_id)
+    try:
+        await crud_subscription.set_polar_customer_id(db, user.id, polar_customer_id)
+    except ValueError:
+        # Already bound to another local user; refuse cross-account takeover.
+        return

@@ -53,6 +53,8 @@
 Now you can open your browser and interact with these URLs:
 
 - API capabilities catalog (for integrations and chatbots): [docs/API_CAPABILITIES.md](docs/API_CAPABILITIES.md)
+- Chat API guide: [docs/CHAT_API.md](docs/CHAT_API.md)
+- Polar subscriptions (config, webhooks, entitlements): [docs/POLAR_SUBSCRIPTIONS.md](docs/POLAR_SUBSCRIPTIONS.md)
 - JSON based web API based on OpenAPI: http://localhost:8888
 - Automatic interactive documentation with Swagger UI (from the OpenAPI backend): http://localhost:8888/docs
   - Default credentials: `admin:root`

@@ -6,7 +6,6 @@ export type TierOut = {
   monthly_message_limit: number | null
   monthly_token_limit: number | null
   features: string[]
-  polar_product_id: string | null
   price_hint: string | null
   available: boolean
 }
@@ -26,8 +25,7 @@ export type SubscriptionOut = {
   status: string
   current_period_start: string | null
   current_period_end: string | null
-  polar_customer_id: string | null
-  manage_url: string | null
+  can_manage: boolean
 }
 
 export type SubscriptionMeOut = {
