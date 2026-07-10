@@ -21,6 +21,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql import select
@@ -175,6 +176,10 @@ async def record_tool_call(
     if not _enabled() or turn_id is None:
         return
     try:
+        if arguments is not None:
+            arguments = jsonable_encoder(arguments)
+        if result is not None:
+            result = jsonable_encoder(result)
         async with async_session() as db:
             db.add(
                 ChatObsToolCall(

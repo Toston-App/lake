@@ -86,7 +86,7 @@ async def get_my_subscription(
         manage_url: str | None = None
         if row and row.status in ("active", "trialing"):
             try:
-                portal = await create_portal_session(current_user)
+                portal = await create_portal_session(current_user, request=request)
                 manage_url = portal.url
             except HTTPException:
                 # Portal may fail if there's no customer yet; ignore.
@@ -142,7 +142,7 @@ async def create_subscription_checkout(
         user={"id": current_user.id, "email": current_user.email},
         operation={"type": "subscription_checkout", "tier": tier.value},
     )
-    return await create_checkout(db, current_user, tier)
+    return await create_checkout(db, current_user, tier, request=request)
 
 
 @router.post("/portal", response_model=PortalOut)
@@ -160,4 +160,4 @@ async def create_subscription_portal(
         user={"id": current_user.id, "email": current_user.email},
         operation={"type": "subscription_portal"},
     )
-    return await create_portal_session(current_user)
+    return await create_portal_session(current_user, request=request)

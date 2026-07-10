@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.core.config import settings
 from app.services.polar import handle_polar_event
-from app.utilities.wide_events import enrich_event
+from app.utilities.wide_events import enrich_event, mark_for_logging
 
 router = APIRouter()
 
@@ -29,6 +29,7 @@ async def polar_webhook(
 
     payload = await request.body()
 
+    mark_for_logging(request)
     enrich_event(
         request,
         webhook={
@@ -67,7 +68,7 @@ async def polar_webhook(
         raise HTTPException(status_code=400, detail="Malformed webhook payload") from exc
 
     try:
-        await handle_polar_event(db, event)
+        await handle_polar_event(db, event, request=request)
     except Exception as exc:
         # Log but still 202 so Polar doesn't retry on our internal errors
         # (we'd rather investigate than have Polar redeliver a storm).
