@@ -1,8 +1,8 @@
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.models.asset import AssetClass, AssetType, Currency, Market, ASSET_TYPE_TO_CLASS
 
@@ -20,18 +20,29 @@ class AssetBase(BaseModel):
     coingecko_id: Optional[str] = None
     is_active: Optional[bool] = True
 
-    @validator("symbol", pre=True, always=True)
+    @field_validator("symbol", mode="before")
+    @classmethod
     def uppercase_symbol(cls, v):
         if v is not None:
             return v.upper().strip()
         return v
 
-    @validator("asset_class", pre=True, always=True)
-    def infer_asset_class(cls, v, values):
-        """Infer asset_class from asset_type if not provided."""
-        if v is None and "asset_type" in values and values["asset_type"] is not None:
-            return ASSET_TYPE_TO_CLASS.get(values["asset_type"])
-        return v
+    @model_validator(mode="before")
+    @classmethod
+    def infer_asset_class(cls, data: Any) -> Any:
+        """Infer asset_class from asset_type when not provided.
+
+        Runs before field validation so both fields are visible regardless
+        of declaration order (Pydantic v2 no longer exposes sibling fields
+        to per-field validators reliably).
+        """
+        if not isinstance(data, dict):
+            return data
+        if data.get("asset_class") is None and data.get("asset_type") is not None:
+            inferred = ASSET_TYPE_TO_CLASS.get(data["asset_type"])
+            if inferred is not None:
+                data["asset_class"] = inferred
+        return data
 
 
 # Properties to receive on Asset creation
@@ -39,13 +50,6 @@ class AssetCreate(AssetBase):
     symbol: str
     name: str
     asset_type: AssetType
-
-    @validator("asset_class", pre=True, always=True)
-    def set_asset_class(cls, v, values):
-        """Auto-set asset_class from asset_type."""
-        if v is None and "asset_type" in values:
-            return ASSET_TYPE_TO_CLASS.get(values["asset_type"])
-        return v
 
 
 # Properties to receive on Asset update
@@ -61,8 +65,7 @@ class AssetInDBBase(AssetBase):
     asset_class: AssetClass
     asset_type: AssetType
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Properties to return to client

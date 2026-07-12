@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
+from app.models.asset import ASSET_TYPE_TO_CLASS
 from app.models.investment_transaction import TransactionType
 from app.schemas.investment_transaction import (
     InvestmentTransaction,
@@ -211,6 +212,7 @@ async def create_transaction_with_asset(
                 symbol=resolved_asset.symbol,
                 name=resolved_asset.name,
                 asset_type=resolved_asset.asset_type,
+                asset_class=ASSET_TYPE_TO_CLASS.get(resolved_asset.asset_type),
                 currency=resolved_asset.currency,
                 market=resolved_asset.market,
                 country=resolved_asset.country,
