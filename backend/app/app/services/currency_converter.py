@@ -2,6 +2,7 @@
 Currency conversion service using Yahoo Finance for FX rates.
 """
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -39,7 +40,7 @@ class CurrencyConverter:
         try:
             ticker = yf.Ticker(cls.USD_MXN_TICKER)
             # Get the most recent price
-            hist = ticker.history(period="1d")
+            hist = await asyncio.to_thread(ticker.history, period="1d")
             if not hist.empty:
                 rate = float(hist["Close"].iloc[-1])
                 cls._rate_cache[cache_key] = (rate, datetime.utcnow())
@@ -106,4 +107,3 @@ class CurrencyConverter:
     def clear_cache(cls) -> None:
         """Clear the rate cache."""
         cls._rate_cache.clear()
-

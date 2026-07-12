@@ -2,12 +2,14 @@
 Asset management endpoints for the Investment Dashboard.
 """
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud, models, schemas
+from app import crud, models
 from app.api import deps
 from app.models.asset import AssetClass, AssetType, Currency, Market, ASSET_TYPE_TO_CLASS
 from app.schemas.asset import (
@@ -26,14 +28,25 @@ from app.services.yahoo_finance import YahooFinanceService
 from app.services.coingecko import CoinGeckoService
 
 router = APIRouter()
+_external_call_times: dict[tuple[int, str], float] = {}
+
+
+def _enforce_external_call_interval(user_id: int, operation: str, seconds: float) -> None:
+    """Small per-process guard against repeatedly triggering costly upstream calls."""
+    key = (user_id, operation)
+    now = monotonic()
+    last_call = _external_call_times.get(key)
+    if last_call is not None and now - last_call < seconds:
+        raise HTTPException(status_code=429, detail="Too many external data requests")
+    _external_call_times[key] = now
 
 
 @router.get("", response_model=list[Asset])
 async def list_assets(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
     asset_class: Optional[AssetClass] = Query(None, description="Filter by asset class"),
     asset_type: Optional[AssetType] = Query(None, description="Filter by asset type"),
     currency: Optional[Currency] = Query(None, description="Filter by currency"),
@@ -67,7 +80,7 @@ async def create_asset(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
     asset_in: AssetCreate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
     """
     Create a new asset to track.
@@ -86,7 +99,11 @@ async def create_asset(
     if asset_in.asset_class is None:
         asset_in.asset_class = ASSET_TYPE_TO_CLASS.get(asset_in.asset_type)
 
-    asset = await crud.asset.create(db, obj_in=asset_in)
+    try:
+        asset = await crud.asset.create(db, obj_in=asset_in)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Asset identity already exists")
     return asset
 
 
@@ -94,9 +111,9 @@ async def create_asset(
 async def search_assets(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
-    q: str = Query(..., min_length=1, description="Search query"),
-    skip: int = 0,
-    limit: int = 20,
+    q: str = Query(..., min_length=1, max_length=100, description="Search query"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
 ) -> Any:
     """
     Search assets by symbol or name.
@@ -108,7 +125,7 @@ async def search_assets(
 @router.get("/search-external", response_model=list[ExternalAssetSearchResult])
 async def search_external_assets(
     current_user: models.User = Depends(deps.get_current_active_user),
-    q: str = Query(..., min_length=1, description="Search query (symbol or name)"),
+    q: str = Query(..., min_length=1, max_length=100, description="Search query (symbol or name)"),
 ) -> Any:
     """
     Search for assets from external sources (Yahoo Finance).
@@ -116,6 +133,7 @@ async def search_external_assets(
     Searches both USA (NYSE, NASDAQ) and Mexican (BMV) markets.
     Results include stocks and ETFs that can be added to the portfolio.
     """
+    _enforce_external_call_interval(current_user.id, "search-assets", 0.5)
     results = await YahooFinanceService.search_symbol(q)
 
     # Filter to only include stocks and ETFs from USA and Mexico exchanges
@@ -171,7 +189,7 @@ async def search_external_assets(
 @router.get("/search-crypto", response_model=list[ExternalCryptoSearchResult])
 async def search_crypto_assets(
     current_user: models.User = Depends(deps.get_current_active_user),
-    q: str = Query(..., min_length=1, description="Search query (symbol or name)"),
+    q: str = Query(..., min_length=1, max_length=100, description="Search query (symbol or name)"),
 ) -> Any:
     """
     Search for cryptocurrencies from CoinGecko.
@@ -179,6 +197,7 @@ async def search_crypto_assets(
     Returns cryptocurrency search results that can be added to the portfolio.
     Results include symbol, name, CoinGecko ID, and market cap rank.
     """
+    _enforce_external_call_interval(current_user.id, "search-crypto", 0.5)
     results = await CoinGeckoService.search_coins(q)
 
     crypto_results = []
@@ -244,7 +263,7 @@ async def update_asset(
     db: AsyncSession = Depends(deps.async_get_db),
     asset_id: int,
     asset_in: AssetUpdate,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
     """
     Update an asset.
@@ -254,7 +273,11 @@ async def update_asset(
         raise HTTPException(status_code=404, detail="Asset not found")
     
     asset_in.updated_at = datetime.now(timezone.utc)
-    asset = await crud.asset.update(db, db_obj=asset, obj_in=asset_in)
+    try:
+        asset = await crud.asset.update(db, db_obj=asset, obj_in=asset_in)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Asset identity already exists")
     return asset
 
 
@@ -263,24 +286,17 @@ async def delete_asset(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
     asset_id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
     """
-    Delete an asset (soft delete by setting is_active=False).
-    
-    Hard delete only allowed for superusers.
+    Deactivate a global asset. Superuser only.
     """
     asset = await crud.asset.get(db, id=asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     
-    if crud.user.is_superuser(current_user):
-        await crud.asset.remove(db, id=asset_id)
-        return AssetDeletionResponse(message=f"Asset {asset.symbol} deleted")
-    else:
-        # Soft delete
-        await crud.asset.update(db, db_obj=asset, obj_in={"is_active": False})
-        return AssetDeletionResponse(message=f"Asset {asset.symbol} deactivated")
+    await crud.asset.update(db, db_obj=asset, obj_in={"is_active": False})
+    return AssetDeletionResponse(message=f"Asset {asset.symbol} deactivated")
 
 
 @router.get("/{asset_id}/price", response_model=CurrentPrice)
@@ -301,6 +317,7 @@ async def get_asset_price(
         raise HTTPException(status_code=404, detail="Asset not found")
     
     if refresh:
+        _enforce_external_call_interval(current_user.id, f"refresh-asset-{asset_id}", 5.0)
         price_data = await PriceFetcher.fetch_and_store_price(db, asset)
     else:
         price_data = await PriceFetcher.get_current_price(db, asset)
@@ -336,6 +353,7 @@ async def refresh_all_prices(
     By default, only refreshes assets the user has holdings in.
     Set only_my_holdings=false to refresh all active assets (admin).
     """
+    _enforce_external_call_interval(current_user.id, "refresh-prices", 30.0)
     owner_id = current_user.id if only_my_holdings else None
     
     if not only_my_holdings and not crud.user.is_superuser(current_user):

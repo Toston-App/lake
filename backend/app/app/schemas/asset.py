@@ -2,22 +2,23 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.asset import AssetClass, AssetType, Currency, Market, ASSET_TYPE_TO_CLASS
 
 
 # Shared properties
 class AssetBase(BaseModel):
-    symbol: Optional[str] = None
-    name: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+    symbol: Optional[str] = Field(default=None, max_length=32)
+    name: Optional[str] = Field(default=None, max_length=255)
     asset_class: Optional[AssetClass] = None
     asset_type: Optional[AssetType] = None
     currency: Optional[Currency] = Currency.USD
     market: Optional[Market] = Market.NYSE
-    sector: Optional[str] = None
-    country: Optional[str] = "US"
-    coingecko_id: Optional[str] = None
+    sector: Optional[str] = Field(default=None, max_length=100)
+    country: Optional[str] = Field(default="US", max_length=32)
+    coingecko_id: Optional[str] = Field(default=None, max_length=128)
     is_active: Optional[bool] = True
 
     @field_validator("symbol", mode="before")
@@ -65,7 +66,7 @@ class AssetInDBBase(AssetBase):
     asset_class: AssetClass
     asset_type: AssetType
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
 
 
 # Properties to return to client

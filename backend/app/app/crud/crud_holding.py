@@ -1,6 +1,5 @@
 from typing import Optional
 
-from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.expression import select
@@ -14,7 +13,12 @@ from app.schemas.holding import HoldingCreate, HoldingUpdate
 
 class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
     async def create_with_owner(
-        self, db: AsyncSession, *, obj_in: HoldingCreate, owner_id: int
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: HoldingCreate,
+        owner_id: int,
+        commit: bool = True,
     ) -> Holding:
         """Create a new holding for a user."""
         obj_in_data = {
@@ -34,13 +38,30 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         await db.refresh(db_obj)
         
         # Recalculate account total_investments
-        await crud.account.recalculate_total_investments(db, account_id=db_obj.account_id)
+        await crud.account.recalculate_total_investments(
+            db, account_id=db_obj.account_id, commit=commit
+        )
         
         return db_obj
+
+    async def get_for_update_by_owner(
+        self, db: AsyncSession, *, holding_id: int, owner_id: int
+    ) -> Optional[Holding]:
+        """Owner-scoped lookup that locks the position for a financial mutation."""
+        result = await db.execute(
+            select(self.model)
+            .options(selectinload(Holding.asset))
+            .filter(Holding.id == holding_id, Holding.owner_id == owner_id)
+            .with_for_update()
+        )
+        return result.scalars().first()
 
     async def get_by_owner(
         self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
@@ -197,17 +218,30 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         holding: Holding,
         new_quantity: float,
         new_total_invested: float,
+        commit: bool = True,
     ) -> Holding:
         """Recalculate cost basis after a transaction."""
+        old_quantity = holding.quantity
         if new_quantity > 0:
             holding.quantity = new_quantity
             holding.total_invested = new_total_invested
             holding.avg_cost_basis = new_total_invested / new_quantity
-            # Update current_value if no price has been fetched yet
-            if holding.current_value == 0:
+            if old_quantity > 0:
+                quantity_ratio = new_quantity / old_quantity
+                holding.current_value *= quantity_ratio
+                holding.current_value_usd *= quantity_ratio
+                holding.current_value_mxn *= quantity_ratio
+            else:
                 holding.current_value = new_total_invested
                 holding.current_value_usd = new_total_invested
                 holding.current_value_mxn = new_total_invested
+
+            holding.unrealized_gain_loss = holding.current_value - new_total_invested
+            holding.unrealized_gain_loss_pct = (
+                holding.unrealized_gain_loss / new_total_invested * 100
+                if new_total_invested > 0
+                else 0
+            )
         else:
             # All shares sold
             holding.quantity = 0
@@ -216,13 +250,20 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
             holding.current_value = 0
             holding.current_value_usd = 0
             holding.current_value_mxn = 0
+            holding.unrealized_gain_loss = 0
+            holding.unrealized_gain_loss_pct = 0
         
         db.add(holding)
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         await db.refresh(holding)
         
         # Recalculate account total_investments
-        await crud.account.recalculate_total_investments(db, account_id=holding.account_id)
+        await crud.account.recalculate_total_investments(
+            db, account_id=holding.account_id, commit=commit
+        )
         
         return holding
 

@@ -2,11 +2,13 @@
 Yahoo Finance service for fetching stock and ETF prices.
 """
 import logging
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
 import yfinance as yf
+import httpx
 
 from app.models.asset import Currency, Market
 
@@ -84,11 +86,11 @@ class YahooFinanceService:
         
         try:
             ticker = yf.Ticker(yahoo_ticker)
-            info = ticker.info
+            info = await asyncio.to_thread(lambda: ticker.info)
             
             if not info or "regularMarketPrice" not in info:
                 # Try getting from history as fallback
-                hist = ticker.history(period="1d")
+                hist = await asyncio.to_thread(ticker.history, period="1d")
                 if hist.empty:
                     logger.warning(f"No data available for {yahoo_ticker}")
                     return None
@@ -168,8 +170,6 @@ class YahooFinanceService:
         which may have rate limits.
         """
         try:
-            import requests
-            
             url = "https://query2.finance.yahoo.com/v1/finance/search"
             params = {
                 "q": query,
@@ -178,7 +178,10 @@ class YahooFinanceService:
             }
             headers = {"User-Agent": "Mozilla/5.0"}
             
-            response = requests.get(url, params=params, headers=headers)
+            timeout = httpx.Timeout(5.0, connect=3.0)
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
             data = response.json()
             
             results = []
@@ -195,4 +198,3 @@ class YahooFinanceService:
         except Exception as e:
             logger.error(f"Error searching for {query}: {e}")
             return []
-

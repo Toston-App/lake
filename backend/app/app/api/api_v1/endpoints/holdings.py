@@ -6,8 +6,9 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
-from app import crud, models, schemas
+from app import crud, models
 from app.api import deps
 from app.models.asset import ASSET_TYPE_TO_CLASS
 from app.models.asset import AssetClass, Currency
@@ -28,8 +29,8 @@ router = APIRouter()
 async def list_holdings(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
     account_id: Optional[int] = Query(None, description="Filter by account"),
     asset_class: Optional[AssetClass] = Query(None, description="Filter by asset class"),
     currency: Optional[Currency] = Query(None, description="Filter by asset currency"),
@@ -139,8 +140,29 @@ async def create_holding(
         else:
             resolved_asset = await AssetResolverService.resolve_from_coingecko(holding_in.external_id)
 
-        existing_asset = await crud.asset.get_by_symbol(db, symbol=resolved_asset.symbol)
+        if resolved_asset.coingecko_id:
+            existing_asset = await crud.asset.get_by_coingecko_id(
+                db, coingecko_id=resolved_asset.coingecko_id
+            )
+            if existing_asset is None and await crud.asset.get_by_symbol(
+                db, symbol=resolved_asset.symbol
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="External asset symbol conflicts with an existing global asset",
+                )
+        else:
+            existing_asset = await crud.asset.get_by_symbol(db, symbol=resolved_asset.symbol)
         if existing_asset:
+            if (
+                existing_asset.asset_type != resolved_asset.asset_type
+                or existing_asset.market != resolved_asset.market
+                or existing_asset.currency != resolved_asset.currency
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="External asset conflicts with an existing global asset",
+                )
             asset = existing_asset
         else:
             asset_in = AssetCreate(
@@ -153,7 +175,14 @@ async def create_holding(
                 country=resolved_asset.country,
                 coingecko_id=resolved_asset.coingecko_id,
             )
-            asset = await crud.asset.create(db, obj_in=asset_in)
+            try:
+                asset = await crud.asset.create(db, obj_in=asset_in)
+            except IntegrityError:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Asset was concurrently created; retry the request",
+                )
 
         holding_in.asset_id = asset.id
     
@@ -167,9 +196,16 @@ async def create_holding(
             detail=f"You already have a holding for {asset.symbol} in this account.",
         )
     
-    holding = await crud.holding.create_with_owner(
-        db, obj_in=holding_in, owner_id=current_user.id
-    )
+    try:
+        holding = await crud.holding.create_with_owner(
+            db, obj_in=holding_in, owner_id=current_user.id
+        )
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A holding for this asset already exists in the account",
+        )
     return holding
 
 
@@ -244,22 +280,34 @@ async def update_holding(
     
     if holding.owner_id != current_user.id and not crud.user.is_superuser(current_user):
         raise HTTPException(status_code=403, detail="Not enough permissions")
-    
-    holding_in.updated_at = datetime.now(timezone.utc)
-    
-    # Recalculate total_invested if quantity or cost basis changed
-    if holding_in.quantity is not None and holding_in.avg_cost_basis is not None:
-        holding_in.total_invested = holding_in.quantity * holding_in.avg_cost_basis
-    elif holding_in.quantity is not None:
-        holding_in.total_invested = holding_in.quantity * holding.avg_cost_basis
-    elif holding_in.avg_cost_basis is not None:
-        holding_in.total_invested = holding.quantity * holding_in.avg_cost_basis
-    
-    holding = await crud.holding.update(db, db_obj=holding, obj_in=holding_in)
-    
-    # Recalculate account total_investments if cost basis changed
-    if holding_in.total_invested is not None:
-        await crud.account.recalculate_total_investments(db, account_id=holding.account_id)
+
+    holding = await crud.holding.get_for_update_by_owner(
+        db, holding_id=holding.id, owner_id=holding.owner_id
+    )
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+
+    quantity = holding_in.quantity if holding_in.quantity is not None else holding.quantity
+    avg_cost_basis = (
+        holding_in.avg_cost_basis
+        if holding_in.avg_cost_basis is not None
+        else holding.avg_cost_basis
+    )
+    if holding_in.quantity is not None or holding_in.avg_cost_basis is not None:
+        holding = await crud.holding.recalculate_cost_basis(
+            db,
+            holding=holding,
+            new_quantity=quantity,
+            new_total_invested=quantity * avg_cost_basis,
+            commit=False,
+        )
+
+    if holding_in.cost_currency is not None:
+        holding.cost_currency = holding_in.cost_currency
+    holding.updated_at = datetime.now(timezone.utc)
+    db.add(holding)
+    await db.commit()
+    await db.refresh(holding)
     
     return holding
 
@@ -280,6 +328,12 @@ async def delete_holding(
     
     if holding.owner_id != current_user.id and not crud.user.is_superuser(current_user):
         raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    holding = await crud.holding.get_for_update_by_owner(
+        db, holding_id=holding.id, owner_id=holding.owner_id
+    )
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
     
     asset = await crud.asset.get(db, id=holding.asset_id)
     account_id = holding.account_id

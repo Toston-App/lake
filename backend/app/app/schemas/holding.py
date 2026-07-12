@@ -1,4 +1,5 @@
 from datetime import datetime
+import math
 from typing import Optional
 
 from pydantic import BaseModel, root_validator, validator
@@ -19,8 +20,19 @@ class HoldingBase(BaseModel):
     @validator("quantity", "avg_cost_basis", "total_invested", pre=True, always=True)
     def round_floats(cls, v):
         if v is not None:
+            if not math.isfinite(v):
+                raise ValueError("Value must be finite")
             return round(v, 6)  # Support fractional shares/crypto
         return v
+
+    @validator("quantity", "avg_cost_basis")
+    def values_must_be_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Value must be non-negative")
+        return v
+
+    class Config:
+        extra = "forbid"
 
 
 # Properties to receive on Holding creation
@@ -36,7 +48,10 @@ class HoldingCreate(HoldingBase):
     @validator("external_id", pre=True, always=True)
     def normalize_external_id(cls, v):
         if isinstance(v, str):
-            return v.strip()
+            v = v.strip()
+            if len(v) > 128:
+                raise ValueError("External ID must be at most 128 characters")
+            return v
         return v
 
     @root_validator(pre=True)
@@ -57,13 +72,21 @@ class HoldingCreate(HoldingBase):
 
 
 # Properties to receive on Holding update
-class HoldingUpdate(HoldingBase):
-    current_value: Optional[float] = None
-    current_value_mxn: Optional[float] = None
-    current_value_usd: Optional[float] = None
-    unrealized_gain_loss: Optional[float] = None
-    unrealized_gain_loss_pct: Optional[float] = None
-    updated_at: Optional[datetime] = None
+class HoldingUpdate(BaseModel):
+    """User-editable holding fields; valuations and totals are server-owned."""
+
+    quantity: Optional[float] = None
+    avg_cost_basis: Optional[float] = None
+    cost_currency: Optional[Currency] = None
+
+    @validator("quantity", "avg_cost_basis", pre=True)
+    def validate_financial_value(cls, v):
+        if v is not None and (not math.isfinite(v) or v < 0):
+            raise ValueError("Value must be finite and non-negative")
+        return round(v, 6) if v is not None else v
+
+    class Config:
+        extra = "forbid"
 
 
 # Properties shared by models stored in DB

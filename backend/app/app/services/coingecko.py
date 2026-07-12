@@ -11,6 +11,7 @@ import httpx
 from app.models.asset import Currency
 
 logger = logging.getLogger(__name__)
+HTTP_TIMEOUT = httpx.Timeout(5.0, connect=3.0)
 
 
 # Common cryptocurrency symbol to CoinGecko ID mapping
@@ -101,7 +102,7 @@ class CoinGeckoService:
             return None
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
                 response = await client.get(
                     f"{cls.BASE_URL}/simple/price",
                     params={
@@ -167,7 +168,7 @@ class CoinGeckoService:
             return {}
         
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
                 response = await client.get(
                     f"{cls.BASE_URL}/simple/price",
                     params={
@@ -207,7 +208,7 @@ class CoinGeckoService:
         Search for cryptocurrencies by name or symbol.
         """
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
                 response = await client.get(
                     f"{cls.BASE_URL}/search",
                     params={"query": query},

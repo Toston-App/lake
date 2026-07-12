@@ -1,4 +1,5 @@
 from datetime import datetime
+import math
 from typing import Optional
 
 from pydantic import BaseModel, root_validator, validator
@@ -25,6 +26,8 @@ class InvestmentTransactionBase(BaseModel):
     @validator("quantity", "price_per_unit", "fees", pre=True, always=True)
     def round_floats(cls, v):
         if v is not None:
+            if not math.isfinite(v):
+                raise ValueError("Value must be finite")
             return round(v, 6)
         return v
 
@@ -39,6 +42,27 @@ class InvestmentTransactionBase(BaseModel):
         if v is not None and v < 0:
             raise ValueError("Price per unit must be non-negative")
         return v
+
+    @validator("fees")
+    def fees_must_be_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Fees must be non-negative")
+        return v
+
+    @validator("exchange_rate_to_usd", "exchange_rate_to_mxn")
+    def exchange_rate_must_be_positive_and_finite(cls, v):
+        if v is not None and (not math.isfinite(v) or v <= 0):
+            raise ValueError("Exchange rate must be finite and positive")
+        return v
+
+    @validator("notes")
+    def limit_notes(cls, v):
+        if v is not None and len(v) > 2000:
+            raise ValueError("Notes must be at most 2000 characters")
+        return v
+
+    class Config:
+        extra = "forbid"
 
 
 # Properties to receive on Transaction creation
@@ -128,7 +152,10 @@ class TransactionWithAssetCreate(BaseModel):
     @validator("external_id", pre=True, always=True)
     def normalize_external_id(cls, v):
         if isinstance(v, str):
-            return v.strip()
+            v = v.strip()
+            if len(v) > 128:
+                raise ValueError("External ID must be at most 128 characters")
+            return v
         return v
 
     @root_validator(skip_on_failure=True)
@@ -148,6 +175,8 @@ class TransactionWithAssetCreate(BaseModel):
     @validator("quantity", "price_per_unit", "fees", pre=True, always=True)
     def round_floats(cls, v):
         if v is not None:
+            if not math.isfinite(v):
+                raise ValueError("Value must be finite")
             return round(v, 6)
         return v
 
@@ -163,11 +192,32 @@ class TransactionWithAssetCreate(BaseModel):
             raise ValueError("Price per unit must be non-negative")
         return v
 
+    @validator("fees")
+    def fees_must_be_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Fees must be non-negative")
+        return v
+
+    @validator("exchange_rate_to_usd", "exchange_rate_to_mxn")
+    def exchange_rate_must_be_positive_and_finite(cls, v):
+        if v is not None and (not math.isfinite(v) or v <= 0):
+            raise ValueError("Exchange rate must be finite and positive")
+        return v
+
+    @validator("notes")
+    def limit_notes(cls, v):
+        if v is not None and len(v) > 2000:
+            raise ValueError("Notes must be at most 2000 characters")
+        return v
+
     @validator("executed_at", pre=True)
     def parse_executed_at(cls, v):
         if isinstance(v, str):
             return datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
+
+    class Config:
+        extra = "forbid"
 
 
 class TransactionWithAssetResponse(BaseModel):

@@ -96,6 +96,23 @@ const headers = {
 };
 ```
 
+### Investment Data Security Rules
+
+- Asset records are global and shared by all portfolios. Only superusers may create,
+  update, or deactivate them directly. Regular users can still add assets through the
+  holdings and `transactions/with-asset` flows, which verify the identity with the
+  configured external provider.
+- Holdings and transactions are owner-scoped. Account, holding, and transaction IDs
+  cannot be used to access or mutate another user's portfolio.
+- Valuations, totals, currencies, and exchange rates are calculated by the server.
+  Requests containing server-owned fields are rejected.
+- Position-changing transactions are serialized and committed atomically. Sells and
+  transfers that exceed the available quantity are rejected without creating a ledger row.
+- Investment transactions are immutable. Record a correcting transaction instead of
+  deleting historical activity.
+- Collection limits are capped at 100, external search terms at 100 characters, and
+  external search/refresh operations are throttled.
+
 ### Helper Function
 
 Use this helper for all authenticated API calls:
@@ -283,6 +300,9 @@ const mxnAssets = await apiCall('/assets?currency=MXN&market=BMV');
 #### 2. Create Asset
 
 Create a new asset to track.
+
+**Permission:** Superuser only. Regular users should use `POST /holdings` or
+`POST /transactions/with-asset` with a provider and external ID.
 
 **Endpoint:** `POST /assets`
 
@@ -554,6 +574,8 @@ const asset = await apiCall('/assets/1');
 
 Update an existing asset's details.
 
+**Permission:** Superuser only.
+
 **Endpoint:** `PUT /assets/{asset_id}`
 
 **Request Schema:**
@@ -588,11 +610,12 @@ const updatedAsset = await apiCall('/assets/1', {
 
 #### 7. Delete Asset
 
-Delete or deactivate an asset.
+Deactivate an asset.
 
 **Endpoint:** `DELETE /assets/{asset_id}`
 
-**Note:** Regular users soft-delete (set `is_active: false`). Superusers can hard-delete.
+**Permission:** Superuser only. Deactivation is used to preserve references from existing
+portfolios and price history.
 
 **Example:**
 
@@ -866,6 +889,9 @@ const holding = await apiCall('/holdings/1');
 #### 4. Update Holding
 
 Update a holding's quantity or cost basis.
+
+Valuation, gain/loss, total-invested, ownership, account, and asset fields are server-owned
+and are rejected if supplied.
 
 **Endpoint:** `PUT /holdings/{holding_id}`
 
@@ -1204,7 +1230,9 @@ const transaction = await apiCall('/transactions/1');
 
 #### 5. Delete Transaction
 
-Delete a transaction.
+Investment transactions cannot be deleted because doing so would silently corrupt the
+holding's quantity and cost basis. This endpoint returns `409 Conflict`; record a correcting
+transaction instead.
 
 **Endpoint:** `DELETE /transactions/{transaction_id}`
 

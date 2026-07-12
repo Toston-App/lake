@@ -44,6 +44,11 @@ class AssetResolverService:
         exchange = (exact_match.get("exchange") or "").upper()
 
         is_mexican = symbol.endswith(".MX") or exchange == "MEX"
+        allowed_exchanges = {"NYQ", "NMS", "NGM", "PCX", "BTS", "MEX", "NYSE", "NASDAQ"}
+        if quote_type not in {"EQUITY", "ETF"} or (
+            exchange not in allowed_exchanges and not is_mexican
+        ):
+            raise HTTPException(status_code=422, detail="Unsupported external asset")
         clean_symbol = symbol.replace(".MX", "")
 
         if is_mexican:

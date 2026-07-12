@@ -1,7 +1,7 @@
 import enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -32,6 +32,19 @@ class InvestmentTransaction(Base):
     the history of a position.
     """
     __tablename__ = "investmenttransaction"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_investment_tx_quantity_positive"),
+        CheckConstraint("price_per_unit >= 0", name="ck_investment_tx_price_nonnegative"),
+        CheckConstraint("fees >= 0", name="ck_investment_tx_fees_nonnegative"),
+        CheckConstraint(
+            "exchange_rate_to_usd IS NULL OR exchange_rate_to_usd > 0",
+            name="ck_investment_tx_usd_rate_positive",
+        ),
+        CheckConstraint(
+            "exchange_rate_to_mxn IS NULL OR exchange_rate_to_mxn > 0",
+            name="ck_investment_tx_mxn_rate_positive",
+        ),
+    )
     
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
     
@@ -72,4 +85,3 @@ class InvestmentTransaction(Base):
     owner: "User" = relationship("User", back_populates="investment_transactions")
     account: "Account" = relationship("Account", back_populates="investment_transactions")
     holding: "Holding" = relationship("Holding", back_populates="transactions")
-

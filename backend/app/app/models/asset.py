@@ -104,7 +104,7 @@ class Asset(Base):
     # Additional metadata
     sector: str = Column(String, nullable=True)  # e.g., "Technology", "Finance"
     country: str = Column(String, nullable=True, default="US")  # e.g., "US", "MX"
-    coingecko_id: str = Column(String, nullable=True, index=True)
+    coingecko_id: str = Column(String, nullable=True, index=True, unique=True)
     
     # Status
     is_active: bool = Column(Boolean, default=True, nullable=False)

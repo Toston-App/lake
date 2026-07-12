@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer
+from sqlalchemy import CheckConstraint, Column, DateTime, Enum, Float, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -21,6 +21,12 @@ class Holding(Base):
     Each holding tracks the quantity owned, cost basis, and current value
     for performance tracking.
     """
+    __table_args__ = (
+        UniqueConstraint("account_id", "asset_id", name="uq_holding_account_asset"),
+        CheckConstraint("quantity >= 0", name="ck_holding_quantity_nonnegative"),
+        CheckConstraint("avg_cost_basis >= 0", name="ck_holding_cost_nonnegative"),
+        CheckConstraint("total_invested >= 0", name="ck_holding_total_nonnegative"),
+    )
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
     
     # Ownership
@@ -62,4 +68,3 @@ class Holding(Base):
         back_populates="holding",
         cascade="all, delete-orphan"
     )
-

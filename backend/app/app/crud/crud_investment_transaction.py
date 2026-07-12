@@ -17,7 +17,12 @@ class CRUDInvestmentTransaction(
     CRUDBase[InvestmentTransaction, InvestmentTransactionCreate, InvestmentTransactionUpdate]
 ):
     async def create_with_owner(
-        self, db: AsyncSession, *, obj_in: InvestmentTransactionCreate, owner_id: int
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: InvestmentTransactionCreate,
+        owner_id: int,
+        commit: bool = True,
     ) -> InvestmentTransaction:
         """Create a new investment transaction."""
         # Use dict() instead of jsonable_encoder to preserve datetime objects
@@ -34,7 +39,10 @@ class CRUDInvestmentTransaction(
         
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
         db.add(db_obj)
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         await db.refresh(db_obj)
         return db_obj
 
@@ -162,4 +170,3 @@ class CRUDInvestmentTransaction(
 
 
 investment_transaction = CRUDInvestmentTransaction(InvestmentTransaction)
-

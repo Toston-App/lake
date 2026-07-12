@@ -1,20 +1,19 @@
 """
 Investment transaction endpoints for the Investment Dashboard.
 """
-from datetime import datetime, timezone
 from typing import Any, Optional
-from fastapi.encoders import jsonable_encoder
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
-from app import crud, models, schemas
+from app import crud, models
 from app.api import deps
 from app.models.asset import ASSET_TYPE_TO_CLASS
 from app.models.investment_transaction import TransactionType
 from app.schemas.investment_transaction import (
     InvestmentTransaction,
     InvestmentTransactionCreate,
-    InvestmentTransactionUpdate,
     InvestmentTransactionWithAsset,
     InvestmentTransactionDeletionResponse,
     TransactionWithAssetCreate,
@@ -32,8 +31,8 @@ router = APIRouter()
 async def list_transactions(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
     holding_id: Optional[int] = Query(None, description="Filter by holding"),
     account_id: Optional[int] = Query(None, description="Filter by account"),
     transaction_type: Optional[TransactionType] = Query(None, description="Filter by type"),
@@ -124,45 +123,43 @@ async def create_transaction(
     
     And update the account's total_investments.
     """
-    # Verify account belongs to user
+    # Verify account belongs to user.
     account = await crud.account.get(db, id=transaction_in.account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     if account.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    # Verify holding belongs to user and matches account
-    holding = await crud.holding.get(db, id=transaction_in.holding_id)
+    # Lock the owner-scoped holding so concurrent sells cannot overspend it.
+    holding = await crud.holding.get_for_update_by_owner(
+        db, holding_id=transaction_in.holding_id, owner_id=current_user.id
+    )
     if not holding:
         raise HTTPException(status_code=404, detail="Holding not found")
     
     if holding.owner_id != current_user.id or holding.account_id != account.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    # Get current exchange rates
+    await _validate_transaction_against_holding(holding, transaction_in)
+
+    # Currency and exchange rates are server-owned financial fields.
     usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
-    
-    # Set exchange rates on transaction
-    if transaction_in.exchange_rate_to_usd is None:
-        if transaction_in.currency.value == "USD":
-            transaction_in.exchange_rate_to_usd = 1.0
-        else:
-            transaction_in.exchange_rate_to_usd = 1.0 / usd_mxn_rate
-    
-    if transaction_in.exchange_rate_to_mxn is None:
-        if transaction_in.currency.value == "MXN":
-            transaction_in.exchange_rate_to_mxn = 1.0
-        else:
-            transaction_in.exchange_rate_to_mxn = usd_mxn_rate
+    transaction_currency = holding.asset.currency
+    transaction_in = transaction_in.copy(update={
+        "currency": transaction_currency,
+        "exchange_rate_to_usd": 1.0 if transaction_currency.value == "USD" else 1.0 / usd_mxn_rate,
+        "exchange_rate_to_mxn": 1.0 if transaction_currency.value == "MXN" else usd_mxn_rate,
+    })
     
     # Create the transaction
     transaction = await crud.investment_transaction.create_with_owner(
-        db, obj_in=transaction_in, owner_id=current_user.id
+        db, obj_in=transaction_in, owner_id=current_user.id, commit=False
     )
     
     # Update holding based on transaction type
-    await _update_holding_from_transaction(db, holding, transaction)
-    
+    await _update_holding_from_transaction(db, holding, transaction, commit=False)
+    await db.commit()
+    await db.refresh(transaction)
     return transaction
 
 
@@ -203,9 +200,30 @@ async def create_transaction_with_asset(
                 detail="Provide asset_id or provider+external_id",
             )
 
-        existing_asset = await crud.asset.get_by_symbol(db, symbol=resolved_asset.symbol)
+        if resolved_asset.coingecko_id:
+            existing_asset = await crud.asset.get_by_coingecko_id(
+                db, coingecko_id=resolved_asset.coingecko_id
+            )
+            if existing_asset is None and await crud.asset.get_by_symbol(
+                db, symbol=resolved_asset.symbol
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="External asset symbol conflicts with an existing global asset",
+                )
+        else:
+            existing_asset = await crud.asset.get_by_symbol(db, symbol=resolved_asset.symbol)
 
         if existing_asset:
+            if (
+                existing_asset.asset_type != resolved_asset.asset_type
+                or existing_asset.market != resolved_asset.market
+                or existing_asset.currency != resolved_asset.currency
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="External asset conflicts with an existing global asset",
+                )
             asset = existing_asset
         else:
             asset_in = AssetCreate(
@@ -218,7 +236,14 @@ async def create_transaction_with_asset(
                 country=resolved_asset.country,
                 coingecko_id=resolved_asset.coingecko_id,
             )
-            asset = await crud.asset.create(db, obj_in=asset_in)
+            try:
+                asset = await crud.asset.create(db, obj_in=asset_in)
+            except IntegrityError:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Asset was concurrently created; retry the request",
+                )
             asset_created = True
     
     # Step 2: Verify account belongs to user
@@ -235,7 +260,11 @@ async def create_transaction_with_asset(
     )
     
     if existing_holding:
-        holding = existing_holding
+        holding = await crud.holding.get_for_update_by_owner(
+            db, holding_id=existing_holding.id, owner_id=current_user.id
+        )
+        if not holding:
+            raise HTTPException(status_code=404, detail="Holding not found")
     else:
         # Create new holding with zero initial values
         holding_in = HoldingCreate(
@@ -245,29 +274,24 @@ async def create_transaction_with_asset(
             avg_cost_basis=0.0,
             cost_currency=asset.currency,
         )
-        holding = await crud.holding.create_with_owner(
-            db, obj_in=holding_in, owner_id=current_user.id
-        )
+        try:
+            holding = await crud.holding.create_with_owner(
+                db, obj_in=holding_in, owner_id=current_user.id, commit=False
+            )
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="A holding for this asset already exists in the account; retry the request",
+            )
         holding_created = True
     
     # Step 3: Get exchange rates
     usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
     transaction_currency = asset.currency
     
-    exchange_rate_to_usd = transaction_in.exchange_rate_to_usd
-    exchange_rate_to_mxn = transaction_in.exchange_rate_to_mxn
-    
-    if exchange_rate_to_usd is None:
-        if transaction_currency.value == "USD":
-            exchange_rate_to_usd = 1.0
-        else:
-            exchange_rate_to_usd = 1.0 / usd_mxn_rate
-    
-    if exchange_rate_to_mxn is None:
-        if transaction_currency.value == "MXN":
-            exchange_rate_to_mxn = 1.0
-        else:
-            exchange_rate_to_mxn = usd_mxn_rate
+    exchange_rate_to_usd = 1.0 if transaction_currency.value == "USD" else 1.0 / usd_mxn_rate
+    exchange_rate_to_mxn = 1.0 if transaction_currency.value == "MXN" else usd_mxn_rate
     
     # Step 4: Create the transaction
     tx_in = InvestmentTransactionCreate(
@@ -283,13 +307,17 @@ async def create_transaction_with_asset(
         executed_at=transaction_in.executed_at,
         notes=transaction_in.notes,
     )
+
+    await _validate_transaction_against_holding(holding, tx_in)
     
     transaction = await crud.investment_transaction.create_with_owner(
-        db, obj_in=tx_in, owner_id=current_user.id
+        db, obj_in=tx_in, owner_id=current_user.id, commit=False
     )
     
     # Step 5: Update holding based on transaction type
-    await _update_holding_from_transaction(db, holding, transaction)
+    await _update_holding_from_transaction(db, holding, transaction, commit=False)
+    await db.commit()
+    await db.refresh(transaction)
     
     return TransactionWithAssetResponse(
         transaction=InvestmentTransaction(
@@ -319,6 +347,7 @@ async def _update_holding_from_transaction(
     db: AsyncSession,
     holding: models.Holding,
     transaction: models.InvestmentTransaction,
+    commit: bool = True,
 ) -> None:
     """Update holding metrics after a transaction."""
     if transaction.transaction_type == TransactionType.BUY:
@@ -331,6 +360,7 @@ async def _update_holding_from_transaction(
             holding=holding,
             new_quantity=new_quantity,
             new_total_invested=new_total_invested,
+            commit=commit,
         )
     
     elif transaction.transaction_type == TransactionType.SELL:
@@ -353,6 +383,7 @@ async def _update_holding_from_transaction(
             holding=holding,
             new_quantity=new_quantity,
             new_total_invested=new_total_invested,
+            commit=commit,
         )
     
     elif transaction.transaction_type == TransactionType.DIVIDEND:
@@ -370,6 +401,7 @@ async def _update_holding_from_transaction(
             holding=holding,
             new_quantity=new_quantity,
             new_total_invested=holding.total_invested,
+            commit=commit,
         )
     
     elif transaction.transaction_type in (TransactionType.TRANSFER_IN, TransactionType.TRANSFER_OUT):
@@ -395,7 +427,24 @@ async def _update_holding_from_transaction(
             holding=holding,
             new_quantity=new_quantity,
             new_total_invested=new_total_invested,
+            commit=commit,
         )
+
+
+async def _validate_transaction_against_holding(
+    holding: models.Holding,
+    transaction: InvestmentTransactionCreate,
+) -> None:
+    """Validate position-changing rules before any ledger row is written."""
+    if transaction.transaction_type in (TransactionType.SELL, TransactionType.TRANSFER_OUT):
+        if transaction.quantity > holding.quantity:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot remove {transaction.quantity} units. Only {holding.quantity} available.",
+            )
+
+    if transaction.transaction_type == TransactionType.SPLIT and transaction.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Split ratio must be positive")
 
 
 @router.get("/{transaction_id}", response_model=InvestmentTransactionWithAsset)
@@ -446,10 +495,7 @@ async def delete_transaction(
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Delete a transaction.
-    
-    Note: This will NOT reverse the effects on the holding.
-    To properly reverse a transaction, record an opposite transaction.
+    Investment transactions are immutable. Record a correcting transaction instead.
     """
     transaction = await crud.investment_transaction.get(db, id=transaction_id)
     if not transaction:
@@ -458,7 +504,10 @@ async def delete_transaction(
     if transaction.owner_id != current_user.id and not crud.user.is_superuser(current_user):
         raise HTTPException(status_code=403, detail="Not enough permissions")
     
-    await crud.investment_transaction.remove(db, id=transaction_id)
-    return InvestmentTransactionDeletionResponse(
-        message=f"Transaction {transaction_id} deleted"
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Investment transactions are immutable because deleting one would corrupt "
+            "the holding cost basis. Record a correcting transaction instead."
+        ),
     )

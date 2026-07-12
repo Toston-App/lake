@@ -18,6 +18,14 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         )
         return result.scalars().first()
 
+    async def get_by_coingecko_id(
+        self, db: AsyncSession, *, coingecko_id: str
+    ) -> Optional[Asset]:
+        result = await db.execute(
+            select(self.model).filter(Asset.coingecko_id == coingecko_id.lower())
+        )
+        return result.scalars().first()
+
     async def get_multi_filtered(
         self,
         db: AsyncSession,
@@ -133,4 +141,3 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
 
 
 asset = CRUDAsset(Asset)
-
