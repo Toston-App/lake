@@ -2,10 +2,9 @@
 Asset management endpoints for the Investment Dashboard.
 """
 from datetime import datetime, timezone
-from time import monotonic
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,19 +25,9 @@ from app.schemas.asset_price import CurrentPrice, PriceRefreshResponse
 from app.services.price_fetcher import PriceFetcher
 from app.services.yahoo_finance import YahooFinanceService
 from app.services.coingecko import CoinGeckoService
+from app.services.investment_rate_limiter import enforce_investment_rate_limit
 
 router = APIRouter()
-_external_call_times: dict[tuple[int, str], float] = {}
-
-
-def _enforce_external_call_interval(user_id: int, operation: str, seconds: float) -> None:
-    """Small per-process guard against repeatedly triggering costly upstream calls."""
-    key = (user_id, operation)
-    now = monotonic()
-    last_call = _external_call_times.get(key)
-    if last_call is not None and now - last_call < seconds:
-        raise HTTPException(status_code=429, detail="Too many external data requests")
-    _external_call_times[key] = now
 
 
 @router.get("", response_model=list[Asset])
@@ -118,6 +107,9 @@ async def search_assets(
     """
     Search assets by symbol or name.
     """
+    q = q.strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="Search query cannot be blank")
     assets = await crud.asset.search_assets(db, query=q, skip=skip, limit=limit)
     return assets
 
@@ -133,7 +125,10 @@ async def search_external_assets(
     Searches both USA (NYSE, NASDAQ) and Mexican (BMV) markets.
     Results include stocks and ETFs that can be added to the portfolio.
     """
-    _enforce_external_call_interval(current_user.id, "search-assets", 0.5)
+    q = q.strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="Search query cannot be blank")
+    enforce_investment_rate_limit(f"user:{current_user.id}:search-assets", 0.5)
     results = await YahooFinanceService.search_symbol(q)
 
     # Filter to only include stocks and ETFs from USA and Mexico exchanges
@@ -142,11 +137,23 @@ async def search_external_assets(
 
     filtered_results = []
     for item in results:
+        raw_symbol = item.get("symbol")
+        raw_name = item.get("name")
+        if (
+            not isinstance(raw_symbol, str)
+            or not raw_symbol
+            or len(raw_symbol) > 128
+            or (raw_name is not None and not isinstance(raw_name, str))
+            or (isinstance(raw_name, str) and len(raw_name) > 255)
+        ):
+            continue
         exchange = item.get("exchange", "")
         quote_type = item.get("type", "")
+        if not isinstance(exchange, str) or len(exchange) > 32:
+            continue
 
         # Include if it matches our criteria or is a Mexican stock
-        is_mexican = ".MX" in (item.get("symbol") or "")
+        is_mexican = raw_symbol.endswith(".MX")
         is_allowed_exchange = exchange in allowed_exchanges or is_mexican
         is_allowed_type = quote_type in allowed_types
 
@@ -169,13 +176,15 @@ async def search_external_assets(
             asset_type = AssetType.ETF if quote_type == "ETF" else AssetType.STOCK
 
             # Clean up the symbol (remove .MX suffix for internal storage)
-            symbol = item.get("symbol", "").replace(".MX", "")
+            symbol = raw_symbol.removesuffix(".MX")
+            if not symbol or len(symbol) > 32:
+                continue
 
             filtered_results.append(ExternalAssetSearchResult(
                 provider=ExternalAssetProvider.YAHOO,
-                external_id=item.get("symbol", ""),
+                external_id=raw_symbol,
                 symbol=symbol,
-                name=item.get("name") or symbol,
+                name=raw_name or symbol,
                 asset_type=asset_type,
                 market=market,
                 currency=currency,
@@ -197,20 +206,38 @@ async def search_crypto_assets(
     Returns cryptocurrency search results that can be added to the portfolio.
     Results include symbol, name, CoinGecko ID, and market cap rank.
     """
-    _enforce_external_call_interval(current_user.id, "search-crypto", 0.5)
+    q = q.strip()
+    if not q:
+        raise HTTPException(status_code=422, detail="Search query cannot be blank")
+    enforce_investment_rate_limit(f"user:{current_user.id}:search-crypto", 0.5)
     results = await CoinGeckoService.search_coins(q)
 
     crypto_results = []
     for coin in results:
+        coin_id = coin.get("coingecko_id")
+        symbol = coin.get("symbol")
+        name = coin.get("name")
+        if (
+            not isinstance(coin_id, str)
+            or not coin_id
+            or len(coin_id) > 128
+            or not isinstance(symbol, str)
+            or not symbol
+            or len(symbol) > 32
+            or not isinstance(name, str)
+            or not name
+            or len(name) > 255
+        ):
+            continue
         crypto_results.append(ExternalCryptoSearchResult(
             provider=ExternalAssetProvider.COINGECKO,
-            external_id=coin.get("coingecko_id", ""),
-            symbol=coin.get("symbol", ""),
-            name=coin.get("name", ""),
+            external_id=coin_id,
+            symbol=symbol,
+            name=name,
             asset_type=AssetType.CRYPTOCURRENCY,
             market=Market.CRYPTO,
             currency=Currency.USD,
-            coingecko_id=coin.get("coingecko_id", ""),
+            coingecko_id=coin_id,
             market_cap_rank=coin.get("market_cap_rank"),
         ))
 
@@ -221,7 +248,7 @@ async def search_crypto_assets(
 async def get_asset(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
-    asset_id: int,
+    asset_id: int = Path(..., ge=1),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -261,7 +288,7 @@ async def get_asset(
 async def update_asset(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
-    asset_id: int,
+    asset_id: int = Path(..., ge=1),
     asset_in: AssetUpdate,
     current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
@@ -285,7 +312,7 @@ async def update_asset(
 async def delete_asset(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
-    asset_id: int,
+    asset_id: int = Path(..., ge=1),
     current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
     """
@@ -303,7 +330,7 @@ async def delete_asset(
 async def get_asset_price(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
-    asset_id: int,
+    asset_id: int = Path(..., ge=1),
     current_user: models.User = Depends(deps.get_current_active_user),
     refresh: bool = Query(False, description="Force refresh price from API"),
 ) -> Any:
@@ -316,17 +343,45 @@ async def get_asset_price(
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     
-    if refresh:
-        _enforce_external_call_interval(current_user.id, f"refresh-asset-{asset_id}", 5.0)
+    can_refresh = crud.user.is_superuser(current_user) or await crud.holding.exists_by_owner_and_asset(
+        db, owner_id=current_user.id, asset_id=asset_id
+    )
+    max_age_minutes = 1 if refresh else 15
+    is_stale = await crud.asset_price.is_stale(
+        db, asset_id=asset_id, max_age_minutes=max_age_minutes
+    )
+
+    if refresh and not can_refresh:
+        raise HTTPException(
+            status_code=403,
+            detail="Only asset holders or superusers can refresh this price",
+        )
+
+    if refresh and not asset.is_active:
+        raise HTTPException(status_code=409, detail="Asset is inactive")
+
+    if can_refresh and (refresh or is_stale):
+        # Asset-global throttling prevents different users from repeatedly refreshing
+        # the same shared price and rewriting every holder's valuation.
+        enforce_investment_rate_limit(f"asset:{asset_id}:refresh", 5.0)
+
+    if refresh and is_stale:
         price_data = await PriceFetcher.fetch_and_store_price(db, asset)
     else:
-        price_data = await PriceFetcher.get_current_price(db, asset)
+        price_data = await PriceFetcher.get_current_price(
+            db,
+            asset,
+            max_age_minutes=max_age_minutes,
+            allow_fetch=can_refresh,
+        )
     
     if not price_data:
         raise HTTPException(
             status_code=404, 
             detail=f"Could not fetch price for {asset.symbol}. This asset may require manual price entry."
         )
+
+    latest_price = await crud.asset_price.get_latest_by_asset(db, asset_id=asset_id)
     
     return CurrentPrice(
         symbol=asset.symbol,
@@ -336,7 +391,9 @@ async def get_asset_price(
         price_mxn=price_data.price_mxn,
         change=price_data.change,
         change_percent=price_data.change_percent,
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=(
+            latest_price.fetched_at if latest_price else datetime.now(timezone.utc)
+        ),
     )
 
 
@@ -353,14 +410,19 @@ async def refresh_all_prices(
     By default, only refreshes assets the user has holdings in.
     Set only_my_holdings=false to refresh all active assets (admin).
     """
-    _enforce_external_call_interval(current_user.id, "refresh-prices", 30.0)
-    owner_id = current_user.id if only_my_holdings else None
-    
     if not only_my_holdings and not crud.user.is_superuser(current_user):
         raise HTTPException(
             status_code=403,
             detail="Only superusers can refresh all asset prices",
         )
+
+    limiter_key = (
+        "global:refresh-prices"
+        if not only_my_holdings
+        else f"user:{current_user.id}:refresh-prices"
+    )
+    enforce_investment_rate_limit(limiter_key, 30.0)
+    owner_id = current_user.id if only_my_holdings else None
     
     updated_count, failed_symbols = await PriceFetcher.refresh_all_prices(
         db, owner_id=owner_id

@@ -86,11 +86,15 @@ class YahooFinanceService:
         
         try:
             ticker = yf.Ticker(yahoo_ticker)
-            info = await asyncio.to_thread(lambda: ticker.info)
+            info = await asyncio.wait_for(
+                asyncio.to_thread(lambda: ticker.info), timeout=8.0
+            )
             
             if not info or "regularMarketPrice" not in info:
                 # Try getting from history as fallback
-                hist = await asyncio.to_thread(ticker.history, period="1d")
+                hist = await asyncio.wait_for(
+                    asyncio.to_thread(ticker.history, period="1d"), timeout=8.0
+                )
                 if hist.empty:
                     logger.warning(f"No data available for {yahoo_ticker}")
                     return None

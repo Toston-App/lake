@@ -23,7 +23,13 @@ class InvestmentTransactionBase(BaseModel):
     notes: Optional[str] = None
     executed_at: Optional[datetime] = None
 
-    @validator("quantity", "price_per_unit", "fees", pre=True, always=True)
+    @validator("holding_id", "account_id", pre=True)
+    def identifiers_must_be_positive(cls, v):
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
+            raise ValueError("Identifiers must be positive integers")
+        return v
+
+    @validator("quantity", "price_per_unit", "fees", always=True)
     def round_floats(cls, v):
         if v is not None:
             if not math.isfinite(v):
@@ -31,28 +37,28 @@ class InvestmentTransactionBase(BaseModel):
             return round(v, 6)
         return v
 
-    @validator("quantity", pre=True, always=True)
+    @validator("quantity", always=True)
     def quantity_must_be_positive(cls, v):
-        if v is not None and v <= 0:
-            raise ValueError("Quantity must be positive")
+        if v is not None and (v <= 0 or v > 1e15):
+            raise ValueError("Quantity must be between 0 and 1e15")
         return v
 
-    @validator("price_per_unit", pre=True, always=True)
+    @validator("price_per_unit", always=True)
     def price_must_be_positive(cls, v):
-        if v is not None and v < 0:
-            raise ValueError("Price per unit must be non-negative")
+        if v is not None and (v < 0 or v > 1e15):
+            raise ValueError("Price per unit must be between 0 and 1e15")
         return v
 
     @validator("fees")
     def fees_must_be_non_negative(cls, v):
-        if v is not None and v < 0:
-            raise ValueError("Fees must be non-negative")
+        if v is not None and (v < 0 or v > 1e15):
+            raise ValueError("Fees must be between 0 and 1e15")
         return v
 
     @validator("exchange_rate_to_usd", "exchange_rate_to_mxn")
     def exchange_rate_must_be_positive_and_finite(cls, v):
-        if v is not None and (not math.isfinite(v) or v <= 0):
-            raise ValueError("Exchange rate must be finite and positive")
+        if v is not None and (not math.isfinite(v) or v <= 0 or v > 1e6):
+            raise ValueError("Exchange rate must be finite and between 0 and 1e6")
         return v
 
     @validator("notes")
@@ -77,8 +83,20 @@ class InvestmentTransactionCreate(InvestmentTransactionBase):
     @validator("executed_at", pre=True)
     def parse_executed_at(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        if isinstance(v, datetime) and (v.tzinfo is None or v.utcoffset() is None):
+            raise ValueError("executed_at must include a timezone")
         return v
+
+    @root_validator(skip_on_failure=True)
+    def total_amount_must_be_safe(cls, values):
+        quantity = values.get("quantity")
+        price = values.get("price_per_unit")
+        if quantity is not None and price is not None:
+            total = quantity * price
+            if not math.isfinite(total) or total > 1e30:
+                raise ValueError("Transaction total is too large")
+        return values
 
 
 # Properties to receive on Transaction update
@@ -149,6 +167,12 @@ class TransactionWithAssetCreate(BaseModel):
     exchange_rate_to_usd: Optional[float] = None
     exchange_rate_to_mxn: Optional[float] = None
 
+    @validator("asset_id", "account_id", pre=True)
+    def identifiers_must_be_positive(cls, v):
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
+            raise ValueError("Identifiers must be positive integers")
+        return v
+
     @validator("external_id", pre=True, always=True)
     def normalize_external_id(cls, v):
         if isinstance(v, str):
@@ -165,6 +189,10 @@ class TransactionWithAssetCreate(BaseModel):
         external_id = values.get("external_id")
 
         if asset_id is not None:
+            if provider is not None or external_id:
+                raise ValueError(
+                    "Provide either asset_id or provider+external_id, not both"
+                )
             return values
 
         if provider is not None and external_id:
@@ -172,7 +200,7 @@ class TransactionWithAssetCreate(BaseModel):
 
         raise ValueError("Provide asset_id or provider+external_id")
 
-    @validator("quantity", "price_per_unit", "fees", pre=True, always=True)
+    @validator("quantity", "price_per_unit", "fees", always=True)
     def round_floats(cls, v):
         if v is not None:
             if not math.isfinite(v):
@@ -180,28 +208,28 @@ class TransactionWithAssetCreate(BaseModel):
             return round(v, 6)
         return v
 
-    @validator("quantity", pre=True, always=True)
+    @validator("quantity", always=True)
     def quantity_must_be_positive(cls, v):
-        if v is not None and v <= 0:
-            raise ValueError("Quantity must be positive")
+        if v is not None and (v <= 0 or v > 1e15):
+            raise ValueError("Quantity must be between 0 and 1e15")
         return v
 
-    @validator("price_per_unit", pre=True, always=True)
+    @validator("price_per_unit", always=True)
     def price_must_be_positive(cls, v):
-        if v is not None and v < 0:
-            raise ValueError("Price per unit must be non-negative")
+        if v is not None and (v < 0 or v > 1e15):
+            raise ValueError("Price per unit must be between 0 and 1e15")
         return v
 
     @validator("fees")
     def fees_must_be_non_negative(cls, v):
-        if v is not None and v < 0:
-            raise ValueError("Fees must be non-negative")
+        if v is not None and (v < 0 or v > 1e15):
+            raise ValueError("Fees must be between 0 and 1e15")
         return v
 
     @validator("exchange_rate_to_usd", "exchange_rate_to_mxn")
     def exchange_rate_must_be_positive_and_finite(cls, v):
-        if v is not None and (not math.isfinite(v) or v <= 0):
-            raise ValueError("Exchange rate must be finite and positive")
+        if v is not None and (not math.isfinite(v) or v <= 0 or v > 1e6):
+            raise ValueError("Exchange rate must be finite and between 0 and 1e6")
         return v
 
     @validator("notes")
@@ -213,8 +241,20 @@ class TransactionWithAssetCreate(BaseModel):
     @validator("executed_at", pre=True)
     def parse_executed_at(cls, v):
         if isinstance(v, str):
-            return datetime.fromisoformat(v.replace("Z", "+00:00"))
+            v = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        if isinstance(v, datetime) and (v.tzinfo is None or v.utcoffset() is None):
+            raise ValueError("executed_at must include a timezone")
         return v
+
+    @root_validator(skip_on_failure=True)
+    def total_amount_must_be_safe(cls, values):
+        quantity = values.get("quantity")
+        price = values.get("price_per_unit")
+        if quantity is not None and price is not None:
+            total = quantity * price
+            if not math.isfinite(total) or total > 1e30:
+                raise ValueError("Transaction total is too large")
+        return values
 
     class Config:
         extra = "forbid"

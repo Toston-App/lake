@@ -105,12 +105,21 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         limit: int = 20,
     ) -> list[Asset]:
         """Search assets by symbol or name."""
-        search_term = f"%{query.upper()}%"
+        escaped_query = (
+            query.upper()
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        search_term = f"%{escaped_query}%"
         result = await db.execute(
             select(self.model)
             .filter(
                 Asset.is_active == True,
-                (Asset.symbol.ilike(search_term) | Asset.name.ilike(search_term))
+                (
+                    Asset.symbol.ilike(search_term, escape="\\")
+                    | Asset.name.ilike(search_term, escape="\\")
+                )
             )
             .order_by(Asset.symbol)
             .offset(skip)
@@ -118,14 +127,19 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         )
         return result.scalars().all()
 
-    async def create(self, db: AsyncSession, *, obj_in: AssetCreate) -> Asset:
+    async def create(
+        self, db: AsyncSession, *, obj_in: AssetCreate, commit: bool = True
+    ) -> Asset:
         """Create a new asset with symbol validation."""
         obj_in_data = jsonable_encoder(obj_in)
         # Ensure symbol is uppercase
         obj_in_data["symbol"] = obj_in_data["symbol"].upper()
         db_obj = self.model(**obj_in_data)
         db.add(db_obj)
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         await db.refresh(db_obj)
         return db_obj
 

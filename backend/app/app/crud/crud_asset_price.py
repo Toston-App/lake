@@ -10,6 +10,22 @@ from app.schemas.asset_price import AssetPriceCreate, AssetPriceUpdate
 
 
 class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
+    async def create_with_commit(
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: AssetPriceCreate,
+        commit: bool = True,
+    ) -> AssetPrice:
+        db_obj = self.model(**obj_in.dict())
+        db.add(db_obj)
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
+        await db.refresh(db_obj)
+        return db_obj
+
     async def get_latest_by_asset(
         self, db: AsyncSession, *, asset_id: int
     ) -> Optional[AssetPrice]:
@@ -81,4 +97,3 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
 
 
 asset_price = CRUDAssetPrice(AssetPrice)
-

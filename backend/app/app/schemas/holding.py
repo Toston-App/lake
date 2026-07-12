@@ -17,7 +17,7 @@ class HoldingBase(BaseModel):
     cost_currency: Optional[Currency] = Currency.USD
     total_invested: Optional[float] = 0.0
 
-    @validator("quantity", "avg_cost_basis", "total_invested", pre=True, always=True)
+    @validator("quantity", "avg_cost_basis", "total_invested", always=True)
     def round_floats(cls, v):
         if v is not None:
             if not math.isfinite(v):
@@ -27,8 +27,8 @@ class HoldingBase(BaseModel):
 
     @validator("quantity", "avg_cost_basis")
     def values_must_be_non_negative(cls, v):
-        if v is not None and v < 0:
-            raise ValueError("Value must be non-negative")
+        if v is not None and (v < 0 or v > 1e15):
+            raise ValueError("Value must be between 0 and 1e15")
         return v
 
     class Config:
@@ -45,6 +45,12 @@ class HoldingCreate(HoldingBase):
     avg_cost_basis: float
     cost_currency: Currency = Currency.USD
 
+    @validator("asset_id", "account_id", pre=True)
+    def identifiers_must_be_positive(cls, v):
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
+            raise ValueError("Identifiers must be positive integers")
+        return v
+
     @validator("external_id", pre=True, always=True)
     def normalize_external_id(cls, v):
         if isinstance(v, str):
@@ -57,7 +63,13 @@ class HoldingCreate(HoldingBase):
     @root_validator(pre=True)
     def validate_asset_source(cls, values):
         asset_id = values.get("asset_id")
+        provider = values.get("provider")
+        external_id = values.get("external_id")
         if asset_id is not None:
+            if provider is not None or external_id not in (None, ""):
+                raise ValueError(
+                    "Provide either asset_id or provider+external_id, not both"
+                )
             return values
 
         required_external_fields = ("provider", "external_id")
@@ -70,6 +82,16 @@ class HoldingCreate(HoldingBase):
 
         return values
 
+    @root_validator(skip_on_failure=True)
+    def total_invested_must_be_safe(cls, values):
+        quantity = values.get("quantity")
+        cost = values.get("avg_cost_basis")
+        if quantity is not None and cost is not None:
+            total = quantity * cost
+            if not math.isfinite(total) or total > 1e30:
+                raise ValueError("Initial invested total is too large")
+        return values
+
 
 # Properties to receive on Holding update
 class HoldingUpdate(BaseModel):
@@ -79,10 +101,10 @@ class HoldingUpdate(BaseModel):
     avg_cost_basis: Optional[float] = None
     cost_currency: Optional[Currency] = None
 
-    @validator("quantity", "avg_cost_basis", pre=True)
+    @validator("quantity", "avg_cost_basis")
     def validate_financial_value(cls, v):
-        if v is not None and (not math.isfinite(v) or v < 0):
-            raise ValueError("Value must be finite and non-negative")
+        if v is not None and (not math.isfinite(v) or v < 0 or v > 1e15):
+            raise ValueError("Value must be finite and between 0 and 1e15")
         return round(v, 6) if v is not None else v
 
     class Config:

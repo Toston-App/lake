@@ -26,6 +26,21 @@ class Holding(Base):
         CheckConstraint("quantity >= 0", name="ck_holding_quantity_nonnegative"),
         CheckConstraint("avg_cost_basis >= 0", name="ck_holding_cost_nonnegative"),
         CheckConstraint("total_invested >= 0", name="ck_holding_total_nonnegative"),
+        CheckConstraint("quantity <= 1e15", name="ck_holding_quantity_max"),
+        CheckConstraint("avg_cost_basis <= 1e15", name="ck_holding_cost_max"),
+        CheckConstraint("total_invested <= 1e30", name="ck_holding_total_max"),
+        CheckConstraint(
+            "current_value >= 0 AND current_value <= 1e30",
+            name="ck_holding_current_value_range",
+        ),
+        CheckConstraint(
+            "current_value_usd >= 0 AND current_value_usd <= 1e30",
+            name="ck_holding_current_value_usd_range",
+        ),
+        CheckConstraint(
+            "current_value_mxn >= 0 AND current_value_mxn <= 1e30",
+            name="ck_holding_current_value_mxn_range",
+        ),
     )
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
     

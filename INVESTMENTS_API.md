@@ -108,6 +108,10 @@ const headers = {
   Requests containing server-owned fields are rejected.
 - Position-changing transactions are serialized and committed atomically. Sells and
   transfers that exceed the available quantity are rejected without creating a ledger row.
+- Shared asset creation is performed only after account ownership succeeds and is committed
+  atomically with the resulting holding and transaction.
+- Forced price refresh requires an existing holding in the asset or superuser privileges;
+  cached global prices remain readable by authenticated users.
 - Investment transactions are immutable. Record a correcting transaction instead of
   deleting historical activity.
 - Collection limits are capped at 100, external search terms at 100 characters, and
@@ -630,6 +634,10 @@ await apiCall('/assets/1', { method: 'DELETE' });
 Fetch the current market price for an asset.
 
 **Endpoint:** `GET /assets/{asset_id}/price`
+
+Reading cached prices requires authentication. Setting `refresh=true` requires the caller
+to hold the asset or be a superuser. A price fetched within the previous minute is reused
+instead of contacting the upstream provider again.
 
 **Query Parameters:**
 

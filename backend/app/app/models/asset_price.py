@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer
+from sqlalchemy import CheckConstraint, Column, DateTime, Enum, Float, ForeignKey, Integer
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -19,6 +19,12 @@ class AssetPrice(Base):
     for easy portfolio valuation in either currency.
     """
     __tablename__ = "assetprice"
+    __table_args__ = (
+        CheckConstraint("price > 0 AND price <= 1e15", name="ck_asset_price_native_range"),
+        CheckConstraint("price_usd > 0 AND price_usd <= 1e15", name="ck_asset_price_usd_range"),
+        CheckConstraint("price_mxn > 0 AND price_mxn <= 1e15", name="ck_asset_price_mxn_range"),
+        CheckConstraint("volume IS NULL OR volume >= 0", name="ck_asset_price_volume_nonnegative"),
+    )
     
     id: int = Column(Integer, primary_key=True, index=True, nullable=False, unique=True)
     
@@ -52,4 +58,3 @@ class AssetPrice(Base):
     
     # Relationships
     asset: "Asset" = relationship("Asset", back_populates="prices")
-

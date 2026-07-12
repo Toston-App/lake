@@ -16,6 +16,17 @@ from app.schemas.investment_transaction import (
 class CRUDInvestmentTransaction(
     CRUDBase[InvestmentTransaction, InvestmentTransactionCreate, InvestmentTransactionUpdate]
 ):
+    async def get_by_id_and_owner(
+        self, db: AsyncSession, *, transaction_id: int, owner_id: int
+    ) -> Optional[InvestmentTransaction]:
+        result = await db.execute(
+            select(self.model).filter(
+                InvestmentTransaction.id == transaction_id,
+                InvestmentTransaction.owner_id == owner_id,
+            )
+        )
+        return result.scalars().first()
+
     async def create_with_owner(
         self,
         db: AsyncSession,

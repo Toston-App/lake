@@ -1,4 +1,5 @@
-from typing import Optional
+import math
+from typing import Optional, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -12,6 +13,19 @@ from app.schemas.holding import HoldingCreate, HoldingUpdate
 
 
 class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
+    async def remove_with_commit(
+        self, db: AsyncSession, *, id: int, commit: bool = True
+    ) -> Holding:
+        obj = await db.get(self.model, id)
+        if obj is None:
+            raise ValueError("Holding not found")
+        await db.delete(obj)
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
+        return cast(Holding, obj)
+
     async def create_with_owner(
         self,
         db: AsyncSession,
@@ -63,28 +77,63 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         )
         return result.scalars().first()
 
+    async def get_by_id_and_owner(
+        self, db: AsyncSession, *, holding_id: int, owner_id: int
+    ) -> Optional[Holding]:
+        result = await db.execute(
+            select(self.model)
+            .options(selectinload(Holding.asset))
+            .filter(Holding.id == holding_id, Holding.owner_id == owner_id)
+        )
+        return result.scalars().first()
+
+    async def exists_by_owner_and_asset(
+        self, db: AsyncSession, *, owner_id: int, asset_id: int
+    ) -> bool:
+        result = await db.execute(
+            select(Holding.id)
+            .filter(Holding.owner_id == owner_id, Holding.asset_id == asset_id)
+            .limit(1)
+        )
+        return result.scalar() is not None
+
     async def get_by_owner(
-        self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
+        self,
+        db: AsyncSession,
+        *,
+        owner_id: int,
+        skip: int = 0,
+        limit: Optional[int] = 100,
     ) -> list[Holding]:
         """Get all holdings for a user."""
-        result = await db.execute(
+        query = (
             select(self.model)
             .options(selectinload(Holding.asset))
             .filter(Holding.owner_id == owner_id)
             .offset(skip)
-            .limit(limit)
         )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await db.execute(query)
         return result.scalars().all()
 
     async def get_by_account_and_asset(
-        self, db: AsyncSession, *, account_id: int, asset_id: int
+        self,
+        db: AsyncSession,
+        *,
+        account_id: int,
+        asset_id: int,
+        owner_id: Optional[int] = None,
     ) -> Optional[Holding]:
         """Get a specific holding by account and asset."""
-        result = await db.execute(
+        query = (
             select(self.model)
             .options(selectinload(Holding.asset))
             .filter(Holding.account_id == account_id, Holding.asset_id == asset_id)
         )
+        if owner_id is not None:
+            query = query.filter(Holding.owner_id == owner_id)
+        result = await db.execute(query)
         return result.scalars().first()
 
     async def get_by_account(
@@ -92,17 +141,19 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         db: AsyncSession,
         *,
         account_id: int,
+        owner_id: Optional[int] = None,
         skip: int = 0,
         limit: int = 100,
     ) -> list[Holding]:
         """Get all holdings for a specific account."""
-        result = await db.execute(
+        query = (
             select(self.model)
             .options(selectinload(Holding.asset))
             .filter(Holding.account_id == account_id)
-            .offset(skip)
-            .limit(limit)
         )
+        if owner_id is not None:
+            query = query.filter(Holding.owner_id == owner_id)
+        result = await db.execute(query.offset(skip).limit(limit))
         return result.scalars().all()
 
     async def get_by_asset_class(
@@ -186,6 +237,7 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         current_price: float,
         price_usd: float,
         price_mxn: float,
+        commit: bool = True,
     ) -> Holding:
         """Update holding current value based on latest price."""
         # Calculate current values
@@ -207,7 +259,10 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         holding.unrealized_gain_loss_pct = unrealized_gain_loss_pct
         
         db.add(holding)
-        await db.commit()
+        if commit:
+            await db.commit()
+        else:
+            await db.flush()
         await db.refresh(holding)
         return holding
 
@@ -221,6 +276,15 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         commit: bool = True,
     ) -> Holding:
         """Recalculate cost basis after a transaction."""
+        if (
+            not math.isfinite(new_quantity)
+            or not math.isfinite(new_total_invested)
+            or new_quantity < 0
+            or new_quantity > 1e15
+            or new_total_invested < 0
+            or new_total_invested > 1e30
+        ):
+            raise ValueError("Unsafe holding value")
         old_quantity = holding.quantity
         if new_quantity > 0:
             holding.quantity = new_quantity

@@ -36,7 +36,9 @@ async def get_portfolio_summary(
     """
     Get overall portfolio summary with total value, gain/loss, and basic metrics.
     """
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     # Get exchange rate for currency conversion
     usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
@@ -98,7 +100,9 @@ async def get_allocation_by_class(
     - Crypto (cryptocurrencies)
     - Funds (mutual funds, index funds)
     """
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     # Group holdings by asset class
     class_totals: dict[AssetClass, dict] = defaultdict(
@@ -161,7 +165,9 @@ async def get_allocation_by_currency(
     
     Shows how much of the portfolio is exposed to USD vs MXN denominated assets.
     """
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     # Group by currency
     currency_totals: dict[Currency, dict] = defaultdict(
@@ -223,7 +229,9 @@ async def get_allocation_by_market(
     - CRYPTO (Cryptocurrency exchanges)
     - OTC (Over-the-counter: bonds, CETES, mutual funds)
     """
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     market_totals: dict[Market, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
@@ -274,7 +282,9 @@ async def get_allocation_by_type(
     - Cryptocurrencies
     - Mutual Funds, Index Funds
     """
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     type_totals: dict[AssetType, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
@@ -324,7 +334,9 @@ async def get_allocation_by_country(
     
     Shows geographic diversification (US, MX, etc.)
     """
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     country_totals: dict[str, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
@@ -373,10 +385,14 @@ async def get_allocation_by_account(
     Each account's total holdings value is shown separately.
     """
     # Get all holdings
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     # Get all accounts for name resolution
-    accounts = await crud.account.get_multi_by_owner(db, owner_id=current_user.id)
+    accounts = await crud.account.get_multi_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     account_map = {a.id: a for a in accounts}
     
     # Group holdings by account
@@ -436,7 +452,9 @@ async def get_top_holdings(
     """
     Get top holdings by value.
     """
-    holdings = await crud.holding.get_by_owner(db, owner_id=current_user.id)
+    holdings = await crud.holding.get_by_owner(
+        db, owner_id=current_user.id, limit=None
+    )
     
     # Calculate total portfolio value
     total_value_usd = sum(h.current_value_usd for h in holdings)
@@ -468,4 +486,3 @@ async def get_top_holdings(
         total_shown=len(result),
         total_holdings=len(holdings),
     )
-

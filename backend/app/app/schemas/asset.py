@@ -24,7 +24,7 @@ class AssetBase(BaseModel):
     @field_validator("symbol", mode="before")
     @classmethod
     def uppercase_symbol(cls, v):
-        if v is not None:
+        if isinstance(v, str):
             return v.upper().strip()
         return v
 
@@ -101,24 +101,24 @@ class ExternalAssetProvider(str, Enum):
 
 class ExternalAssetSearchResult(BaseModel):
     provider: ExternalAssetProvider = ExternalAssetProvider.YAHOO
-    external_id: str
-    symbol: str
-    name: str
+    external_id: str = Field(max_length=128)
+    symbol: str = Field(max_length=32)
+    name: str = Field(max_length=255)
     asset_type: AssetType
     market: Market
     currency: Currency
-    country: str
-    exchange: Optional[str] = None
+    country: str = Field(max_length=32)
+    exchange: Optional[str] = Field(default=None, max_length=32)
 
 
 # External crypto search result (from CoinGecko)
 class ExternalCryptoSearchResult(BaseModel):
     provider: ExternalAssetProvider = ExternalAssetProvider.COINGECKO
-    external_id: str
-    symbol: str
-    name: str
+    external_id: str = Field(max_length=128)
+    symbol: str = Field(max_length=32)
+    name: str = Field(max_length=255)
     asset_type: AssetType
     market: Market
     currency: Currency
-    coingecko_id: str
+    coingecko_id: str = Field(max_length=128)
     market_cap_rank: Optional[int] = None

@@ -36,12 +36,17 @@ class InvestmentTransaction(Base):
         CheckConstraint("quantity > 0", name="ck_investment_tx_quantity_positive"),
         CheckConstraint("price_per_unit >= 0", name="ck_investment_tx_price_nonnegative"),
         CheckConstraint("fees >= 0", name="ck_investment_tx_fees_nonnegative"),
+        CheckConstraint("quantity <= 1e15", name="ck_investment_tx_quantity_max"),
+        CheckConstraint("price_per_unit <= 1e15", name="ck_investment_tx_price_max"),
+        CheckConstraint("fees <= 1e15", name="ck_investment_tx_fees_max"),
+        CheckConstraint("total_amount <= 1e30", name="ck_investment_tx_total_max"),
+        CheckConstraint("total_amount >= 0", name="ck_investment_tx_total_nonnegative"),
         CheckConstraint(
-            "exchange_rate_to_usd IS NULL OR exchange_rate_to_usd > 0",
+            "exchange_rate_to_usd IS NULL OR (exchange_rate_to_usd > 0 AND exchange_rate_to_usd <= 1e6)",
             name="ck_investment_tx_usd_rate_positive",
         ),
         CheckConstraint(
-            "exchange_rate_to_mxn IS NULL OR exchange_rate_to_mxn > 0",
+            "exchange_rate_to_mxn IS NULL OR (exchange_rate_to_mxn > 0 AND exchange_rate_to_mxn <= 1e6)",
             name="ck_investment_tx_mxn_rate_positive",
         ),
     )

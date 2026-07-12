@@ -43,17 +43,26 @@ class PriceFetcher:
         Returns:
             Created AssetPrice or None if fetch fails
         """
-        price_data = await cls.fetch_price(asset)
+        try:
+            price_data = await cls.fetch_price(asset)
+        except (ArithmeticError, ValueError) as exc:
+            logger.error("Invalid upstream price for %s: %s", asset.symbol, exc)
+            return None
         if not price_data:
             return None
         
-        # Store in database
-        asset_price = await crud.asset_price.create(db, obj_in=price_data)
-        
-        # Update holding values for this asset
-        await cls._update_holdings_for_asset(db, asset, price_data)
-        
-        return asset_price
+        try:
+            # Price history and all affected valuations are one atomic mutation.
+            asset_price = await crud.asset_price.create_with_commit(
+                db, obj_in=price_data, commit=False
+            )
+            await cls._update_holdings_for_asset(db, asset, price_data)
+            await db.commit()
+            await db.refresh(asset_price)
+            return asset_price
+        except Exception:
+            await db.rollback()
+            raise
     
     @classmethod
     async def fetch_price(cls, asset: Asset) -> Optional[AssetPriceCreate]:
@@ -153,7 +162,9 @@ class PriceFetcher:
         # Get assets to refresh
         if owner_id:
             # Get unique assets from user's holdings
-            holdings = await crud.holding.get_by_owner(db, owner_id=owner_id)
+            holdings = await crud.holding.get_by_owner(
+                db, owner_id=owner_id, limit=None
+            )
             asset_ids = set(h.asset_id for h in holdings)
             assets = [await crud.asset.get(db, id=aid) for aid in asset_ids]
             assets = [a for a in assets if a and a.is_active]
@@ -166,6 +177,12 @@ class PriceFetcher:
         
         for asset in assets:
             try:
+                # A database-backed freshness check also protects deployments with
+                # multiple workers from repeatedly fetching the same shared asset.
+                if not await crud.asset_price.is_stale(
+                    db, asset_id=asset.id, max_age_minutes=1
+                ):
+                    continue
                 result = await cls.fetch_and_store_price(db, asset)
                 if result:
                     updated_count += 1
@@ -190,7 +207,9 @@ class PriceFetcher:
         from app.models.holding import Holding
         
         result = await db.execute(
-            select(Holding).filter(Holding.asset_id == asset.id)
+            select(Holding)
+            .filter(Holding.asset_id == asset.id)
+            .with_for_update()
         )
         holdings = result.scalars().all()
         
@@ -201,12 +220,15 @@ class PriceFetcher:
                 current_price=price_data.price,
                 price_usd=price_data.price_usd,
                 price_mxn=price_data.price_mxn,
+                commit=False,
             )
         
         # Recalculate total_investments for all affected accounts
         account_ids = set(h.account_id for h in holdings)
         for account_id in account_ids:
-            await crud.account.recalculate_total_investments(db, account_id=account_id)
+            await crud.account.recalculate_total_investments(
+                db, account_id=account_id, commit=False
+            )
     
     @classmethod
     async def get_current_price(
@@ -214,6 +236,7 @@ class PriceFetcher:
         db: AsyncSession,
         asset: Asset,
         max_age_minutes: int = 15,
+        allow_fetch: bool = True,
     ) -> Optional[AssetPriceCreate]:
         """
         Get current price for an asset, fetching if stale.
@@ -226,25 +249,27 @@ class PriceFetcher:
         Returns:
             Current price data or None
         """
-        # Check if we have a recent price
-        if not await crud.asset_price.is_stale(db, asset_id=asset.id, max_age_minutes=max_age_minutes):
-            latest = await crud.asset_price.get_latest_by_asset(db, asset_id=asset.id)
-            if latest:
-                # Return as schema
-                return AssetPriceCreate(
-                    asset_id=latest.asset_id,
-                    price=latest.price,
-                    currency=latest.currency,
-                    price_usd=latest.price_usd,
-                    price_mxn=latest.price_mxn,
-                    open_price=latest.open_price,
-                    high_price=latest.high_price,
-                    low_price=latest.low_price,
-                    previous_close=latest.previous_close,
-                    volume=latest.volume,
-                    change=latest.change,
-                    change_percent=latest.change_percent,
-                )
+        latest = await crud.asset_price.get_latest_by_asset(db, asset_id=asset.id)
+        is_stale = await crud.asset_price.is_stale(
+            db, asset_id=asset.id, max_age_minutes=max_age_minutes
+        )
+        if latest and (not is_stale or not allow_fetch):
+            return AssetPriceCreate(
+                asset_id=latest.asset_id,
+                price=latest.price,
+                currency=latest.currency,
+                price_usd=latest.price_usd,
+                price_mxn=latest.price_mxn,
+                open_price=latest.open_price,
+                high_price=latest.high_price,
+                low_price=latest.low_price,
+                previous_close=latest.previous_close,
+                volume=latest.volume,
+                change=latest.change,
+                change_percent=latest.change_percent,
+            )
         
         # Fetch fresh price
-        return await cls.fetch_and_store_price(db, asset)
+        if allow_fetch:
+            return await cls.fetch_and_store_price(db, asset)
+        return None

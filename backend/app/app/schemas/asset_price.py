@@ -1,7 +1,8 @@
 from datetime import datetime
+import math
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, root_validator, validator
 
 from app.models.asset import Currency
 
@@ -21,6 +22,37 @@ class AssetPriceBase(BaseModel):
     change: Optional[float] = None
     change_percent: Optional[float] = None
 
+    @validator(
+        "price",
+        "price_usd",
+        "price_mxn",
+        "open_price",
+        "high_price",
+        "low_price",
+        "previous_close",
+    )
+    def validate_price(cls, value):
+        if value is not None and (
+            not math.isfinite(value) or value < 0 or value > 1e15
+        ):
+            raise ValueError("Price must be finite and between 0 and 1e15")
+        return value
+
+    @validator("volume")
+    def validate_volume(cls, value):
+        if value is not None and (not math.isfinite(value) or value < 0):
+            raise ValueError("Volume must be finite and non-negative")
+        return value
+
+    @validator("change", "change_percent")
+    def validate_change(cls, value):
+        if value is not None and not math.isfinite(value):
+            raise ValueError("Change values must be finite")
+        return value
+
+    class Config:
+        extra = "forbid"
+
 
 # Properties to receive on AssetPrice creation
 class AssetPriceCreate(AssetPriceBase):
@@ -29,6 +61,13 @@ class AssetPriceCreate(AssetPriceBase):
     currency: Currency
     price_usd: float
     price_mxn: float
+
+    @root_validator(skip_on_failure=True)
+    def required_prices_must_be_positive(cls, values):
+        for field in ("price", "price_usd", "price_mxn"):
+            if values.get(field) is not None and values[field] <= 0:
+                raise ValueError(f"{field} must be positive")
+        return values
 
 
 # Properties to receive on AssetPrice update
@@ -77,4 +116,3 @@ class PriceRefreshResponse(BaseModel):
     message: str
     updated_count: int
     failed_symbols: list[str] = []
-

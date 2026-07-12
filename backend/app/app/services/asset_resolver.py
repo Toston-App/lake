@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 from typing import Optional
 
 from fastapi import HTTPException
@@ -51,6 +52,11 @@ class AssetResolverService:
             raise HTTPException(status_code=422, detail="Unsupported external asset")
         clean_symbol = symbol.replace(".MX", "")
 
+        if not re.fullmatch(r"[A-Z0-9.^=-]{1,32}", clean_symbol):
+            raise HTTPException(status_code=502, detail="Invalid symbol from asset provider")
+        if not name or len(name) > 255:
+            raise HTTPException(status_code=502, detail="Invalid name from asset provider")
+
         if is_mexican:
             market = Market.BMV
             currency = Currency.MXN
@@ -95,8 +101,10 @@ class AssetResolverService:
         symbol = (exact_match.get("symbol") or "").upper().strip()
         name = (exact_match.get("name") or symbol).strip()
 
-        if not symbol:
+        if not re.fullmatch(r"[A-Z0-9._-]{1,32}", symbol):
             raise HTTPException(status_code=422, detail="Invalid CoinGecko response")
+        if not name or len(name) > 255 or not re.fullmatch(r"[a-z0-9-]{1,128}", cg_id):
+            raise HTTPException(status_code=502, detail="Invalid CoinGecko response")
 
         return ResolvedAsset(
             symbol=symbol,

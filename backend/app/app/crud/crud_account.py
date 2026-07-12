@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
@@ -34,15 +36,22 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
         return db_obj
 
     async def get_multi_by_owner(
-        self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
+        self,
+        db: AsyncSession,
+        *,
+        owner_id: int,
+        skip: int = 0,
+        limit: Optional[int] = 100,
     ) -> list[Account]:
-        result = await db.execute(
+        query = (
             select(self.model)
             .filter(Account.owner_id == owner_id)
             .order_by(Account.name)
             .offset(skip)
-            .limit(limit)
         )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await db.execute(query)
         return result.scalars().all()
 
     async def get_by_id(self, db: AsyncSession, *, owner_id: int, id: int) -> Account:

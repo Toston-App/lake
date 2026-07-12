@@ -1,9 +1,10 @@
 """
 Investment transaction endpoints for the Investment Dashboard.
 """
+import math
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -23,6 +24,7 @@ from app.schemas.asset import AssetCreate
 from app.schemas.holding import HoldingCreate
 from app.services.asset_resolver import AssetResolverService
 from app.services.currency_converter import CurrencyConverter
+from app.services.investment_rate_limiter import enforce_investment_rate_limit
 
 router = APIRouter()
 
@@ -33,8 +35,8 @@ async def list_transactions(
     current_user: models.User = Depends(deps.get_current_active_user),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=100),
-    holding_id: Optional[int] = Query(None, description="Filter by holding"),
-    account_id: Optional[int] = Query(None, description="Filter by account"),
+    holding_id: Optional[int] = Query(None, ge=1, description="Filter by holding"),
+    account_id: Optional[int] = Query(None, ge=1, description="Filter by account"),
     transaction_type: Optional[TransactionType] = Query(None, description="Filter by type"),
 ) -> Any:
     """
@@ -45,7 +47,7 @@ async def list_transactions(
     - account_id: Show transactions for a specific account
     - transaction_type: BUY, SELL, DIVIDEND, SPLIT, TRANSFER_IN, TRANSFER_OUT
     """
-    if holding_id:
+    if holding_id is not None:
         transactions = await crud.investment_transaction.get_by_holding(
             db,
             holding_id=holding_id,
@@ -53,7 +55,7 @@ async def list_transactions(
             skip=skip,
             limit=limit,
         )
-    elif account_id:
+    elif account_id is not None:
         transactions = await crud.investment_transaction.get_by_account(
             db,
             account_id=account_id,
@@ -124,11 +126,24 @@ async def create_transaction(
     And update the account's total_investments.
     """
     # Verify account belongs to user.
-    account = await crud.account.get(db, id=transaction_in.account_id)
+    account = await crud.account.get_by_id(
+        db, id=transaction_in.account_id, owner_id=current_user.id
+    )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    if account.owner_id != current_user.id:
+
+    candidate_holding = await crud.holding.get_by_id_and_owner(
+        db,
+        holding_id=transaction_in.holding_id,
+        owner_id=current_user.id,
+    )
+    if not candidate_holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    if candidate_holding.account_id != account.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    # Do not hold a database row lock while waiting for an upstream FX service.
+    usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
     
     # Lock the owner-scoped holding so concurrent sells cannot overspend it.
     holding = await crud.holding.get_for_update_by_owner(
@@ -143,7 +158,6 @@ async def create_transaction(
     await _validate_transaction_against_holding(holding, transaction_in)
 
     # Currency and exchange rates are server-owned financial fields.
-    usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
     transaction_currency = holding.asset.currency
     transaction_in = transaction_in.copy(update={
         "currency": transaction_currency,
@@ -182,6 +196,13 @@ async def create_transaction_with_asset(
     This is ideal for quickly adding new investments without first
     manually creating assets and holdings.
     """
+    # Validate ownership before resolving or creating any shared asset state.
+    account = await crud.account.get_by_id(
+        db, id=transaction_in.account_id, owner_id=current_user.id
+    )
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
     # Step 1: Get or create the asset
     asset_created = False
     if transaction_in.asset_id is not None:
@@ -190,6 +211,9 @@ async def create_transaction_with_asset(
             raise HTTPException(status_code=404, detail="Asset not found")
     else:
         if transaction_in.provider is not None and transaction_in.external_id:
+            enforce_investment_rate_limit(
+                f"user:{current_user.id}:resolve-asset", 1.0
+            )
             if transaction_in.provider.value == "yahoo":
                 resolved_asset = await AssetResolverService.resolve_from_yahoo(transaction_in.external_id)
             else:
@@ -237,7 +261,7 @@ async def create_transaction_with_asset(
                 coingecko_id=resolved_asset.coingecko_id,
             )
             try:
-                asset = await crud.asset.create(db, obj_in=asset_in)
+                asset = await crud.asset.create(db, obj_in=asset_in, commit=False)
             except IntegrityError:
                 await db.rollback()
                 raise HTTPException(
@@ -245,18 +269,17 @@ async def create_transaction_with_asset(
                     detail="Asset was concurrently created; retry the request",
                 )
             asset_created = True
-    
-    # Step 2: Verify account belongs to user
-    account = await crud.account.get(db, id=transaction_in.account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    if account.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    # Resolve FX before locking an existing holding.
+    usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
     
     # Step 3: Get or create the holding for this account
     holding_created = False
     existing_holding = await crud.holding.get_by_account_and_asset(
-        db, account_id=account.id, asset_id=asset.id
+        db,
+        account_id=account.id,
+        asset_id=asset.id,
+        owner_id=current_user.id,
     )
     
     if existing_holding:
@@ -266,6 +289,16 @@ async def create_transaction_with_asset(
         if not holding:
             raise HTTPException(status_code=404, detail="Holding not found")
     else:
+        if not asset.is_active:
+            raise HTTPException(status_code=409, detail="Asset is inactive")
+        if transaction_in.transaction_type not in (
+            TransactionType.BUY,
+            TransactionType.TRANSFER_IN,
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="A new holding must start with a buy or transfer_in transaction",
+            )
         # Create new holding with zero initial values
         holding_in = HoldingCreate(
             asset_id=asset.id,
@@ -287,7 +320,6 @@ async def create_transaction_with_asset(
         holding_created = True
     
     # Step 3: Get exchange rates
-    usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
     transaction_currency = asset.currency
     
     exchange_rate_to_usd = 1.0 if transaction_currency.value == "USD" else 1.0 / usd_mxn_rate
@@ -354,6 +386,7 @@ async def _update_holding_from_transaction(
         # Increase quantity and recalculate average cost
         new_total_invested = holding.total_invested + transaction.total_amount
         new_quantity = holding.quantity + transaction.quantity
+        _validate_holding_state(new_quantity, new_total_invested)
         
         await crud.holding.recalculate_cost_basis(
             db,
@@ -377,6 +410,7 @@ async def _update_holding_from_transaction(
         
         new_quantity = holding.quantity - transaction.quantity
         new_total_invested = holding.total_invested - amount_to_remove
+        _validate_holding_state(new_quantity, new_total_invested)
         
         await crud.holding.recalculate_cost_basis(
             db,
@@ -395,6 +429,7 @@ async def _update_holding_from_transaction(
         # Stock split: multiply quantity, divide cost basis
         # transaction.quantity represents the split ratio (e.g., 4 for 4:1 split)
         new_quantity = holding.quantity * transaction.quantity
+        _validate_holding_state(new_quantity, holding.total_invested)
         # Total invested stays the same, but average cost decreases
         await crud.holding.recalculate_cost_basis(
             db,
@@ -421,6 +456,8 @@ async def _update_holding_from_transaction(
         else:
             proportion = transaction.quantity / holding.quantity
             new_total_invested = holding.total_invested * (1 - proportion)
+
+        _validate_holding_state(new_quantity, new_total_invested)
         
         await crud.holding.recalculate_cost_basis(
             db,
@@ -428,6 +465,21 @@ async def _update_holding_from_transaction(
             new_quantity=new_quantity,
             new_total_invested=new_total_invested,
             commit=commit,
+        )
+
+
+def _validate_holding_state(quantity: float, total_invested: float) -> None:
+    if (
+        not math.isfinite(quantity)
+        or not math.isfinite(total_invested)
+        or quantity < 0
+        or quantity > 1e15
+        or total_invested < 0
+        or total_invested > 1e30
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Transaction would create an unsafe holding value",
         )
 
 
@@ -451,18 +503,20 @@ async def _validate_transaction_against_holding(
 async def get_transaction(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
-    transaction_id: int,
+    transaction_id: int = Path(..., ge=1),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get a specific transaction by ID.
     """
-    transaction = await crud.investment_transaction.get(db, id=transaction_id)
+    if crud.user.is_superuser(current_user):
+        transaction = await crud.investment_transaction.get(db, id=transaction_id)
+    else:
+        transaction = await crud.investment_transaction.get_by_id_and_owner(
+            db, transaction_id=transaction_id, owner_id=current_user.id
+        )
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    if transaction.owner_id != current_user.id and not crud.user.is_superuser(current_user):
-        raise HTTPException(status_code=403, detail="Not enough permissions")
     
     holding = await crud.holding.get(db, id=transaction.holding_id)
     asset = await crud.asset.get(db, id=holding.asset_id) if holding else None
@@ -491,18 +545,20 @@ async def get_transaction(
 async def delete_transaction(
     *,
     db: AsyncSession = Depends(deps.async_get_db),
-    transaction_id: int,
+    transaction_id: int = Path(..., ge=1),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Investment transactions are immutable. Record a correcting transaction instead.
     """
-    transaction = await crud.investment_transaction.get(db, id=transaction_id)
+    if crud.user.is_superuser(current_user):
+        transaction = await crud.investment_transaction.get(db, id=transaction_id)
+    else:
+        transaction = await crud.investment_transaction.get_by_id_and_owner(
+            db, transaction_id=transaction_id, owner_id=current_user.id
+        )
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    if transaction.owner_id != current_user.id and not crud.user.is_superuser(current_user):
-        raise HTTPException(status_code=403, detail="Not enough permissions")
     
     raise HTTPException(
         status_code=409,

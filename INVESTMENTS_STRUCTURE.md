@@ -262,10 +262,12 @@ The application normally infers `asset_class` from `asset_type`.
 | `GET` | `/assets/{asset_id}` | Active user | Read an asset and its latest price |
 | `PUT` | `/assets/{asset_id}` | Superuser | Modify a global asset |
 | `DELETE` | `/assets/{asset_id}` | Superuser | Soft-deactivate a global asset |
-| `GET` | `/assets/{asset_id}/price` | Active user | Read or refresh the current price |
+| `GET` | `/assets/{asset_id}/price` | Active user | Read price; holders or superusers may refresh |
 | `POST` | `/assets/refresh-prices` | Active user | Refresh assets in the user's holdings |
 
 Setting `only_my_holdings=false` on bulk price refresh is superuser-only.
+Single-asset refresh is restricted to users who hold the asset and superusers. Other
+authenticated users can read cached global prices without causing upstream work.
 
 ### Holdings
 
@@ -393,6 +395,8 @@ rates are derived by the server even if a client attempts to supply alternatives
 - Holding quantities and cost values must be finite and non-negative.
 - Prices and fees cannot be negative.
 - Exchange rates must be finite and greater than zero.
+- Quantities, prices, and fees are capped at `1e15`; derived totals are capped at `1e30`
+  to prevent floating-point overflow and non-serializable responses.
 - Database check constraints provide a second validation layer.
 
 ### Identity and uniqueness
@@ -416,7 +420,9 @@ rates are derived by the server even if a client attempts to supply alternatives
 - External search input is limited to 100 characters; external asset IDs are limited to
   128 characters.
 - Top holdings is limited to 50 results.
-- External searches and refreshes have short per-user throttling intervals.
+- External searches and asset resolution have short per-user throttling intervals.
+- Single-asset refreshes are throttled by shared asset ID, preventing different users
+  from bypassing the same refresh guard.
 - Upstream HTTP clients use bounded timeouts and do not follow redirects.
 - Blocking Yahoo Finance operations are moved off the async event loop.
 
@@ -522,24 +528,21 @@ suite at an isolated test database, never a development or production database.
 1. Financial values use floating-point columns and Python `float`. Exact financial
    accounting would be safer with fixed-precision `NUMERIC`/`Decimal` values and explicit
    rounding rules.
-2. Portfolio aggregation loads holdings with the CRUD default limit of 100. Users with
-   more than 100 holdings may receive incomplete summary and allocation results until
-   aggregation queries are made unbounded or database-driven.
-3. `Account.total_investments` sums `Holding.current_value`, which is the native valuation
+2. `Account.total_investments` sums `Holding.current_value`, which is the native valuation
    field. Accounts containing mixed native currencies need an explicit base-currency
    policy to make this cached total meaningful.
-4. Direct holding edits recalculate the position but do not create ledger entries. Use
+3. Direct holding edits recalculate the position but do not create ledger entries. Use
    transaction routes when auditable history matters.
-5. Transaction fees are stored but are not currently included in cost basis.
-6. Transaction history cannot be edited or deleted. A dedicated correction/reversal
+4. Transaction fees are stored but are not currently included in cost basis.
+5. Transaction history cannot be edited or deleted. A dedicated correction/reversal
    workflow could provide stronger semantics than manually choosing an opposite action.
-7. Price history is stored, but there is no implemented portfolio-performance-over-time
+6. Price history is stored, but there is no implemented portfolio-performance-over-time
    route despite performance schema classes existing in the codebase.
-8. External throttling and exchange-rate caches are local to each process. Distributed
+7. External throttling and exchange-rate caches are local to each process. Distributed
    deployments should use a shared rate limiter and cache.
-9. Asset symbols are globally unique across all markets. Instruments with the same symbol
+8. Asset symbols are globally unique across all markets. Instruments with the same symbol
    on different markets cannot currently coexist unless the identity model is expanded.
-10. The exchange-rate fallback favors availability over strict valuation accuracy.
+9. The exchange-rate fallback favors availability over strict valuation accuracy.
 
 ## Extension Guidelines
 

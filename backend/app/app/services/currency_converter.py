@@ -3,6 +3,7 @@ Currency conversion service using Yahoo Finance for FX rates.
 """
 import logging
 import asyncio
+import math
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -34,28 +35,40 @@ class CurrencyConverter:
         # Check cache
         if cache_key in cls._rate_cache:
             rate, cached_at = cls._rate_cache[cache_key]
-            if datetime.utcnow() - cached_at < cls._cache_duration:
+            if (
+                math.isfinite(rate)
+                and 0 < rate <= 1e6
+                and datetime.utcnow() - cached_at < cls._cache_duration
+            ):
                 return rate
+            cls._rate_cache.pop(cache_key, None)
         
         try:
             ticker = yf.Ticker(cls.USD_MXN_TICKER)
             # Get the most recent price
-            hist = await asyncio.to_thread(ticker.history, period="1d")
+            hist = await asyncio.wait_for(
+                asyncio.to_thread(ticker.history, period="1d"), timeout=8.0
+            )
             if not hist.empty:
                 rate = float(hist["Close"].iloc[-1])
+                if not math.isfinite(rate) or rate <= 0 or rate > 1e6:
+                    raise ValueError("Yahoo returned an invalid USD/MXN exchange rate")
                 cls._rate_cache[cache_key] = (rate, datetime.utcnow())
                 logger.info(f"Fetched USD/MXN rate: {rate}")
                 return rate
             else:
                 logger.warning("No data returned for USD/MXN rate")
-                # Return a fallback rate if API fails
-                return 17.0  # Approximate rate as fallback
+                fallback_rate = 17.0
+                cls._rate_cache[cache_key] = (fallback_rate, datetime.utcnow())
+                return fallback_rate
         except Exception as e:
             logger.error(f"Error fetching USD/MXN rate: {e}")
             # Return cached rate if available, otherwise fallback
             if cache_key in cls._rate_cache:
                 return cls._rate_cache[cache_key][0]
-            return 17.0  # Approximate rate as fallback
+            fallback_rate = 17.0
+            cls._rate_cache[cache_key] = (fallback_rate, datetime.utcnow())
+            return fallback_rate
     
     @classmethod
     async def get_mxn_to_usd_rate(cls) -> float:
