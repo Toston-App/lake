@@ -105,6 +105,45 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER_PASSWORD: str
     USERS_OPEN_REGISTRATION: bool = False
 
+    # Investment feature access
+    INVESTMENTS_ENABLED: bool = False
+    INVESTMENTS_ALLOWED_USER_IDS: str = ""
+    INVESTMENTS_ALLOWED_USER_UUIDS: str = ""
+
+    @field_validator("INVESTMENTS_ALLOWED_USER_IDS")
+    def validate_investment_user_ids(cls, v: str) -> str:
+        for raw_id in v.split(","):
+            raw_id = raw_id.strip()
+            if not raw_id:
+                continue
+            try:
+                user_id = int(raw_id)
+            except ValueError as exc:
+                raise ValueError(
+                    "INVESTMENTS_ALLOWED_USER_IDS must contain comma-separated integers"
+                ) from exc
+            if user_id <= 0:
+                raise ValueError(
+                    "INVESTMENTS_ALLOWED_USER_IDS must contain positive integers"
+                )
+        return v
+
+    @property
+    def investments_allowed_user_ids(self) -> set[int]:
+        return {
+            int(raw_id.strip())
+            for raw_id in self.INVESTMENTS_ALLOWED_USER_IDS.split(",")
+            if raw_id.strip()
+        }
+
+    @property
+    def investments_allowed_user_uuids(self) -> set[str]:
+        return {
+            raw_uuid.strip()
+            for raw_uuid in self.INVESTMENTS_ALLOWED_USER_UUIDS.split(",")
+            if raw_uuid.strip()
+        }
+
     SEED_DATABASE: bool = False
 
     SERVER_NAME: str = "localhost"

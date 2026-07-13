@@ -98,6 +98,18 @@ const headers = {
 
 ### Investment Data Security Rules
 
+All investment endpoints are protected by an environment-controlled feature gate:
+
+```env
+INVESTMENTS_ENABLED=true
+INVESTMENTS_ALLOWED_USER_IDS=1,42
+INVESTMENTS_ALLOWED_USER_UUIDS=user_abc,user_xyz
+```
+
+The feature is disabled by default. When enabled, active superusers and active users whose
+database ID or UUID appears in the corresponding comma-separated allowlist can access
+`/api/v1/investments/**`. Other authenticated users receive `403 Forbidden`.
+
 - Asset records are global and shared by all portfolios. Only superusers may create,
   update, or deactivate them directly. Regular users can still add assets through the
   holdings and `transactions/with-asset` flows, which verify the identity with the

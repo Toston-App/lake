@@ -4,11 +4,13 @@ from unittest.mock import AsyncMock
 from types import SimpleNamespace
 
 import pytest
+import pytest_asyncio
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.schemas.user import UserCreate
 from app.schemas.asset_price import AssetPriceCreate
 from app.models.asset import Currency
@@ -21,6 +23,75 @@ from app.tests.utils.utils import random_email, random_lower_string
 
 pytestmark = pytest.mark.asyncio
 BASE_URL = f"{settings.API_V1_STR}/investments"
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def enable_investments_for_existing_tests(
+    monkeypatch: pytest.MonkeyPatch,
+    async_get_db: AsyncSession,
+    normal_user_token_headers: dict[str, str],
+) -> None:
+    user = await crud.user.get_by_email(async_get_db, email=settings.EMAIL_TEST_USER)
+    assert user is not None
+    monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
+    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", str(user.id))
+    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "")
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/assets", "/holdings", "/transactions", "/portfolio/summary"],
+)
+async def test_investment_router_denies_every_subrouter_when_disabled(
+    client: AsyncClient,
+    normal_user_token_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", False)
+    response = await client.get(f"{BASE_URL}{path}", headers=normal_user_token_headers)
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Investments feature access is not enabled for this user"
+    )
+
+
+async def test_investment_access_supports_id_uuid_and_superuser_allowance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api import deps
+
+    normal_user = SimpleNamespace(
+        id=7, uuid=" user_uuid ", is_active=True, is_superuser=False
+    )
+    superuser = SimpleNamespace(id=99, uuid=None, is_active=True, is_superuser=True)
+
+    monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", False)
+    with pytest.raises(HTTPException) as exc_info:
+        deps.require_investments_access(superuser)
+    assert exc_info.value.status_code == 403
+
+    monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
+    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", " 3, 7, 7 ")
+    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "other,user_uuid")
+    assert deps.require_investments_access(normal_user) is normal_user
+
+    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", "")
+    # UUID matching is exact; use the stored value without normalization.
+    normal_user.uuid = "user_uuid"
+    assert deps.require_investments_access(normal_user) is normal_user
+    assert deps.require_investments_access(superuser) is superuser
+
+    normal_user.uuid = "USER_UUID"
+    with pytest.raises(HTTPException) as exc_info:
+        deps.require_investments_access(normal_user)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.parametrize("value", ["abc", "1,two", "0", "-4"])
+async def test_invalid_investment_id_allowlist_is_rejected(value: str) -> None:
+    with pytest.raises(ValueError):
+        Settings.validate_investment_user_ids(value)
 
 
 @pytest.mark.parametrize(
@@ -208,6 +279,11 @@ async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(
     assert second_user.id is not None
     second_headers = await user_authentication_headers(
         client=client, email=email, password=password
+    )
+    monkeypatch.setattr(
+        settings,
+        "INVESTMENTS_ALLOWED_USER_IDS",
+        f"{settings.INVESTMENTS_ALLOWED_USER_IDS},{second_user.id}",
     )
 
     first_account_response = await client.post(

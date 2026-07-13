@@ -91,6 +91,24 @@ def get_current_active_user(
     return current_user
 
 
+def require_investments_access(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    allowed_by_id = current_user.id in settings.investments_allowed_user_ids
+    allowed_by_uuid = (
+        current_user.uuid is not None
+        and current_user.uuid in settings.investments_allowed_user_uuids
+    )
+    if not settings.INVESTMENTS_ENABLED or not (
+        crud.user.is_superuser(current_user) or allowed_by_id or allowed_by_uuid
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Investments feature access is not enabled for this user",
+        )
+    return current_user
+
+
 def get_current_active_superuser(
     current_user: models.User = Depends(get_current_user),
 ) -> models.User:
