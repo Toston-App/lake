@@ -1,6 +1,7 @@
 import logging
 import secrets
 import random
+import os
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -11,10 +12,16 @@ from fastapi_pagination import add_pagination as PaginationProvider
 
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
+from app.api.api_v3.api import api_router as api_router_v3
 from app.core.config import settings
+from app.utilities.axiom import initialize_axiom, get_axiom_client
+from app.utilities.wide_events import WideEventsMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+DOCS_PATHS = {"/docs", "/redoc"}
+TRUSTED_TYPES_DIRECTIVE = "require-trusted-types-for 'script'"
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -25,42 +32,87 @@ app = FastAPI(
 )
 PaginationProvider(app)
 
-# @app.middleware("http")
-# async def add_csp_header(request: Request, call_next):
-#     response = await call_next(request)
-    
-#     csp_directives = [
-#         "default-src 'self'",
-#         "img-src 'self' data:",
-#         "connect-src 'self'",
-#         "script-src 'self'",
-#         "style-src 'self' 'unsafe-inline'",
-#         "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
-#         "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-#         "base-uri 'self'",
-#         "font-src 'self' https: data:",
-#         "frame-ancestors 'self'",
-#         "object-src 'none'",
-#         "script-src-attr 'none'",
-#         "require-trusted-types-for 'script'"
-#     ]
-    
-#     csp_policy = "; ".join(csp_directives)
-#     response.headers["Content-Security-Policy"] = csp_policy
-    
-#     return response
+
+# Initialize Axiom logging
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    logger.info("🚀 Starting application...")
+
+    # Initialize Axiom logging with wide events
+    if settings.AXIOM_API_TOKEN:
+        logger.info(f"📊 Initializing Axiom logging to dataset: {settings.AXIOM_DATASET}")
+        axiom_client = initialize_axiom(
+            dataset=settings.AXIOM_DATASET,
+            api_token=settings.AXIOM_API_TOKEN,
+            batch_size=100,
+            flush_interval=5.0,
+            enabled=settings.AXIOM_ENABLED,
+        )
+        await axiom_client.start()
+        logger.info("✅ Axiom logging initialized successfully")
+    else:
+        logger.warning("⚠️  Axiom API token not configured - logging will be to stdout only")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("👋 Shutting down application...")
+
+    # Flush any remaining logs to Axiom
+    axiom_client = get_axiom_client()
+    if axiom_client:
+        logger.info("📤 Flushing remaining logs to Axiom...")
+        await axiom_client.stop()
+        logger.info("✅ Axiom client closed")
+
+
+# Add Wide Events Middleware FIRST (so it wraps all other middleware)
+app.add_middleware(
+    WideEventsMiddleware,
+    service_name=settings.PROJECT_NAME,
+    service_version="0.9.0",
+    deployment_id=settings.DEPLOYMENT_ID or os.getenv("RAILWAY_DEPLOYMENT_ID"),  # Auto-detect Railway
+    region=settings.REGION or os.getenv("RAILWAY_REGION"),
+    environment=os.getenv("ENVIRONMENT", "production"),
+    sample_rate=settings.AXIOM_SAMPLE_RATE,
+    slow_request_threshold_ms=settings.AXIOM_SLOW_REQUEST_THRESHOLD_MS,
+)
+
+@app.middleware("http")
+async def add_csp_header(request: Request, call_next):
+    response = await call_next(request)
+
+    csp_directives = [
+        "default-src 'self'",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "script-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js",
+        "style-src-elem 'self' 'unsafe-inline' https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
+        "base-uri 'self'",
+        "font-src 'self' https: data:",
+        "frame-ancestors 'self'",
+        "object-src 'none'",
+        "script-src-attr 'none'",
+    ]
+    if request.url.path not in DOCS_PATHS:
+        csp_directives.append(TRUSTED_TYPES_DIRECTIVE)
+
+    csp_policy = "; ".join(csp_directives)
+    response.headers["Content-Security-Policy"] = csp_policy
+
+    return response
 
 security = HTTPBasic()
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logger.info(f"Request: {request.method} {request.url} from {request.headers.get('host')}")
-    response = await call_next(request)
-    logger.info(f"Response status: {response.status_code}")
-    return response
+# Note: Basic request logging is now handled by WideEventsMiddleware
+# The old log_requests middleware has been replaced with comprehensive wide events
 
 
-# Set all CORS enabled origins
+# CORS configuration.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -75,10 +127,6 @@ app.add_middleware(
         "https://dashboard.cleverbill.ing",
         "http://dashboard.cleverbill.ing",
         "https://dashboard.cleverbill.ing/api/v1",
-        r"https:\/\/*\.cleverbill\.ing",
-        r"https:\/\/*\.cleverbill\.ing/",
-        r"http:\/\/*\.cleverbill\.ing",
-        r"http:\/\/*\.cleverbill\.ing/",
         "http://localhost:4321",
         "http://localhost",
         "http://localhost:4200",
@@ -128,6 +176,7 @@ async def openapi(username: str = Depends(get_current_username)):
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
+app.include_router(api_router_v3, prefix=settings.API_V3_STR)
 
 @app.get("/api/v1/utils/health-check/")
 def health_check():

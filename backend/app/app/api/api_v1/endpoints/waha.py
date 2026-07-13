@@ -25,6 +25,7 @@ from app.utilities.waha import (
     typing,
 )
 from app.utilities.whatsapp import format_currency
+from app.utilities.wide_events import enrich_event, mark_for_logging, timed
 
 router = APIRouter()
 whatsapp_parser = WhatsAppParser(settings.OPENAI_API_KEY)
@@ -32,21 +33,40 @@ logger = setup_logger("waha_requests", "waha_requests.log")
 
 @router.post("/webhook")
 async def handle_whatsapp_message(request: Request, db: AsyncSession = Depends(deps.async_get_db)):
-    print("🚀 ~ x-webhook-request-id:", request.headers.get('x-webhook-request-id'))
+    mark_for_logging(request)
+
     data = await request.json()
-    print("🚀 ~ data:", data)
+
+    enrich_event(
+        request,
+        webhook={
+            "type": "waha",
+            "event": data.get("event"),
+            "request_id": request.headers.get('x-webhook-request-id'),
+        },
+    )
 
     if data["event"] != "message" and data["event"] != "poll.vote":
+        enrich_event(request, webhook={"outcome": "skipped", "reason": "unknown_event"})
         return f"Unknown event {data['event']}"
 
     payload = data["payload"]
-    # Number in format 1231231231@c.us or @g.us for group
     chat_id = payload["from"] if data["event"] == "message" else payload["vote"]["from"]
     phone_number = hash_sha256(f"+{chat_id.split('@')[0]}")
     user = await crud.user.get_by_phone(db, phone=phone_number)
 
+    enrich_event(
+        request,
+        whatsapp={
+            "phone_hash": phone_number,
+            "has_user": user is not None,
+            "event_type": data["event"],
+        },
+    )
+
     if user is None:
         logger.warning(f"User not found for phone: {phone_number}")
+        enrich_event(request, user_lookup={"found": False, "action": "sent_registration_instructions"})
         await send_seen(chat_id=chat_id, message_id=message_id, participant=None)
         await typing(chat_id=chat_id, seconds=random.random() * 3)
         await send_message(
@@ -68,11 +88,25 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
         )
         return {"status": "ok"}
 
+    enrich_event(
+        request,
+        user={"id": user.id, "email": user.email, "is_superuser": user.is_superuser},
+    )
+
     if data.get("event") == "message":
         text = payload.get("body")
 
         # Message ID - false_11111111111@c.us_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         message_id = payload['id']
+
+        enrich_event(
+            request,
+            whatsapp={
+                "message_id": message_id,
+                "message_type": "text" if text else "non_text",
+                "message_length": len(text) if text else 0,
+            },
+        )
 
         if not text:
             # We can't process non-text messages yet
@@ -101,16 +135,33 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
 
         # Parse message to extract transaction data
         try:
-            transaction_data = await whatsapp_parser.parse_message(
-                message=text,
-                categories=simplify_categories(categories),
-                places=simplify_places(places),
-                accounts=simplify_accounts(accounts),
+            with timed() as t_parse:
+                transaction_data = await whatsapp_parser.parse_message(
+                    message=text,
+                    categories=simplify_categories(categories),
+                    places=simplify_places(places),
+                    accounts=simplify_accounts(accounts),
+                )
+
+            enrich_event(
+                request,
+                ai={
+                    "provider": "openai",
+                    "parse_duration_ms": t_parse.ms,
+                    "message_length": len(text),
+                    "context_items": {
+                        "categories": len(categories),
+                        "places": len(places),
+                        "accounts": len(accounts),
+                    },
+                },
             )
 
             # Check if parsing returned empty data
+
             if not transaction_data or "amount" not in transaction_data or transaction_data["amount"] <= 0:
                 logger.warning(f"Failed to parse message: {text}")
+                enrich_event(request, parsing={"success": False, "reason": "invalid_amount"})
                 await stop_typing(chat_id=chat_id)
                 await react_to_message(message_id=message_id, emoji="😵‍💫")
                 await send_message(
@@ -126,15 +177,37 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
     """)
                 return {"status": "ok"}
 
+            enrich_event(
+                request,
+                parsing={
+                    "success": True,
+                    "transaction_type": transaction_data.get("type"),
+                    "amount": transaction_data.get("amount"),
+                    "has_category": transaction_data.get("category_id") is not None,
+                    "has_place": transaction_data.get("place_id") is not None,
+                    "has_account": transaction_data.get("account_id") is not None,
+                },
+            )
+
             # Save message id to react later
             transaction_data["message_to_react"] = message_id
             # Cache transaction data for later confirmation
             transaction_id = transaction_data["id"]
 
-            store_success = await store_transaction(
-                transaction_id=transaction_id,
-                transaction_data=transaction_data,
-                user_id=user.id
+            with timed() as t_cache:
+                store_success = await store_transaction(
+                    transaction_id=transaction_id,
+                    transaction_data=transaction_data,
+                    user_id=user.id
+                )
+
+            enrich_event(
+                request,
+                cache={
+                    "operation": "store_transaction",
+                    "success": store_success,
+                    "duration_ms": t_cache.ms,
+                },
             )
 
             if not store_success:
@@ -221,6 +294,8 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
 
         vote = vote[0]
 
+        enrich_event(request, whatsapp={"vote_action": vote[:15]})
+
         await start_typing(chat_id=chat_id)
 
         if vote.startswith("✅ Confirmar"):
@@ -256,8 +331,15 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                         made_from="WhatsApp"
                     )
 
-                    await crud.expense.create_with_owner(
-                        db=db, obj_in=expense_in, owner_id=user_id
+                    with timed() as t_db:
+                        result = await crud.expense.create_with_owner(
+                            db=db, obj_in=expense_in, owner_id=user_id
+                        )
+
+                    enrich_event(
+                        request,
+                        database={"operation": "create_expense", "duration_ms": t_db.ms, "success": result is not None},
+                        transaction={"type": "expense", "id": result.id if result else None, "amount": transaction_data["amount"], "source": "waha"},
                     )
 
                     await stop_typing(chat_id=chat_id)
@@ -279,8 +361,15 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                         made_from="WhatsApp"
                     )
 
-                    await crud.income.create_with_owner(
-                        db=db, obj_in=income_in, owner_id=user_id
+                    with timed() as t_db:
+                        result = await crud.income.create_with_owner(
+                            db=db, obj_in=income_in, owner_id=user_id
+                        )
+
+                    enrich_event(
+                        request,
+                        database={"operation": "create_income", "duration_ms": t_db.ms, "success": result is not None},
+                        transaction={"type": "income", "id": result.id if result else None, "amount": transaction_data["amount"], "source": "waha"},
                     )
 
                     await stop_typing(chat_id=chat_id)
@@ -300,8 +389,15 @@ Ten en cuenta que si no eres de México, es probable que no podamos procesar tu 
                         description=transaction_data.get("description") or "Added via WhatsApp",
                     )
 
-                    transfer = await crud.transfer.create_with_owner(
-                        db=db, obj_in=transfer_in, owner_id=user_id
+                    with timed() as t_db:
+                        transfer = await crud.transfer.create_with_owner(
+                            db=db, obj_in=transfer_in, owner_id=user_id
+                        )
+
+                    enrich_event(
+                        request,
+                        database={"operation": "create_transfer", "duration_ms": t_db.ms, "success": transfer is not None},
+                        transaction={"type": "transfer", "id": transfer.id if transfer else None, "amount": transaction_data["amount"], "source": "waha"},
                     )
 
                     if transfer is None:

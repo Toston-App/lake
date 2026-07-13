@@ -49,6 +49,8 @@ class UserInDBBase(UserBase):
 class User(UserInDBBase):
     pass
 
+class UserGetMe(BaseModel):
+    country: Optional[str] = None
 
 # Additional properties stored in DB
 class UserInDB(UserInDBBase):

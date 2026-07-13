@@ -1,8 +1,7 @@
-import secrets
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from pydantic import AnyHttpUrl, EmailStr, HttpUrl, PostgresDsn
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 from pydantic import field_validator
 
 
@@ -13,8 +12,50 @@ class AsyncPostgresDsn(PostgresDsn):
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     API_V2_STR: str = "/api/v2"
-    # used for jwt
-    SECRET_KEY: str = secrets.token_urlsafe(32)
+    API_V3_STR: str = "/api/v3"
+
+    # HS256 signing secret for our own (email/password) access tokens
+    # and password-reset tokens. MUST be set; no insecure default.
+    LOCAL_JWT_SECRET: str
+
+    # Clerk JWT verification (RS256). The public key is base64-encoded PEM,
+    # CLERK_ISSUER is the full issuer URL (e.g. https://your-app.clerk.accounts.dev),
+    # and CLERK_AUTHORIZED_PARTIES is the allow-list of acceptable `azp` values
+    # (your frontend origins). Accepts either a JSON array or a comma-separated
+    # string from the environment.
+    CLERK_JWT_PUBLIC_KEY: str
+    CLERK_ISSUER: str
+    # NoDecode tells pydantic-settings not to JSON-parse this field's raw env
+    # value, so our `mode="before"` validator below sees the original string
+    # and can accept either a JSON array or a comma-separated list.
+    CLERK_AUTHORIZED_PARTIES: Annotated[list[str], NoDecode] = []
+
+    @field_validator("CLERK_AUTHORIZED_PARTIES", mode="before")
+    def split_authorized_parties(cls, v: Any) -> Any:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            if v.startswith("["):
+                import json
+                return json.loads(v)
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+    @field_validator("LOCAL_JWT_SECRET", "CLERK_JWT_PUBLIC_KEY", "CLERK_ISSUER")
+    def _require_non_empty(cls, v: str, info) -> str:
+        # Fail-fast on empty strings. Without this, pydantic happily loads
+        # `FOO=` from .env as the empty string and the auth code blows up
+        # later in obscure ways (broken JWT signature checks, invalid
+        # base64, etc.).
+        if not v or not v.strip():
+            raise ValueError(
+                f"{info.field_name} must be set to a non-empty value."
+            )
+        return v
+
     # used for encryption with Fernet
     ENCRYPTION_KEY: str
 
@@ -180,6 +221,16 @@ class Settings(BaseSettings):
     REDIS_URL: str
     REDIS_TOKEN: str
 
+    # Axiom Logging Settings
+    AXIOM_DATASET: str = "cleverbill"
+    AXIOM_API_TOKEN: Optional[str] = None
+    AXIOM_ENABLED: bool = False
+    AXIOM_SAMPLE_RATE: float = 0.05  # Sample 5% of successful requests
+    AXIOM_SLOW_REQUEST_THRESHOLD_MS: int = 2000  # Consider requests >2s as slow
+    
+    DEPLOYMENT_ID: Optional[str] = None  # For tracking deployments
+    REGION: Optional[str] = None  # e.g., "us-east-1", "eu-west-1"
+
     @field_validator("WHATSAPP_ENABLED", mode='before')
     def get_whatsapp_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
         return bool(
@@ -187,6 +238,10 @@ class Settings(BaseSettings):
             and info.data.get("WHATSAPP_PHONE_NUMBER_ID")
             and bool(info.data.get("WHATSAPP_VERIFY_TOKEN"))
         )
+    
+    @field_validator("AXIOM_ENABLED", mode='before')
+    def get_axiom_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
+        return bool(info.data.get("AXIOM_API_TOKEN"))
 
     class Config:
         case_sensitive = True
