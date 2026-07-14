@@ -208,6 +208,79 @@ response = await httpx.post(
 
 ---
 
+## Investments Observability
+
+Every request under `/api/v1/investments` enriches the normal request-wide event with
+an `investment` object. The event follows the request through access checks, database
+queries and writes, external providers, exchange-rate lookup, position validation,
+locking, valuation updates, aggregation, and commit.
+
+Successful requests use the configured `AXIOM_SAMPLE_RATE`. HTTP `4xx` and `5xx`
+responses are always retained. A bulk price refresh that returns HTTP `200` but contains
+one or more failed assets is recorded as `partial_failure` and is also always retained.
+
+### Investment Event Reference
+
+| Field | Meaning |
+|---|---|
+| `investment.operation` | Stable FastAPI operation name, such as `create_transaction_with_asset` |
+| `investment.resource` | `assets`, `prices`, `holdings`, `transactions`, or `portfolio` |
+| `investment.outcome` | `in_progress`, `success`, `failure`, or `partial_failure` |
+| `investment.current_stage` | Last workflow stage entered |
+| `investment.completed_stages` | Stages completed before the response or failure |
+| `investment.timings.<stage>` | Stage duration in milliseconds when measured |
+| `investment.failure.kind` | `expected`, `unexpected`, or `partial` |
+| `investment.failure.reason` | Stable reason code suitable for grouping and alerts |
+| `investment.failure.stage` | Stage active when the failure was recorded |
+| `investment.user_id` | Authenticated internal user ID |
+| `investment.account_id` | Account involved in the workflow, when known |
+| `investment.asset_id` | Asset involved in the workflow, when known |
+| `investment.holding_id` | Holding involved in the workflow, when known |
+| `investment.transaction_id` | Investment transaction involved, when known |
+| `investment.symbol` | Stable asset symbol, when known |
+| `investment.provider` | External provider, currently `yahoo` or `coingecko` |
+| `investment.transaction_type` | Transaction category without its financial values |
+| `investment.result` | Counts and boolean outcomes such as `asset_created` |
+
+### Privacy and Redaction
+
+Investment events contain identifiers, symbols, enum values, counts, booleans, stages,
+and timings. They intentionally exclude quantities, prices, fees, portfolio totals,
+notes, names, email addresses, credentials, and request bodies.
+
+The request URL is stored without its query string. Allowed filter parameters are kept,
+but asset search text is replaced by `search_query_present` and
+`search_query_length`. Unexpected investment exceptions retain their class, module, and
+stack locations but omit the exception message, which can contain SQL parameters or
+provider data.
+
+### Verify Locally
+
+Temporarily set `AXIOM_SAMPLE_RATE=1.0`, make an authenticated request, and search by the
+`X-Request-ID` response header:
+
+```apl
+['cleverbilling']
+| where request_id == "<X-Request-ID>"
+| project _time, request_id, http.status_code, investment
+```
+
+Restore the normal sample rate after verification. To test failure retention without
+changing the sample rate, request a missing investment resource and confirm the event
+has `investment.outcome == "failure"`.
+
+### Instrumenting a New Investment Workflow
+
+Use `start_investment_event()` for common context, `investment_stage()` around meaningful
+I/O or mutation boundaries, and `complete_investment_event()` for safe result counts or
+booleans. Call `fail_investment_event()` before expected domain errors when a more useful
+reason than the HTTP status is available. Use `partial_investment_failure()` only when a
+logical failure is intentionally represented by HTTP `2xx`; it bypasses sampling.
+
+Do not pass arbitrary request bodies, schema dumps, monetary values, or exception text to
+the helper.
+
+---
 
 ## APL Query Reference
 
@@ -217,6 +290,54 @@ response = await httpx.post(
 ['cleverbilling']
 | where outcome == "error"
 | project _time, http.path, error.message, user.email
+```
+
+### Investment Failures by Workflow Stage
+
+```apl
+['cleverbilling']
+| where isnotnull(investment.operation) and investment.outcome != "success"
+| summarize failures = count() by investment.operation, investment.failure.stage, investment.failure.reason
+| sort by failures desc
+```
+
+### Investigate One Investment Request
+
+```apl
+['cleverbilling']
+| where request_id == "abc-123-def"
+| project _time, request_id, http.status_code, duration_ms,
+    investment.operation, investment.outcome, investment.current_stage,
+    investment.completed_stages, investment.timings, investment.failure
+```
+
+### External Provider Failures and Latency
+
+```apl
+['cleverbilling']
+| where isnotnull(investment.provider)
+| summarize requests = count(), failures = countif(investment.outcome != "success"),
+    p95_provider_ms = percentile(investment.timings.provider_lookup, 95)
+    by investment.provider
+```
+
+### Partial Price Refreshes
+
+```apl
+['cleverbilling']
+| where investment.operation == "refresh_all_prices"
+    and investment.outcome == "partial_failure"
+| project _time, request_id, investment.user_id,
+    investment.result.updated_count, investment.result.failed_count
+```
+
+### Investment P99 Latency by Operation
+
+```apl
+['cleverbilling']
+| where isnotnull(investment.operation)
+| summarize p99_ms = percentile(duration_ms, 99), requests = count() by investment.operation
+| sort by p99_ms desc
 ```
 
 ### Slow WhatsApp Processing

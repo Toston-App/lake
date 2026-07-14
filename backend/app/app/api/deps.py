@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator, Generator
 from enum import Enum
 from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
 from jose import jwt
 from pydantic import ValidationError
@@ -168,7 +168,17 @@ def get_current_active_user(
 
 def require_investments_access(
     current_user: models.User = Depends(get_current_active_user),
+    request: Request = None,
 ) -> models.User:
+    if request is not None:
+        from app.utilities.investment_telemetry import (
+            complete_investment_stage,
+            fail_investment_event,
+            start_investment_event,
+        )
+
+        start_investment_event(request, user_id=current_user.id)
+
     allowed_by_id = current_user.id in settings.investments_allowed_user_ids
     allowed_by_uuid = (
         current_user.uuid is not None
@@ -177,10 +187,18 @@ def require_investments_access(
     if not settings.INVESTMENTS_ENABLED or not (
         crud.user.is_superuser(current_user) or allowed_by_id or allowed_by_uuid
     ):
+        if request is not None:
+            fail_investment_event(
+                request,
+                reason="feature_access_denied",
+                stage="access",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Investments feature access is not enabled for this user",
         )
+    if request is not None:
+        complete_investment_stage(request, "access")
     return current_user
 
 

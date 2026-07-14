@@ -19,6 +19,7 @@ from app.services.currency_converter import CurrencyConverter
 from app.services.price_fetcher import PriceFetcher
 from app.tests.utils.user import user_authentication_headers
 from app.tests.utils.utils import random_email, random_lower_string
+from app.utilities import wide_events
 
 
 pytestmark = pytest.mark.asyncio
@@ -256,6 +257,43 @@ async def test_price_refresh_rolls_back_all_shared_state_on_failure(
 
     db.rollback.assert_awaited_once()
     db.commit.assert_not_awaited()
+
+
+async def test_partial_bulk_price_refresh_is_retained_with_sanitized_counts(
+    client: AsyncClient,
+    normal_user_token_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_axiom = SimpleNamespace(events=[])
+
+    async def log(event: dict) -> None:
+        fake_axiom.events.append(event)
+
+    fake_axiom.log = log
+    monkeypatch.setattr(wide_events, "get_axiom_client", lambda: fake_axiom)
+    monkeypatch.setattr(
+        PriceFetcher,
+        "refresh_all_prices",
+        AsyncMock(return_value=(2, ["FAILED"])),
+    )
+    monkeypatch.setattr(
+        "app.api.api_v1.endpoints.assets.enforce_investment_rate_limit",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = await client.post(
+        f"{BASE_URL}/assets/refresh-prices",
+        headers=normal_user_token_headers,
+    )
+
+    assert response.status_code == 200
+    assert len(fake_axiom.events) == 1
+    investment = fake_axiom.events[0]["investment"]
+    assert investment["operation"] == "refresh_all_prices"
+    assert investment["outcome"] == "partial_failure"
+    assert investment["failure"]["reason"] == "prices_unavailable"
+    assert investment["result"] == {"failed_count": 1, "updated_count": 2}
+    assert "FAILED" not in str(fake_axiom.events[0])
 
 
 async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(

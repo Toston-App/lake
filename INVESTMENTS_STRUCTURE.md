@@ -482,6 +482,46 @@ CoinGecko IDs, and legacy negative values. Constraint creation will fail if inco
 data already exists; the migration intentionally does not delete or rewrite financial
 records automatically.
 
+## Axiom Observability
+
+The investments subsystem uses the application's existing one-wide-event-per-request
+pipeline. The investments router initializes an `investment` context during the feature
+access check, and each handler adds identifiers and workflow stages as work completes.
+The middleware finalizes and emits the event after the response status is known.
+
+```mermaid
+flowchart LR
+    A[Wide event created] --> B[Investment access check]
+    B --> C[Route workflow stages]
+    C --> D[Response or exception]
+    D --> E[Outcome and redaction finalized]
+    E --> F{Retain event?}
+    F -- Failure or partial failure --> G[Always send to Axiom]
+    F -- Successful request --> H[Apply global sample rate]
+```
+
+Stable operation names cover all assets, prices, holdings, transactions, and portfolio
+routes. Critical workflows additionally identify stages such as `ownership_check`,
+`provider_lookup`, `asset_resolution`, `fx_lookup`, `row_lock`,
+`transaction_validation`, `ledger_write`, `holding_update`, `aggregation`, and `commit`.
+A failed event therefore shows both the last stage entered and the stages completed
+before it.
+
+HTTP `4xx` and `5xx` responses have request-level `outcome = "error"` and investment-level
+`outcome = "failure"`, so they bypass success sampling. Expected domain branches provide
+stable reason codes where possible; validation or dependency failures fall back to an
+`http_<status>` reason. A bulk refresh with failed assets uses `partial_failure` even
+though its public API response remains HTTP `200`, and is explicitly retained.
+
+Investment telemetry is metadata-only. It may contain internal user, account, asset,
+holding, and transaction IDs; symbols; providers; transaction types; counts; booleans;
+stages; and timings. It does not contain quantities, prices, fees, portfolio totals,
+notes, names, email addresses, credentials, request bodies, or raw search text. Query
+strings and unexpected exception messages are redacted before ingestion.
+
+The complete field reference, investigation procedure, and APL query recipes are in
+`AXIOM_README.md`.
+
 ## Error Behavior
 
 Common responses include:
@@ -509,6 +549,11 @@ Coverage includes:
 - Pagination and external-query bounds.
 - Rejection of client-owned valuation fields.
 - Rejection of unsafe transaction amounts and derived fields.
+- The 28-route investment operation inventory.
+- Telemetry merging, workflow stages, results, and normalized failures.
+- Error retention, success sampling, and forced retention of partial refreshes.
+- Redaction of search text, monetary data, notes, and exception parameters.
+- Atomic rollback and representative investment workflow outcomes.
 
 Additional high-value test cases for future expansion include:
 

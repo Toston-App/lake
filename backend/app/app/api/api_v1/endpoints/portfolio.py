@@ -5,44 +5,54 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
 from app.api import deps
 from app.models.asset import AssetClass, AssetType, Currency, Market
 from app.schemas.portfolio import (
-    PortfolioSummary,
-    AllocationItem,
+    AllocationByAccount,
     AllocationByClass,
+    AllocationByCountry,
     AllocationByCurrency,
     AllocationByMarket,
     AllocationByType,
-    AllocationByCountry,
-    AllocationByAccount,
+    AllocationItem,
+    PortfolioSummary,
     TopHolding,
     TopHoldingsResponse,
 )
 from app.services.currency_converter import CurrencyConverter
+from app.utilities.investment_telemetry import (
+    begin_investment_stage,
+    complete_investment_event,
+    complete_investment_stage,
+    investment_stage,
+)
 
 router = APIRouter()
 
 
 @router.get("/summary", response_model=PortfolioSummary)
 async def get_portfolio_summary(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get overall portfolio summary with total value, gain/loss, and basic metrics.
     """
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+
     # Get exchange rate for currency conversion
-    usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
-    
+    with investment_stage(request, "fx_lookup"):
+        usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
+    begin_investment_stage(request, "aggregation")
+
     total_value_usd = 0.0
     total_value_mxn = 0.0
     total_invested_usd = 0.0
@@ -71,6 +81,12 @@ async def get_portfolio_summary(
     # Count unique assets
     asset_ids = set(h.asset_id for h in holdings)
 
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        holdings_count=len(holdings),
+        assets_count=len(asset_ids),
+    )
     return PortfolioSummary(
         total_value_usd=round(total_value_usd, 2),
         total_value_mxn=round(total_value_mxn, 2),
@@ -88,6 +104,7 @@ async def get_portfolio_summary(
 
 @router.get("/allocation/by-class", response_model=AllocationByClass)
 async def get_allocation_by_class(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -100,17 +117,19 @@ async def get_allocation_by_class(
     - Crypto (cryptocurrencies)
     - Funds (mutual funds, index funds)
     """
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+    begin_investment_stage(request, "aggregation")
+
     # Group holdings by asset class
     class_totals: dict[AssetClass, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
     )
     total_usd = 0.0
     total_mxn = 0.0
-    
+
     for holding in holdings:
         asset = holding.asset
         class_totals[asset.asset_class]["usd"] += holding.current_value_usd
@@ -118,15 +137,15 @@ async def get_allocation_by_class(
         class_totals[asset.asset_class]["count"] += 1
         total_usd += holding.current_value_usd
         total_mxn += holding.current_value_mxn
-    
+
     # Build allocation items
     allocations = []
     breakdown = {}
-    
+
     for asset_class in AssetClass:
         data = class_totals.get(asset_class, {"usd": 0.0, "mxn": 0.0, "count": 0})
         percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
-        
+
         item = AllocationItem(
             name=asset_class.name.replace("_", " ").title(),
             value=asset_class.value,
@@ -136,7 +155,7 @@ async def get_allocation_by_class(
             holdings_count=data["count"],
         )
         allocations.append(item)
-        
+
         # Map to breakdown fields
         if asset_class == AssetClass.EQUITIES:
             breakdown["equities"] = item
@@ -146,7 +165,13 @@ async def get_allocation_by_class(
             breakdown["crypto"] = item
         elif asset_class == AssetClass.FUNDS:
             breakdown["funds"] = item
-    
+
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        holdings_count=len(holdings),
+        groups_count=len(allocations),
+    )
     return AllocationByClass(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
@@ -157,6 +182,7 @@ async def get_allocation_by_class(
 
 @router.get("/allocation/by-currency", response_model=AllocationByCurrency)
 async def get_allocation_by_currency(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -165,17 +191,19 @@ async def get_allocation_by_currency(
     
     Shows how much of the portfolio is exposed to USD vs MXN denominated assets.
     """
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+    begin_investment_stage(request, "aggregation")
+
     # Group by currency
     currency_totals: dict[Currency, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
     )
     total_usd = 0.0
     total_mxn = 0.0
-    
+
     for holding in holdings:
         asset = holding.asset
         currency_totals[asset.currency]["usd"] += holding.current_value_usd
@@ -183,14 +211,14 @@ async def get_allocation_by_currency(
         currency_totals[asset.currency]["count"] += 1
         total_usd += holding.current_value_usd
         total_mxn += holding.current_value_mxn
-    
+
     allocations = []
     breakdown = {}
-    
+
     for currency in Currency:
         data = currency_totals.get(currency, {"usd": 0.0, "mxn": 0.0, "count": 0})
         percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
-        
+
         item = AllocationItem(
             name=f"{currency.value} Assets",
             value=currency.value,
@@ -200,12 +228,18 @@ async def get_allocation_by_currency(
             holdings_count=data["count"],
         )
         allocations.append(item)
-        
+
         if currency == Currency.USD:
             breakdown["usd_exposure"] = item
         elif currency == Currency.MXN:
             breakdown["mxn_exposure"] = item
-    
+
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        holdings_count=len(holdings),
+        groups_count=len(allocations),
+    )
     return AllocationByCurrency(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
@@ -216,6 +250,7 @@ async def get_allocation_by_currency(
 
 @router.get("/allocation/by-market", response_model=AllocationByMarket)
 async def get_allocation_by_market(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -229,16 +264,18 @@ async def get_allocation_by_market(
     - CRYPTO (Cryptocurrency exchanges)
     - OTC (Over-the-counter: bonds, CETES, mutual funds)
     """
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+    begin_investment_stage(request, "aggregation")
+
     market_totals: dict[Market, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
     )
     total_usd = 0.0
     total_mxn = 0.0
-    
+
     for holding in holdings:
         asset = holding.asset
         market_totals[asset.market]["usd"] += holding.current_value_usd
@@ -246,12 +283,12 @@ async def get_allocation_by_market(
         market_totals[asset.market]["count"] += 1
         total_usd += holding.current_value_usd
         total_mxn += holding.current_value_mxn
-    
+
     allocations = []
     for market in Market:
         data = market_totals.get(market, {"usd": 0.0, "mxn": 0.0, "count": 0})
         percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
-        
+
         allocations.append(AllocationItem(
             name=market.name,
             value=market.value,
@@ -260,7 +297,13 @@ async def get_allocation_by_market(
             percentage=round(percentage, 2),
             holdings_count=data["count"],
         ))
-    
+
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        holdings_count=len(holdings),
+        groups_count=len(allocations),
+    )
     return AllocationByMarket(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
@@ -270,6 +313,7 @@ async def get_allocation_by_market(
 
 @router.get("/allocation/by-type", response_model=AllocationByType)
 async def get_allocation_by_type(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -282,16 +326,18 @@ async def get_allocation_by_type(
     - Cryptocurrencies
     - Mutual Funds, Index Funds
     """
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+    begin_investment_stage(request, "aggregation")
+
     type_totals: dict[AssetType, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
     )
     total_usd = 0.0
     total_mxn = 0.0
-    
+
     for holding in holdings:
         asset = holding.asset
         type_totals[asset.asset_type]["usd"] += holding.current_value_usd
@@ -299,15 +345,15 @@ async def get_allocation_by_type(
         type_totals[asset.asset_type]["count"] += 1
         total_usd += holding.current_value_usd
         total_mxn += holding.current_value_mxn
-    
+
     allocations = []
     for asset_type in AssetType:
         data = type_totals.get(asset_type, {"usd": 0.0, "mxn": 0.0, "count": 0})
         if data["count"] == 0:
             continue  # Skip types with no holdings
-        
+
         percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
-        
+
         allocations.append(AllocationItem(
             name=asset_type.name.replace("_", " ").title(),
             value=asset_type.value,
@@ -316,7 +362,13 @@ async def get_allocation_by_type(
             percentage=round(percentage, 2),
             holdings_count=data["count"],
         ))
-    
+
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        holdings_count=len(holdings),
+        groups_count=len(allocations),
+    )
     return AllocationByType(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
@@ -326,6 +378,7 @@ async def get_allocation_by_type(
 
 @router.get("/allocation/by-country", response_model=AllocationByCountry)
 async def get_allocation_by_country(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -334,16 +387,18 @@ async def get_allocation_by_country(
     
     Shows geographic diversification (US, MX, etc.)
     """
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+    begin_investment_stage(request, "aggregation")
+
     country_totals: dict[str, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
     )
     total_usd = 0.0
     total_mxn = 0.0
-    
+
     for holding in holdings:
         asset = holding.asset
         country = asset.country or "Unknown"
@@ -352,11 +407,11 @@ async def get_allocation_by_country(
         country_totals[country]["count"] += 1
         total_usd += holding.current_value_usd
         total_mxn += holding.current_value_mxn
-    
+
     allocations = []
     for country, data in sorted(country_totals.items(), key=lambda x: x[1]["usd"], reverse=True):
         percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
-        
+
         allocations.append(AllocationItem(
             name=country,
             value=country,
@@ -365,7 +420,13 @@ async def get_allocation_by_country(
             percentage=round(percentage, 2),
             holdings_count=data["count"],
         ))
-    
+
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        holdings_count=len(holdings),
+        groups_count=len(allocations),
+    )
     return AllocationByCountry(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
@@ -375,6 +436,7 @@ async def get_allocation_by_country(
 
 @router.get("/allocation/by-account", response_model=AllocationByAccount)
 async def get_allocation_by_account(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
@@ -385,23 +447,25 @@ async def get_allocation_by_account(
     Each account's total holdings value is shown separately.
     """
     # Get all holdings
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+
     # Get all accounts for name resolution
     accounts = await crud.account.get_multi_by_owner(
         db, owner_id=current_user.id, limit=None
     )
+    begin_investment_stage(request, "aggregation")
     account_map = {a.id: a for a in accounts}
-    
+
     # Group holdings by account
     account_holdings: dict[int, dict] = defaultdict(
         lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
     )
     total_usd = 0.0
     total_mxn = 0.0
-    
+
     for holding in holdings:
         account_id = holding.account_id
         account_holdings[account_id]["usd"] += holding.current_value_usd
@@ -409,7 +473,7 @@ async def get_allocation_by_account(
         account_holdings[account_id]["count"] += 1
         total_usd += holding.current_value_usd
         total_mxn += holding.current_value_mxn
-    
+
     # Build allocation items
     allocations = []
     for account_id, data in sorted(
@@ -419,13 +483,13 @@ async def get_allocation_by_account(
     ):
         if data["usd"] == 0:
             continue
-        
+
         percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
-        
+
         account = account_map.get(account_id)
         name = account.name if account else f"Account {account_id}"
         color = account.color if account else "#168FFF"
-        
+
         allocations.append(AllocationItem(
             name=name,
             color=color,
@@ -435,7 +499,13 @@ async def get_allocation_by_account(
             percentage=round(percentage, 2),
             holdings_count=data["count"],
         ))
-    
+
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        holdings_count=len(holdings),
+        groups_count=len(allocations),
+    )
     return AllocationByAccount(
         total_value_usd=round(total_usd, 2),
         total_value_mxn=round(total_mxn, 2),
@@ -445,6 +515,7 @@ async def get_allocation_by_account(
 
 @router.get("/top-holdings", response_model=TopHoldingsResponse)
 async def get_top_holdings(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
     limit: int = Query(10, ge=1, le=50, description="Number of top holdings to return"),
@@ -452,22 +523,24 @@ async def get_top_holdings(
     """
     Get top holdings by value.
     """
-    holdings = await crud.holding.get_by_owner(
-        db, owner_id=current_user.id, limit=None
-    )
-    
+    with investment_stage(request, "database_query"):
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+    begin_investment_stage(request, "ranking")
+
     # Calculate total portfolio value
     total_value_usd = sum(h.current_value_usd for h in holdings)
-    
+
     # Sort by USD value descending
     sorted_holdings = sorted(holdings, key=lambda h: h.current_value_usd, reverse=True)
     top_holdings = sorted_holdings[:limit]
-    
+
     result = []
     for holding in top_holdings:
         asset = holding.asset
         percentage = (holding.current_value_usd / total_value_usd * 100) if total_value_usd > 0 else 0.0
-        
+
         result.append(TopHolding(
             symbol=asset.symbol,
             name=asset.name,
@@ -480,7 +553,13 @@ async def get_top_holdings(
             gain_loss=round(holding.unrealized_gain_loss, 2),
             gain_loss_pct=round(holding.unrealized_gain_loss_pct, 2),
         ))
-    
+
+    complete_investment_stage(request, "ranking")
+    complete_investment_event(
+        request,
+        result_count=len(result),
+        holdings_count=len(holdings),
+    )
     return TopHoldingsResponse(
         holdings=result,
         total_shown=len(result),

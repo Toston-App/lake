@@ -3,39 +3,45 @@ Holdings management endpoints for the Investment Dashboard.
 """
 import math
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
 from app.api import deps
-from app.models.asset import ASSET_TYPE_TO_CLASS
-from app.models.asset import AssetClass, Currency
+from app.models.asset import ASSET_TYPE_TO_CLASS, AssetClass, Currency
 from app.schemas.asset import AssetCreate
 from app.schemas.holding import (
     Holding,
     HoldingCreate,
+    HoldingDeletionResponse,
     HoldingUpdate,
     HoldingWithAsset,
-    HoldingDeletionResponse,
 )
 from app.services.asset_resolver import AssetResolverService
 from app.services.investment_rate_limiter import enforce_investment_rate_limit
+from app.utilities.investment_telemetry import (
+    add_investment_context,
+    complete_investment_event,
+    fail_investment_event,
+    investment_stage,
+)
 
 router = APIRouter()
 
 
 @router.get("", response_model=list[HoldingWithAsset])
 async def list_holdings(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=100),
-    account_id: Optional[int] = Query(None, ge=1, description="Filter by account"),
-    asset_class: Optional[AssetClass] = Query(None, description="Filter by asset class"),
-    currency: Optional[Currency] = Query(None, description="Filter by asset currency"),
+    account_id: int | None = Query(None, ge=1, description="Filter by account"),
+    asset_class: AssetClass | None = Query(None, description="Filter by asset class"),
+    currency: Currency | None = Query(None, description="Filter by asset currency"),
 ) -> Any:
     """
     List all holdings for the current user.
@@ -46,37 +52,42 @@ async def list_holdings(
     - currency: Filter by USD or MXN exposure
     """
     if account_id is not None:
+        add_investment_context(request, account_id=account_id)
         # Validate account ownership
-        account = await crud.account.get_by_id(
-            db, id=account_id, owner_id=current_user.id
-        )
+        with investment_stage(request, "ownership_check"):
+            account = await crud.account.get_by_id(
+                db, id=account_id, owner_id=current_user.id
+            )
         if not account:
+            fail_investment_event(request, reason="account_not_found")
             raise HTTPException(status_code=404, detail="Account not found")
-        holdings = await crud.holding.get_by_account(
-            db,
-            account_id=account_id,
-            owner_id=current_user.id,
-            skip=skip,
-            limit=limit,
-        )
+        with investment_stage(request, "database_query"):
+            holdings = await crud.holding.get_by_account(
+                db,
+                account_id=account_id,
+                owner_id=current_user.id,
+                skip=skip,
+                limit=limit,
+            )
     else:
-        holdings = await crud.holding.get_filtered(
-            db,
-            owner_id=current_user.id,
-            asset_class=asset_class,
-            currency=currency,
-            skip=skip,
-            limit=limit,
-        )
-    
+        with investment_stage(request, "database_query"):
+            holdings = await crud.holding.get_filtered(
+                db,
+                owner_id=current_user.id,
+                asset_class=asset_class,
+                currency=currency,
+                skip=skip,
+                limit=limit,
+            )
+
     # Enrich with asset details
     result = []
     for holding in holdings:
         asset = holding.asset
-        
+
         # Get latest price
         latest_price = await crud.asset_price.get_latest_by_asset(db, asset_id=asset.id)
-        
+
         holding_data = HoldingWithAsset(
             id=holding.id,
             owner_id=holding.owner_id,
@@ -101,20 +112,22 @@ async def list_holdings(
             sector=asset.sector,
             country=asset.country,
         )
-        
+
         if latest_price:
             holding_data.current_price = latest_price.price
             holding_data.price_change = latest_price.change
             holding_data.price_change_percent = latest_price.change_percent
-        
+
         result.append(holding_data)
-    
+
+    complete_investment_event(request, result_count=len(result))
     return result
 
 
 @router.post("", response_model=Holding)
 async def create_holding(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     holding_in: HoldingCreate,
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -125,36 +138,51 @@ async def create_holding(
     If a holding already exists for this asset in the account, use PUT to update it.
     """
     # Verify account belongs to user
-    account = await crud.account.get_by_id(
-        db, id=holding_in.account_id, owner_id=current_user.id
+    add_investment_context(
+        request,
+        account_id=holding_in.account_id,
+        asset_id=holding_in.asset_id,
+        provider=holding_in.provider,
     )
+    with investment_stage(request, "ownership_check"):
+        account = await crud.account.get_by_id(
+            db, id=holding_in.account_id, owner_id=current_user.id
+        )
     if not account:
+        fail_investment_event(request, reason="account_not_found")
         raise HTTPException(status_code=404, detail="Account not found")
 
     if holding_in.quantity <= 0:
+        fail_investment_event(request, reason="initial_quantity_not_positive", stage="validation")
         raise HTTPException(
             status_code=422, detail="Initial holding quantity must be positive"
         )
-    
+
     # Resolve asset from existing ID or external identifier
     if holding_in.asset_id is not None:
-        asset = await crud.asset.get(db, id=holding_in.asset_id)
+        with investment_stage(request, "asset_lookup"):
+            asset = await crud.asset.get(db, id=holding_in.asset_id)
         if not asset:
+            fail_investment_event(request, reason="asset_not_found")
             raise HTTPException(status_code=404, detail="Asset not found")
     else:
         if not holding_in.provider or not holding_in.external_id:
+            fail_investment_event(request, reason="asset_identity_missing", stage="validation")
             raise HTTPException(
                 status_code=422,
                 detail="Provide asset_id or provider+external_id",
             )
 
-        enforce_investment_rate_limit(
-            f"user:{current_user.id}:resolve-asset", 1.0
-        )
-        if holding_in.provider.value == "yahoo":
-            resolved_asset = await AssetResolverService.resolve_from_yahoo(holding_in.external_id)
-        else:
-            resolved_asset = await AssetResolverService.resolve_from_coingecko(holding_in.external_id)
+        with investment_stage(request, "rate_limit"):
+            enforce_investment_rate_limit(
+                f"user:{current_user.id}:resolve-asset", 1.0
+            )
+        with investment_stage(request, "asset_resolution"):
+            if holding_in.provider.value == "yahoo":
+                resolved_asset = await AssetResolverService.resolve_from_yahoo(holding_in.external_id)
+            else:
+                resolved_asset = await AssetResolverService.resolve_from_coingecko(holding_in.external_id)
+        add_investment_context(request, symbol=resolved_asset.symbol)
 
         if resolved_asset.coingecko_id:
             existing_asset = await crud.asset.get_by_coingecko_id(
@@ -201,10 +229,12 @@ async def create_holding(
                 )
 
     if not asset.is_active:
+        fail_investment_event(request, reason="asset_inactive", stage="validation")
         raise HTTPException(status_code=409, detail="Asset is inactive")
 
     holding_in.asset_id = asset.id
-    
+    add_investment_context(request, asset_id=asset.id, symbol=asset.symbol)
+
     # Check if holding already exists in this account
     existing = await crud.holding.get_by_account_and_asset(
         db,
@@ -213,29 +243,35 @@ async def create_holding(
         owner_id=current_user.id,
     )
     if existing:
+        fail_investment_event(request, reason="holding_already_exists", stage="identity_check")
         raise HTTPException(
             status_code=409,
             detail=f"You already have a holding for {asset.symbol} in this account.",
         )
-    
+
     try:
         holding = await crud.holding.create_with_owner(
             db, obj_in=holding_in, owner_id=current_user.id, commit=False
         )
     except IntegrityError:
         await db.rollback()
+        fail_investment_event(request, reason="holding_identity_conflict", stage="database_write")
         raise HTTPException(
             status_code=409,
             detail="A holding for this asset already exists in the account",
         )
-    await db.commit()
-    await db.refresh(holding)
+    with investment_stage(request, "commit"):
+        await db.commit()
+        await db.refresh(holding)
+    add_investment_context(request, holding_id=holding.id)
+    complete_investment_event(request, holding_created=True)
     return holding
 
 
 @router.get("/{holding_id}", response_model=HoldingWithAsset)
 async def get_holding(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     holding_id: int = Path(..., ge=1),
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -243,18 +279,21 @@ async def get_holding(
     """
     Get a specific holding by ID.
     """
-    if crud.user.is_superuser(current_user):
-        holding = await crud.holding.get(db, id=holding_id)
-    else:
-        holding = await crud.holding.get_by_id_and_owner(
-            db, holding_id=holding_id, owner_id=current_user.id
-        )
+    add_investment_context(request, holding_id=holding_id)
+    with investment_stage(request, "database_query"):
+        if crud.user.is_superuser(current_user):
+            holding = await crud.holding.get(db, id=holding_id)
+        else:
+            holding = await crud.holding.get_by_id_and_owner(
+                db, holding_id=holding_id, owner_id=current_user.id
+            )
     if not holding:
+        fail_investment_event(request, reason="holding_not_found")
         raise HTTPException(status_code=404, detail="Holding not found")
-    
+
     asset = await crud.asset.get(db, id=holding.asset_id)
     latest_price = await crud.asset_price.get_latest_by_asset(db, asset_id=asset.id)
-    
+
     result = HoldingWithAsset(
         id=holding.id,
         owner_id=holding.owner_id,
@@ -278,18 +317,26 @@ async def get_holding(
         sector=asset.sector,
         country=asset.country,
     )
-    
+
     if latest_price:
         result.current_price = latest_price.price
         result.price_change = latest_price.change
         result.price_change_percent = latest_price.change_percent
-    
+
+    add_investment_context(
+        request,
+        account_id=holding.account_id,
+        asset_id=holding.asset_id,
+        symbol=asset.symbol,
+    )
+    complete_investment_event(request, price_available=latest_price is not None)
     return result
 
 
 @router.put("/{holding_id}", response_model=Holding)
 async def update_holding(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     holding_id: int = Path(..., ge=1),
     holding_in: HoldingUpdate,
@@ -300,6 +347,7 @@ async def update_holding(
     
     For recording buy/sell transactions, use the transactions endpoint instead.
     """
+    add_investment_context(request, holding_id=holding_id)
     owner_id = None if crud.user.is_superuser(current_user) else current_user.id
     if owner_id is None:
         existing_holding = await crud.holding.get(db, id=holding_id)
@@ -312,7 +360,13 @@ async def update_holding(
         else None
     )
     if not holding:
+        fail_investment_event(request, reason="holding_not_found", stage="row_lock")
         raise HTTPException(status_code=404, detail="Holding not found")
+    add_investment_context(
+        request,
+        account_id=holding.account_id,
+        asset_id=holding.asset_id,
+    )
 
     quantity = holding_in.quantity if holding_in.quantity is not None else holding.quantity
     avg_cost_basis = (
@@ -323,6 +377,7 @@ async def update_holding(
     if holding_in.quantity is not None or holding_in.avg_cost_basis is not None:
         total_invested = quantity * avg_cost_basis
         if not math.isfinite(total_invested) or total_invested > 1e30:
+            fail_investment_event(request, reason="unsafe_holding_value", stage="validation")
             raise HTTPException(status_code=422, detail="Invested total is too large")
         holding = await crud.holding.recalculate_cost_basis(
             db,
@@ -336,15 +391,18 @@ async def update_holding(
         holding.cost_currency = holding_in.cost_currency
     holding.updated_at = datetime.now(timezone.utc)
     db.add(holding)
-    await db.commit()
-    await db.refresh(holding)
-    
+    with investment_stage(request, "commit"):
+        await db.commit()
+        await db.refresh(holding)
+    complete_investment_event(request)
+
     return holding
 
 
 @router.delete("/{holding_id}", response_model=HoldingDeletionResponse)
 async def delete_holding(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     holding_id: int = Path(..., ge=1),
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -352,6 +410,7 @@ async def delete_holding(
     """
     Delete a holding and all associated transactions.
     """
+    add_investment_context(request, holding_id=holding_id)
     owner_id = None if crud.user.is_superuser(current_user) else current_user.id
     if owner_id is None:
         existing_holding = await crud.holding.get(db, id=holding_id)
@@ -364,17 +423,28 @@ async def delete_holding(
         else None
     )
     if not holding:
+        fail_investment_event(request, reason="holding_not_found", stage="row_lock")
         raise HTTPException(status_code=404, detail="Holding not found")
-    
+
     asset = await crud.asset.get(db, id=holding.asset_id)
     account_id = holding.account_id
-    
-    await crud.holding.remove_with_commit(db, id=holding_id, commit=False)
-    
-    # Recalculate account total_investments after deletion
-    await crud.account.recalculate_total_investments(
-        db, account_id=account_id, commit=False
+
+    add_investment_context(
+        request,
+        account_id=account_id,
+        asset_id=holding.asset_id,
+        symbol=asset.symbol,
     )
-    await db.commit()
-    
+    with investment_stage(request, "database_write"):
+        await crud.holding.remove_with_commit(db, id=holding_id, commit=False)
+
+        # Recalculate account total_investments after deletion
+        await crud.account.recalculate_total_investments(
+            db, account_id=account_id, commit=False
+        )
+    with investment_stage(request, "commit"):
+        await db.commit()
+
+    complete_investment_event(request)
+
     return HoldingDeletionResponse(message=f"Holding for {asset.symbol} deleted")
