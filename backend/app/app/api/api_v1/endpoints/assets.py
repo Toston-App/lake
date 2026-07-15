@@ -1,6 +1,7 @@
 """
 Asset management endpoints for the Investment Dashboard.
 """
+
 from datetime import datetime, timezone
 from typing import Any
 
@@ -47,7 +48,7 @@ router = APIRouter()
 async def list_assets(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _current_user: models.User = Depends(deps.get_current_active_user),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=100),
     asset_class: AssetClass | None = Query(None, description="Filter by asset class"),
@@ -93,7 +94,7 @@ async def create_asset(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     asset_in: AssetCreate,
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    _current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
     """
     Create a new asset to track.
@@ -135,7 +136,7 @@ async def create_asset(
 async def search_assets(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _current_user: models.User = Depends(deps.get_current_active_user),
     q: str = Query(..., min_length=1, max_length=100, description="Search query"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -157,7 +158,9 @@ async def search_assets(
 async def search_external_assets(
     request: Request,
     current_user: models.User = Depends(deps.get_current_active_user),
-    q: str = Query(..., min_length=1, max_length=100, description="Search query (symbol or name)"),
+    q: str = Query(
+        ..., min_length=1, max_length=100, description="Search query (symbol or name)"
+    ),
 ) -> Any:
     """
     Search for assets from external sources (Yahoo Finance).
@@ -171,7 +174,9 @@ async def search_external_assets(
         raise HTTPException(status_code=422, detail="Search query cannot be blank")
     add_investment_context(request, provider="yahoo")
     with investment_stage(request, "rate_limit"):
-        enforce_investment_rate_limit(f"user:{current_user.id}:search-assets", 0.5)
+        await enforce_investment_rate_limit(
+            f"user:{current_user.id}:search-assets", 0.5
+        )
     with investment_stage(request, "provider_lookup"):
         results = await YahooFinanceService.search_symbol(q)
 
@@ -224,17 +229,19 @@ async def search_external_assets(
             if not symbol or len(symbol) > 32:
                 continue
 
-            filtered_results.append(ExternalAssetSearchResult(
-                provider=ExternalAssetProvider.YAHOO,
-                external_id=raw_symbol,
-                symbol=symbol,
-                name=raw_name or symbol,
-                asset_type=asset_type,
-                market=market,
-                currency=currency,
-                country=country,
-                exchange=exchange,
-            ))
+            filtered_results.append(
+                ExternalAssetSearchResult(
+                    provider=ExternalAssetProvider.YAHOO,
+                    external_id=raw_symbol,
+                    symbol=symbol,
+                    name=raw_name or symbol,
+                    asset_type=asset_type,
+                    market=market,
+                    currency=currency,
+                    country=country,
+                    exchange=exchange,
+                )
+            )
 
     complete_investment_event(request, result_count=len(filtered_results))
     return filtered_results
@@ -244,7 +251,9 @@ async def search_external_assets(
 async def search_crypto_assets(
     request: Request,
     current_user: models.User = Depends(deps.get_current_active_user),
-    q: str = Query(..., min_length=1, max_length=100, description="Search query (symbol or name)"),
+    q: str = Query(
+        ..., min_length=1, max_length=100, description="Search query (symbol or name)"
+    ),
 ) -> Any:
     """
     Search for cryptocurrencies from CoinGecko.
@@ -258,7 +267,9 @@ async def search_crypto_assets(
         raise HTTPException(status_code=422, detail="Search query cannot be blank")
     add_investment_context(request, provider="coingecko")
     with investment_stage(request, "rate_limit"):
-        enforce_investment_rate_limit(f"user:{current_user.id}:search-crypto", 0.5)
+        await enforce_investment_rate_limit(
+            f"user:{current_user.id}:search-crypto", 0.5
+        )
     with investment_stage(request, "provider_lookup"):
         results = await CoinGeckoService.search_coins(q)
 
@@ -279,17 +290,19 @@ async def search_crypto_assets(
             or len(name) > 255
         ):
             continue
-        crypto_results.append(ExternalCryptoSearchResult(
-            provider=ExternalAssetProvider.COINGECKO,
-            external_id=coin_id,
-            symbol=symbol,
-            name=name,
-            asset_type=AssetType.CRYPTOCURRENCY,
-            market=Market.CRYPTO,
-            currency=Currency.USD,
-            coingecko_id=coin_id,
-            market_cap_rank=coin.get("market_cap_rank"),
-        ))
+        crypto_results.append(
+            ExternalCryptoSearchResult(
+                provider=ExternalAssetProvider.COINGECKO,
+                external_id=coin_id,
+                symbol=symbol,
+                name=name,
+                asset_type=AssetType.CRYPTOCURRENCY,
+                market=Market.CRYPTO,
+                currency=Currency.USD,
+                coingecko_id=coin_id,
+                market_cap_rank=coin.get("market_cap_rank"),
+            )
+        )
 
     complete_investment_event(request, result_count=len(crypto_results))
     return crypto_results
@@ -301,7 +314,7 @@ async def get_asset(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     asset_id: int = Path(..., ge=1),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    _current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get asset by ID with current price.
@@ -348,7 +361,7 @@ async def update_asset(
     db: AsyncSession = Depends(deps.async_get_db),
     asset_id: int = Path(..., ge=1),
     asset_in: AssetUpdate,
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    _current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
     """
     Update an asset.
@@ -379,7 +392,7 @@ async def delete_asset(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     asset_id: int = Path(..., ge=1),
-    current_user: models.User = Depends(deps.get_current_active_superuser),
+    _current_user: models.User = Depends(deps.get_current_active_superuser),
 ) -> Any:
     """
     Deactivate a global asset. Superuser only.
@@ -409,7 +422,7 @@ async def get_asset_price(
 ) -> Any:
     """
     Get current price for an asset.
-    
+
     Set refresh=true to force fetching from external API.
     """
     add_investment_context(request, asset_id=asset_id)
@@ -430,7 +443,9 @@ async def get_asset_price(
         provider=provider,
     )
 
-    can_refresh = crud.user.is_superuser(current_user) or await crud.holding.exists_by_owner_and_asset(
+    can_refresh = crud.user.is_superuser(
+        current_user
+    ) or await crud.holding.exists_by_owner_and_asset(
         db, owner_id=current_user.id, asset_id=asset_id
     )
     max_age_minutes = 1 if refresh else 15
@@ -439,7 +454,9 @@ async def get_asset_price(
     )
 
     if refresh and not can_refresh:
-        fail_investment_event(request, reason="price_refresh_forbidden", stage="authorization")
+        fail_investment_event(
+            request, reason="price_refresh_forbidden", stage="authorization"
+        )
         raise HTTPException(
             status_code=403,
             detail="Only asset holders or superusers can refresh this price",
@@ -453,7 +470,7 @@ async def get_asset_price(
         # Asset-global throttling prevents different users from repeatedly refreshing
         # the same shared price and rewriting every holder's valuation.
         with investment_stage(request, "rate_limit"):
-            enforce_investment_rate_limit(f"asset:{asset_id}:refresh", 5.0)
+            await enforce_investment_rate_limit(f"asset:{asset_id}:refresh", 5.0)
 
     with investment_stage(request, "price_fetch"):
         if refresh and is_stale:
@@ -470,7 +487,7 @@ async def get_asset_price(
         fail_investment_event(request, reason="price_unavailable")
         raise HTTPException(
             status_code=404,
-            detail=f"Could not fetch price for {asset.symbol}. This asset may require manual price entry."
+            detail=f"Could not fetch price for {asset.symbol}. This asset may require manual price entry.",
         )
 
     latest_price = await crud.asset_price.get_latest_by_asset(db, asset_id=asset_id)
@@ -500,16 +517,20 @@ async def refresh_all_prices(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
-    only_my_holdings: bool = Query(True, description="Only refresh assets in my portfolio"),
+    only_my_holdings: bool = Query(
+        True, description="Only refresh assets in my portfolio"
+    ),
 ) -> Any:
     """
     Refresh prices for tracked assets.
-    
+
     By default, only refreshes assets the user has holdings in.
     Set only_my_holdings=false to refresh all active assets (admin).
     """
     if not only_my_holdings and not crud.user.is_superuser(current_user):
-        fail_investment_event(request, reason="global_refresh_forbidden", stage="authorization")
+        fail_investment_event(
+            request, reason="global_refresh_forbidden", stage="authorization"
+        )
         raise HTTPException(
             status_code=403,
             detail="Only superusers can refresh all asset prices",
@@ -521,7 +542,7 @@ async def refresh_all_prices(
         else f"user:{current_user.id}:refresh-prices"
     )
     with investment_stage(request, "rate_limit"):
-        enforce_investment_rate_limit(limiter_key, 30.0)
+        await enforce_investment_rate_limit(limiter_key, 30.0)
     owner_id = current_user.id if only_my_holdings else None
 
     with investment_stage(request, "bulk_price_refresh"):

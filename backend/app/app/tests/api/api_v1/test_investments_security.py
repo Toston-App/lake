@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
 import asyncio
-from unittest.mock import AsyncMock
+from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -11,16 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud
 from app.core.config import Settings, settings
-from app.schemas.user import UserCreate
-from app.schemas.asset_price import AssetPriceCreate
 from app.models.asset import Currency
+from app.schemas.asset_price import AssetPriceCreate
+from app.schemas.user import UserCreate
 from app.services.asset_resolver import AssetResolverService
 from app.services.currency_converter import CurrencyConverter
 from app.services.price_fetcher import PriceFetcher
 from app.tests.utils.user import user_authentication_headers
 from app.tests.utils.utils import random_email, random_lower_string
 from app.utilities import wide_events
-
 
 pytestmark = pytest.mark.asyncio
 BASE_URL = f"{settings.API_V1_STR}/investments"
@@ -30,13 +30,35 @@ BASE_URL = f"{settings.API_V1_STR}/investments"
 async def enable_investments_for_existing_tests(
     monkeypatch: pytest.MonkeyPatch,
     async_get_db: AsyncSession,
-    normal_user_token_headers: dict[str, str],
+    normal_user_token_headers: dict[str, str],  # noqa: ARG001
 ) -> None:
     user = await crud.user.get_by_email(async_get_db, email=settings.EMAIL_TEST_USER)
     assert user is not None
     monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
     monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", str(user.id))
     monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "")
+    monkeypatch.setattr(
+        CurrencyConverter,
+        "get_usd_to_mxn_rate",
+        AsyncMock(return_value=Decimal("18")),
+    )
+
+
+def idempotent_headers(headers: dict[str, str], key: str) -> dict[str, str]:
+    return {**headers, "Idempotency-Key": key}
+
+
+async def test_unapproved_origin_has_no_credentialed_cors_permission(
+    client: AsyncClient,
+) -> None:
+    response = await client.options(
+        f"{settings.API_V1_STR}/health-check/",
+        headers={
+            "Origin": "https://attacker.example",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert "access-control-allow-origin" not in response.headers
 
 
 @pytest.mark.parametrize(
@@ -98,7 +120,11 @@ async def test_invalid_investment_id_allowlist_is_rejected(value: str) -> None:
 @pytest.mark.parametrize(
     "method,path,payload",
     [
-        ("POST", "/assets", {"symbol": "SECURE", "name": "Secure", "asset_type": "stock"}),
+        (
+            "POST",
+            "/assets",
+            {"symbol": "SECURE", "name": "Secure", "asset_type": "stock"},
+        ),
         ("PUT", "/assets/1", {"name": "Tampered"}),
         ("DELETE", "/assets/1", None),
     ],
@@ -221,7 +247,7 @@ async def test_transaction_rejects_ambiguous_asset_identity_and_naive_time(
     }
     response = await client.post(
         f"{BASE_URL}/transactions/with-asset",
-        headers=normal_user_token_headers,
+        headers=idempotent_headers(normal_user_token_headers, "invalid-identity"),
         json=payload,
     )
     assert response.status_code == 422
@@ -278,7 +304,7 @@ async def test_partial_bulk_price_refresh_is_retained_with_sanitized_counts(
     )
     monkeypatch.setattr(
         "app.api.api_v1.endpoints.assets.enforce_investment_rate_limit",
-        lambda *_args, **_kwargs: None,
+        AsyncMock(return_value=None),
     )
 
     response = await client.post(
@@ -343,7 +369,7 @@ async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(
     monkeypatch.setattr(AssetResolverService, "resolve_from_yahoo", resolver_mock)
     unauthorized_resolution = await client.post(
         f"{BASE_URL}/transactions/with-asset",
-        headers=normal_user_token_headers,
+        headers=idempotent_headers(normal_user_token_headers, "unauthorized-account"),
         json={
             "account_id": second_account_id,
             "provider": "yahoo",
@@ -426,7 +452,7 @@ async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(
 
     wrong_account = await client.post(
         f"{BASE_URL}/transactions",
-        headers=normal_user_token_headers,
+        headers=idempotent_headers(normal_user_token_headers, "wrong-account"),
         json={
             "account_id": second_account_id,
             "holding_id": first_holding_id,
@@ -438,14 +464,9 @@ async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(
     )
     assert wrong_account.status_code == 404
 
-    monkeypatch.setattr(
-        CurrencyConverter,
-        "get_usd_to_mxn_rate",
-        AsyncMock(return_value=18.0),
-    )
     transaction_response = await client.post(
         f"{BASE_URL}/transactions",
-        headers=normal_user_token_headers,
+        headers=idempotent_headers(normal_user_token_headers, "initial-buy"),
         json={
             "account_id": first_account_id,
             "holding_id": first_holding_id,
@@ -457,6 +478,39 @@ async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(
     )
     assert transaction_response.status_code == 200
     transaction_id = transaction_response.json()["id"]
+
+    duplicate_payload = {
+        "account_id": first_account_id,
+        "holding_id": first_holding_id,
+        "transaction_type": "dividend",
+        "quantity": 1,
+        "price_per_unit": 2,
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    duplicate_headers = idempotent_headers(
+        normal_user_token_headers, "concurrent-duplicate"
+    )
+    duplicate_responses = await asyncio.gather(
+        client.post(
+            f"{BASE_URL}/transactions",
+            headers=duplicate_headers,
+            json=duplicate_payload,
+        ),
+        client.post(
+            f"{BASE_URL}/transactions",
+            headers=duplicate_headers,
+            json=duplicate_payload,
+        ),
+    )
+    assert [response.status_code for response in duplicate_responses] == [200, 200]
+    assert len({response.json()["id"] for response in duplicate_responses}) == 1
+
+    conflicting_duplicate = await client.post(
+        f"{BASE_URL}/transactions",
+        headers=duplicate_headers,
+        json={**duplicate_payload, "notes": "different request"},
+    )
+    assert conflicting_duplicate.status_code == 409
 
     for method in ("GET", "DELETE"):
         response = await client.request(
@@ -477,12 +531,12 @@ async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(
     concurrent_sells = await asyncio.gather(
         client.post(
             f"{BASE_URL}/transactions",
-            headers=normal_user_token_headers,
+            headers=idempotent_headers(normal_user_token_headers, "sell-one"),
             json=sell_payload,
         ),
         client.post(
             f"{BASE_URL}/transactions",
-            headers=normal_user_token_headers,
+            headers=idempotent_headers(normal_user_token_headers, "sell-two"),
             json=sell_payload,
         ),
     )
@@ -492,7 +546,13 @@ async def test_cross_user_investment_ids_do_not_expose_or_mutate_data(
         headers=normal_user_token_headers,
     )
     assert final_holding.status_code == 200
-    assert final_holding.json()["quantity"] == 1
+    assert Decimal(final_holding.json()["quantity"]) == Decimal("1")
+
+    immutable_holding = await client.delete(
+        f"{BASE_URL}/holdings/{first_holding_id}",
+        headers=normal_user_token_headers,
+    )
+    assert immutable_holding.status_code == 409
 
     first_summary = await client.get(
         f"{BASE_URL}/portfolio/summary", headers=normal_user_token_headers

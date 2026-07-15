@@ -1,7 +1,6 @@
 import logging
 from collections.abc import AsyncGenerator, Generator
 from enum import Enum
-from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
@@ -94,8 +93,8 @@ def verify_clerk_token(token: str) -> schemas.ClerkTokenPayload:
 
 async def get_current_user(
     db: AsyncSession = Depends(async_get_db),
-    bearer_token: Optional[str] = Depends(reusable_oauth2),
-    cookie_token: Optional[str] = Depends(cookie_scheme),
+    bearer_token: str | None = Depends(reusable_oauth2),
+    cookie_token: str | None = Depends(cookie_scheme),
 ) -> models.User:
     token = bearer_token or cookie_token
     if not token:
@@ -130,8 +129,8 @@ async def get_current_user(
 
 
 async def get_clerk_session_sub(
-    bearer_token: Optional[str] = Depends(reusable_oauth2),
-    cookie_token: Optional[str] = Depends(cookie_scheme),
+    bearer_token: str | None = Depends(reusable_oauth2),
+    cookie_token: str | None = Depends(cookie_scheme),
 ) -> str:
     """Require a valid Clerk session and return the verified `sub` (user uuid).
 

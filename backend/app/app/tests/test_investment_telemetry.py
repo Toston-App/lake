@@ -221,7 +221,9 @@ async def test_successes_remain_sampled(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_partial_success_bypasses_sampling(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_partial_success_bypasses_sampling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake = FakeAxiomClient()
     monkeypatch.setattr(wide_events, "get_axiom_client", lambda: fake)
     middleware = make_middleware(sample_rate=0.0)
@@ -264,3 +266,21 @@ async def test_unexpected_investment_error_omits_exception_message(
     assert "message" not in error
     assert sensitive_value not in str(fake.events[0])
     assert fake.events[0]["investment"]["failure"]["kind"] == "unexpected"
+
+
+@pytest.mark.asyncio
+async def test_axiom_failure_does_not_break_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failing_client = AsyncMock()
+    failing_client.log.side_effect = RuntimeError("telemetry unavailable")
+    monkeypatch.setattr(wide_events, "get_axiom_client", lambda: failing_client)
+    middleware = make_middleware(sample_rate=1.0)
+
+    response = await middleware.dispatch(
+        make_request(),
+        AsyncMock(return_value=Response(status_code=200)),
+    )
+
+    assert response.status_code == 200
+    failing_client.log.assert_awaited_once()

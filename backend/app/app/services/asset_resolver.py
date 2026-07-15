@@ -1,6 +1,5 @@
-from dataclasses import dataclass
 import re
-from typing import Optional
+from dataclasses import dataclass
 
 from fastapi import HTTPException
 
@@ -17,7 +16,7 @@ class ResolvedAsset:
     market: Market
     currency: Currency
     country: str
-    coingecko_id: Optional[str] = None
+    coingecko_id: str | None = None
 
 
 class AssetResolverService:
@@ -37,7 +36,9 @@ class AssetResolverService:
                 break
 
         if exact_match is None:
-            raise HTTPException(status_code=404, detail=f"External asset '{ticker}' not found")
+            raise HTTPException(
+                status_code=404, detail=f"External asset '{ticker}' not found"
+            )
 
         symbol = (exact_match.get("symbol") or "").upper().strip()
         name = (exact_match.get("name") or symbol).strip()
@@ -53,9 +54,13 @@ class AssetResolverService:
         clean_symbol = symbol.replace(".MX", "")
 
         if not re.fullmatch(r"[A-Z0-9.^=-]{1,32}", clean_symbol):
-            raise HTTPException(status_code=502, detail="Invalid symbol from asset provider")
+            raise HTTPException(
+                status_code=502, detail="Invalid symbol from asset provider"
+            )
         if not name or len(name) > 255:
-            raise HTTPException(status_code=502, detail="Invalid name from asset provider")
+            raise HTTPException(
+                status_code=502, detail="Invalid name from asset provider"
+            )
 
         if is_mexican:
             market = Market.BMV
@@ -96,7 +101,9 @@ class AssetResolverService:
                 break
 
         if exact_match is None:
-            raise HTTPException(status_code=404, detail=f"External asset '{cg_id}' not found")
+            raise HTTPException(
+                status_code=404, detail=f"External asset '{cg_id}' not found"
+            )
 
         symbol = (exact_match.get("symbol") or "").upper().strip()
         name = (exact_match.get("name") or symbol).strip()

@@ -1,6 +1,5 @@
 from datetime import datetime
-import math
-from typing import Optional
+from decimal import Decimal
 
 from pydantic import BaseModel, root_validator, validator
 
@@ -10,17 +9,17 @@ from app.schemas.asset import ExternalAssetProvider
 
 # Shared properties
 class HoldingBase(BaseModel):
-    asset_id: Optional[int] = None
-    account_id: Optional[int] = None
-    quantity: Optional[float] = 0.0
-    avg_cost_basis: Optional[float] = 0.0
-    cost_currency: Optional[Currency] = Currency.USD
-    total_invested: Optional[float] = 0.0
+    asset_id: int | None = None
+    account_id: int | None = None
+    quantity: Decimal | None = Decimal("0")
+    avg_cost_basis: Decimal | None = Decimal("0")
+    cost_currency: Currency | None = Currency.USD
+    total_invested: Decimal | None = Decimal("0")
 
     @validator("quantity", "avg_cost_basis", "total_invested", always=True)
     def round_floats(cls, v):
         if v is not None:
-            if not math.isfinite(v):
+            if not v.is_finite():
                 raise ValueError("Value must be finite")
             return round(v, 6)  # Support fractional shares/crypto
         return v
@@ -37,12 +36,12 @@ class HoldingBase(BaseModel):
 
 # Properties to receive on Holding creation
 class HoldingCreate(HoldingBase):
-    asset_id: Optional[int] = None
+    asset_id: int | None = None
     account_id: int
-    provider: Optional[ExternalAssetProvider] = None
-    external_id: Optional[str] = None
-    quantity: float
-    avg_cost_basis: float
+    provider: ExternalAssetProvider | None = None
+    external_id: str | None = None
+    quantity: Decimal
+    avg_cost_basis: Decimal
     cost_currency: Currency = Currency.USD
 
     @validator("asset_id", "account_id", pre=True)
@@ -73,7 +72,11 @@ class HoldingCreate(HoldingBase):
             return values
 
         required_external_fields = ("provider", "external_id")
-        missing = [field for field in required_external_fields if values.get(field) in (None, "")]
+        missing = [
+            field
+            for field in required_external_fields
+            if values.get(field) in (None, "")
+        ]
         if missing:
             missing_fields = ", ".join(missing)
             raise ValueError(
@@ -88,7 +91,7 @@ class HoldingCreate(HoldingBase):
         cost = values.get("avg_cost_basis")
         if quantity is not None and cost is not None:
             total = quantity * cost
-            if not math.isfinite(total) or total > 1e30:
+            if not total.is_finite() or total > Decimal("1e30"):
                 raise ValueError("Initial invested total is too large")
         return values
 
@@ -97,13 +100,13 @@ class HoldingCreate(HoldingBase):
 class HoldingUpdate(BaseModel):
     """User-editable holding fields; valuations and totals are server-owned."""
 
-    quantity: Optional[float] = None
-    avg_cost_basis: Optional[float] = None
-    cost_currency: Optional[Currency] = None
+    quantity: Decimal | None = None
+    avg_cost_basis: Decimal | None = None
+    cost_currency: Currency | None = None
 
     @validator("quantity", "avg_cost_basis")
     def validate_financial_value(cls, v):
-        if v is not None and (not math.isfinite(v) or v < 0 or v > 1e15):
+        if v is not None and (not v.is_finite() or v < 0 or v > Decimal("1e15")):
             raise ValueError("Value must be finite and between 0 and 1e15")
         return round(v, 6) if v is not None else v
 
@@ -117,12 +120,12 @@ class HoldingInDBBase(HoldingBase):
     owner_id: int
     account_id: int
     asset_id: int
-    quantity: float
-    current_value: float
-    current_value_mxn: float
-    current_value_usd: float
-    unrealized_gain_loss: float
-    unrealized_gain_loss_pct: float
+    quantity: Decimal
+    current_value: Decimal
+    current_value_mxn: Decimal
+    current_value_usd: Decimal
+    unrealized_gain_loss: Decimal
+    unrealized_gain_loss_pct: Decimal
 
     class Config:
         orm_mode = True
@@ -135,26 +138,26 @@ class Holding(HoldingInDBBase):
 
 # Properties stored in DB
 class HoldingInDB(HoldingInDBBase):
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # Holding with asset details (for rich responses)
 class HoldingWithAsset(Holding):
     # Asset details
-    symbol: Optional[str] = None
-    asset_name: Optional[str] = None
-    asset_class: Optional[AssetClass] = None
-    asset_type: Optional[AssetType] = None
-    asset_currency: Optional[Currency] = None
-    market: Optional[Market] = None
-    sector: Optional[str] = None
-    country: Optional[str] = None
-    
+    symbol: str | None = None
+    asset_name: str | None = None
+    asset_class: AssetClass | None = None
+    asset_type: AssetType | None = None
+    asset_currency: Currency | None = None
+    market: Market | None = None
+    sector: str | None = None
+    country: str | None = None
+
     # Current price
-    current_price: Optional[float] = None
-    price_change: Optional[float] = None
-    price_change_percent: Optional[float] = None
+    current_price: Decimal | None = None
+    price_change: Decimal | None = None
+    price_change_percent: Decimal | None = None
 
 
 class HoldingDeletionResponse(BaseModel):

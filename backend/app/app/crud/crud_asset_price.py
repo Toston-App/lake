@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
-from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
 
@@ -28,7 +28,7 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
 
     async def get_latest_by_asset(
         self, db: AsyncSession, *, asset_id: int
-    ) -> Optional[AssetPrice]:
+    ) -> AssetPrice | None:
         """Get the most recent price for an asset."""
         result = await db.execute(
             select(self.model)
@@ -41,15 +41,28 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
     async def get_latest_prices(
         self, db: AsyncSession, *, asset_ids: list[int]
     ) -> dict[int, AssetPrice]:
-        """Get the most recent price for multiple assets."""
-        # This is a simple approach; for large numbers of assets,
-        # a more optimized query would be needed
-        prices = {}
-        for asset_id in asset_ids:
-            price = await self.get_latest_by_asset(db, asset_id=asset_id)
-            if price:
-                prices[asset_id] = price
-        return prices
+        """Get the most recent price for multiple assets in one query."""
+        if not asset_ids:
+            return {}
+        ranked = (
+            select(
+                AssetPrice.id.label("price_id"),
+                func.row_number()
+                .over(
+                    partition_by=AssetPrice.asset_id,
+                    order_by=AssetPrice.fetched_at.desc(),
+                )
+                .label("position"),
+            )
+            .filter(AssetPrice.asset_id.in_(asset_ids))
+            .subquery()
+        )
+        result = await db.execute(
+            select(AssetPrice)
+            .join(ranked, ranked.c.price_id == AssetPrice.id)
+            .filter(ranked.c.position == 1)
+        )
+        return {price.asset_id: price for price in result.scalars().all()}
 
     async def is_stale(
         self, db: AsyncSession, *, asset_id: int, max_age_minutes: int = 15
@@ -58,7 +71,7 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
         latest = await self.get_latest_by_asset(db, asset_id=asset_id)
         if not latest:
             return True
-        
+
         cutoff = datetime.utcnow() - timedelta(minutes=max_age_minutes)
         return latest.fetched_at.replace(tzinfo=None) < cutoff
 
@@ -68,7 +81,7 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
         *,
         asset_id: int,
         start_date: datetime,
-        end_date: Optional[datetime] = None,
+        end_date: datetime | None = None,
         limit: int = 100,
     ) -> list[AssetPrice]:
         """Get historical prices for an asset."""
@@ -76,10 +89,10 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
             AssetPrice.asset_id == asset_id,
             AssetPrice.fetched_at >= start_date,
         )
-        
+
         if end_date:
             query = query.filter(AssetPrice.fetched_at <= end_date)
-        
+
         query = query.order_by(AssetPrice.fetched_at.desc()).limit(limit)
         result = await db.execute(query)
         return result.scalars().all()
@@ -90,8 +103,8 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
         """Delete prices older than days_to_keep (keeping one per day)."""
         # This is a placeholder - in production, you'd want a more
         # sophisticated approach that keeps daily snapshots
-        cutoff = datetime.utcnow() - timedelta(days=days_to_keep)
-        
+        datetime.utcnow() - timedelta(days=days_to_keep)
+
         # For now, just return 0 as this needs careful implementation
         return 0
 

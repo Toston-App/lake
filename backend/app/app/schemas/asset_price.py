@@ -1,6 +1,5 @@
 from datetime import datetime
-import math
-from typing import Optional
+from decimal import Decimal
 
 from pydantic import BaseModel, root_validator, validator
 
@@ -9,18 +8,18 @@ from app.models.asset import Currency
 
 # Shared properties
 class AssetPriceBase(BaseModel):
-    asset_id: Optional[int] = None
-    price: Optional[float] = None
-    currency: Optional[Currency] = None
-    price_usd: Optional[float] = None
-    price_mxn: Optional[float] = None
-    open_price: Optional[float] = None
-    high_price: Optional[float] = None
-    low_price: Optional[float] = None
-    previous_close: Optional[float] = None
-    volume: Optional[float] = None
-    change: Optional[float] = None
-    change_percent: Optional[float] = None
+    asset_id: int | None = None
+    price: Decimal | None = None
+    currency: Currency | None = None
+    price_usd: Decimal | None = None
+    price_mxn: Decimal | None = None
+    open_price: Decimal | None = None
+    high_price: Decimal | None = None
+    low_price: Decimal | None = None
+    previous_close: Decimal | None = None
+    volume: Decimal | None = None
+    change: Decimal | None = None
+    change_percent: Decimal | None = None
 
     @validator(
         "price",
@@ -33,20 +32,20 @@ class AssetPriceBase(BaseModel):
     )
     def validate_price(cls, value):
         if value is not None and (
-            not math.isfinite(value) or value < 0 or value > 1e15
+            not value.is_finite() or value < 0 or value > Decimal("1e15")
         ):
             raise ValueError("Price must be finite and between 0 and 1e15")
         return value
 
     @validator("volume")
     def validate_volume(cls, value):
-        if value is not None and (not math.isfinite(value) or value < 0):
+        if value is not None and (not value.is_finite() or value < 0):
             raise ValueError("Volume must be finite and non-negative")
         return value
 
     @validator("change", "change_percent")
     def validate_change(cls, value):
-        if value is not None and not math.isfinite(value):
+        if value is not None and not value.is_finite():
             raise ValueError("Change values must be finite")
         return value
 
@@ -57,10 +56,10 @@ class AssetPriceBase(BaseModel):
 # Properties to receive on AssetPrice creation
 class AssetPriceCreate(AssetPriceBase):
     asset_id: int
-    price: float
+    price: Decimal
     currency: Currency
-    price_usd: float
-    price_mxn: float
+    price_usd: Decimal
+    price_mxn: Decimal
 
     @root_validator(skip_on_failure=True)
     def required_prices_must_be_positive(cls, values):
@@ -79,10 +78,10 @@ class AssetPriceUpdate(AssetPriceBase):
 class AssetPriceInDBBase(AssetPriceBase):
     id: int
     asset_id: int
-    price: float
+    price: Decimal
     currency: Currency
-    price_usd: float
-    price_mxn: float
+    price_usd: Decimal
+    price_mxn: Decimal
     fetched_at: datetime
 
     class Config:
@@ -96,18 +95,18 @@ class AssetPrice(AssetPriceInDBBase):
 
 # Properties stored in DB
 class AssetPriceInDB(AssetPriceInDBBase):
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
 
 # Current price response (simplified)
 class CurrentPrice(BaseModel):
     symbol: str
-    price: float
+    price: Decimal
     currency: Currency
-    price_usd: float
-    price_mxn: float
-    change: Optional[float] = None
-    change_percent: Optional[float] = None
+    price_usd: Decimal
+    price_mxn: Decimal
+    change: Decimal | None = None
+    change_percent: Decimal | None = None
     fetched_at: datetime
 
 

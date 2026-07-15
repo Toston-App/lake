@@ -1,11 +1,13 @@
 """
 Portfolio analytics endpoints for the Investment Dashboard.
 """
+
 from collections import defaultdict
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
@@ -23,7 +25,7 @@ from app.schemas.portfolio import (
     TopHolding,
     TopHoldingsResponse,
 )
-from app.services.currency_converter import CurrencyConverter
+from app.services.currency_converter import CurrencyConverter, CurrencyRateUnavailable
 from app.utilities.investment_telemetry import (
     begin_investment_stage,
     complete_investment_event,
@@ -32,6 +34,16 @@ from app.utilities.investment_telemetry import (
 )
 
 router = APIRouter()
+ZERO = Decimal("0")
+
+
+async def _trusted_usd_mxn_rate() -> Decimal:
+    try:
+        return await CurrencyConverter.get_usd_to_mxn_rate()
+    except CurrencyRateUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="A current USD/MXN rate is unavailable"
+        ) from exc
 
 
 @router.get("/summary", response_model=PortfolioSummary)
@@ -50,14 +62,14 @@ async def get_portfolio_summary(
 
     # Get exchange rate for currency conversion
     with investment_stage(request, "fx_lookup"):
-        usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
+        usd_mxn_rate = await _trusted_usd_mxn_rate()
     begin_investment_stage(request, "aggregation")
 
-    total_value_usd = 0.0
-    total_value_mxn = 0.0
-    total_invested_usd = 0.0
-    total_invested_mxn = 0.0
-    total_gain_loss = 0.0
+    total_value_usd = ZERO
+    total_value_mxn = ZERO
+    total_invested_usd = ZERO
+    total_invested_mxn = ZERO
+    total_gain_loss = ZERO
 
     for holding in holdings:
         total_value_usd += holding.current_value_usd
@@ -69,17 +81,24 @@ async def get_portfolio_summary(
             total_invested_mxn += holding.total_invested
 
     # Calculate combined totals (all investments converted to single currency)
-    total_invested_combined_usd = total_invested_usd + (total_invested_mxn / usd_mxn_rate)
-    total_invested_combined_mxn = (total_invested_usd * usd_mxn_rate) + total_invested_mxn
+    total_invested_combined_usd = total_invested_usd + (
+        total_invested_mxn / usd_mxn_rate
+    )
+    total_invested_combined_mxn = (
+        total_invested_usd * usd_mxn_rate
+    ) + total_invested_mxn
 
     total_gain_loss = total_value_usd - total_invested_combined_usd
     # Calculate total percentage gain/loss
-    total_gain_loss_pct = 0.0
+    total_gain_loss_pct = ZERO
     if total_invested_combined_usd > 0:
-        total_gain_loss_pct = ((total_value_usd - total_invested_combined_usd) / total_invested_combined_usd ) * 100
+        total_gain_loss_pct = (
+            (total_value_usd - total_invested_combined_usd)
+            / total_invested_combined_usd
+        ) * 100
 
     # Count unique assets
-    asset_ids = set(h.asset_id for h in holdings)
+    asset_ids = {h.asset_id for h in holdings}
 
     complete_investment_stage(request, "aggregation")
     complete_investment_event(
@@ -110,7 +129,7 @@ async def get_allocation_by_class(
 ) -> Any:
     """
     Get portfolio allocation breakdown by asset class.
-    
+
     Returns allocation percentages for:
     - Equities (stocks, ETFs)
     - Fixed Income (bonds, CETES, treasuries)
@@ -125,10 +144,10 @@ async def get_allocation_by_class(
 
     # Group holdings by asset class
     class_totals: dict[AssetClass, dict] = defaultdict(
-        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
+        lambda: {"usd": ZERO, "mxn": ZERO, "count": 0}
     )
-    total_usd = 0.0
-    total_mxn = 0.0
+    total_usd = ZERO
+    total_mxn = ZERO
 
     for holding in holdings:
         asset = holding.asset
@@ -143,8 +162,8 @@ async def get_allocation_by_class(
     breakdown = {}
 
     for asset_class in AssetClass:
-        data = class_totals.get(asset_class, {"usd": 0.0, "mxn": 0.0, "count": 0})
-        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
+        data = class_totals.get(asset_class, {"usd": ZERO, "mxn": ZERO, "count": 0})
+        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else ZERO
 
         item = AllocationItem(
             name=asset_class.name.replace("_", " ").title(),
@@ -188,7 +207,7 @@ async def get_allocation_by_currency(
 ) -> Any:
     """
     Get portfolio allocation breakdown by currency exposure.
-    
+
     Shows how much of the portfolio is exposed to USD vs MXN denominated assets.
     """
     with investment_stage(request, "database_query"):
@@ -199,10 +218,10 @@ async def get_allocation_by_currency(
 
     # Group by currency
     currency_totals: dict[Currency, dict] = defaultdict(
-        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
+        lambda: {"usd": ZERO, "mxn": ZERO, "count": 0}
     )
-    total_usd = 0.0
-    total_mxn = 0.0
+    total_usd = ZERO
+    total_mxn = ZERO
 
     for holding in holdings:
         asset = holding.asset
@@ -216,8 +235,8 @@ async def get_allocation_by_currency(
     breakdown = {}
 
     for currency in Currency:
-        data = currency_totals.get(currency, {"usd": 0.0, "mxn": 0.0, "count": 0})
-        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
+        data = currency_totals.get(currency, {"usd": ZERO, "mxn": ZERO, "count": 0})
+        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else ZERO
 
         item = AllocationItem(
             name=f"{currency.value} Assets",
@@ -256,7 +275,7 @@ async def get_allocation_by_market(
 ) -> Any:
     """
     Get portfolio allocation breakdown by market.
-    
+
     Shows distribution across:
     - BMV (Mexican Stock Exchange)
     - NYSE (New York Stock Exchange)
@@ -271,10 +290,10 @@ async def get_allocation_by_market(
     begin_investment_stage(request, "aggregation")
 
     market_totals: dict[Market, dict] = defaultdict(
-        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
+        lambda: {"usd": ZERO, "mxn": ZERO, "count": 0}
     )
-    total_usd = 0.0
-    total_mxn = 0.0
+    total_usd = ZERO
+    total_mxn = ZERO
 
     for holding in holdings:
         asset = holding.asset
@@ -286,17 +305,19 @@ async def get_allocation_by_market(
 
     allocations = []
     for market in Market:
-        data = market_totals.get(market, {"usd": 0.0, "mxn": 0.0, "count": 0})
-        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
+        data = market_totals.get(market, {"usd": ZERO, "mxn": ZERO, "count": 0})
+        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else ZERO
 
-        allocations.append(AllocationItem(
-            name=market.name,
-            value=market.value,
-            total_value_usd=round(data["usd"], 2),
-            total_value_mxn=round(data["mxn"], 2),
-            percentage=round(percentage, 2),
-            holdings_count=data["count"],
-        ))
+        allocations.append(
+            AllocationItem(
+                name=market.name,
+                value=market.value,
+                total_value_usd=round(data["usd"], 2),
+                total_value_mxn=round(data["mxn"], 2),
+                percentage=round(percentage, 2),
+                holdings_count=data["count"],
+            )
+        )
 
     complete_investment_stage(request, "aggregation")
     complete_investment_event(
@@ -319,7 +340,7 @@ async def get_allocation_by_type(
 ) -> Any:
     """
     Get portfolio allocation breakdown by specific asset type.
-    
+
     More granular than by-class, showing:
     - Stocks, ETFs
     - Bonds, CETES, Treasuries
@@ -333,10 +354,10 @@ async def get_allocation_by_type(
     begin_investment_stage(request, "aggregation")
 
     type_totals: dict[AssetType, dict] = defaultdict(
-        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
+        lambda: {"usd": ZERO, "mxn": ZERO, "count": 0}
     )
-    total_usd = 0.0
-    total_mxn = 0.0
+    total_usd = ZERO
+    total_mxn = ZERO
 
     for holding in holdings:
         asset = holding.asset
@@ -348,20 +369,22 @@ async def get_allocation_by_type(
 
     allocations = []
     for asset_type in AssetType:
-        data = type_totals.get(asset_type, {"usd": 0.0, "mxn": 0.0, "count": 0})
+        data = type_totals.get(asset_type, {"usd": ZERO, "mxn": ZERO, "count": 0})
         if data["count"] == 0:
             continue  # Skip types with no holdings
 
-        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
+        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else ZERO
 
-        allocations.append(AllocationItem(
-            name=asset_type.name.replace("_", " ").title(),
-            value=asset_type.value,
-            total_value_usd=round(data["usd"], 2),
-            total_value_mxn=round(data["mxn"], 2),
-            percentage=round(percentage, 2),
-            holdings_count=data["count"],
-        ))
+        allocations.append(
+            AllocationItem(
+                name=asset_type.name.replace("_", " ").title(),
+                value=asset_type.value,
+                total_value_usd=round(data["usd"], 2),
+                total_value_mxn=round(data["mxn"], 2),
+                percentage=round(percentage, 2),
+                holdings_count=data["count"],
+            )
+        )
 
     complete_investment_stage(request, "aggregation")
     complete_investment_event(
@@ -384,7 +407,7 @@ async def get_allocation_by_country(
 ) -> Any:
     """
     Get portfolio allocation breakdown by country.
-    
+
     Shows geographic diversification (US, MX, etc.)
     """
     with investment_stage(request, "database_query"):
@@ -394,10 +417,10 @@ async def get_allocation_by_country(
     begin_investment_stage(request, "aggregation")
 
     country_totals: dict[str, dict] = defaultdict(
-        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
+        lambda: {"usd": ZERO, "mxn": ZERO, "count": 0}
     )
-    total_usd = 0.0
-    total_mxn = 0.0
+    total_usd = ZERO
+    total_mxn = ZERO
 
     for holding in holdings:
         asset = holding.asset
@@ -409,17 +432,21 @@ async def get_allocation_by_country(
         total_mxn += holding.current_value_mxn
 
     allocations = []
-    for country, data in sorted(country_totals.items(), key=lambda x: x[1]["usd"], reverse=True):
-        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
+    for country, data in sorted(
+        country_totals.items(), key=lambda x: x[1]["usd"], reverse=True
+    ):
+        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else ZERO
 
-        allocations.append(AllocationItem(
-            name=country,
-            value=country,
-            total_value_usd=round(data["usd"], 2),
-            total_value_mxn=round(data["mxn"], 2),
-            percentage=round(percentage, 2),
-            holdings_count=data["count"],
-        ))
+        allocations.append(
+            AllocationItem(
+                name=country,
+                value=country,
+                total_value_usd=round(data["usd"], 2),
+                total_value_mxn=round(data["mxn"], 2),
+                percentage=round(percentage, 2),
+                holdings_count=data["count"],
+            )
+        )
 
     complete_investment_stage(request, "aggregation")
     complete_investment_event(
@@ -442,7 +469,7 @@ async def get_allocation_by_account(
 ) -> Any:
     """
     Get portfolio allocation breakdown by account.
-    
+
     Aggregates holdings by the account they belong to.
     Each account's total holdings value is shown separately.
     """
@@ -461,10 +488,10 @@ async def get_allocation_by_account(
 
     # Group holdings by account
     account_holdings: dict[int, dict] = defaultdict(
-        lambda: {"usd": 0.0, "mxn": 0.0, "count": 0}
+        lambda: {"usd": ZERO, "mxn": ZERO, "count": 0}
     )
-    total_usd = 0.0
-    total_mxn = 0.0
+    total_usd = ZERO
+    total_mxn = ZERO
 
     for holding in holdings:
         account_id = holding.account_id
@@ -477,28 +504,28 @@ async def get_allocation_by_account(
     # Build allocation items
     allocations = []
     for account_id, data in sorted(
-        account_holdings.items(),
-        key=lambda x: x[1]["usd"],
-        reverse=True
+        account_holdings.items(), key=lambda x: x[1]["usd"], reverse=True
     ):
         if data["usd"] == 0:
             continue
 
-        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else 0.0
+        percentage = (data["usd"] / total_usd * 100) if total_usd > 0 else ZERO
 
         account = account_map.get(account_id)
         name = account.name if account else f"Account {account_id}"
         color = account.color if account else "#168FFF"
 
-        allocations.append(AllocationItem(
-            name=name,
-            color=color,
-            value=str(account_id),
-            total_value_usd=round(data["usd"], 2),
-            total_value_mxn=round(data["mxn"], 2),
-            percentage=round(percentage, 2),
-            holdings_count=data["count"],
-        ))
+        allocations.append(
+            AllocationItem(
+                name=name,
+                color=color,
+                value=str(account_id),
+                total_value_usd=round(data["usd"], 2),
+                total_value_mxn=round(data["mxn"], 2),
+                percentage=round(percentage, 2),
+                holdings_count=data["count"],
+            )
+        )
 
     complete_investment_stage(request, "aggregation")
     complete_investment_event(
@@ -539,20 +566,26 @@ async def get_top_holdings(
     result = []
     for holding in top_holdings:
         asset = holding.asset
-        percentage = (holding.current_value_usd / total_value_usd * 100) if total_value_usd > 0 else 0.0
+        percentage = (
+            (holding.current_value_usd / total_value_usd * 100)
+            if total_value_usd > 0
+            else ZERO
+        )
 
-        result.append(TopHolding(
-            symbol=asset.symbol,
-            name=asset.name,
-            asset_class=asset.asset_class,
-            asset_type=asset.asset_type,
-            quantity=holding.quantity,
-            current_value_usd=round(holding.current_value_usd, 2),
-            current_value_mxn=round(holding.current_value_mxn, 2),
-            percentage_of_portfolio=round(percentage, 2),
-            gain_loss=round(holding.unrealized_gain_loss, 2),
-            gain_loss_pct=round(holding.unrealized_gain_loss_pct, 2),
-        ))
+        result.append(
+            TopHolding(
+                symbol=asset.symbol,
+                name=asset.name,
+                asset_class=asset.asset_class,
+                asset_type=asset.asset_type,
+                quantity=holding.quantity,
+                current_value_usd=round(holding.current_value_usd, 2),
+                current_value_mxn=round(holding.current_value_mxn, 2),
+                percentage_of_portfolio=round(percentage, 2),
+                gain_loss=round(holding.unrealized_gain_loss, 2),
+                gain_loss_pct=round(holding.unrealized_gain_loss_pct, 2),
+            )
+        )
 
     complete_investment_stage(request, "ranking")
     complete_investment_event(

@@ -1,20 +1,22 @@
 import logging
-import secrets
-import random
 import os
+import random
+import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from starlette.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination as PaginationProvider
+from starlette.middleware.cors import CORSMiddleware
 
 from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
 from app.api.api_v3.api import api_router as api_router_v3
 from app.core.config import settings
-from app.utilities.axiom import initialize_axiom, get_axiom_client
+from app.services.provider_errors import ProviderUnavailable
+from app.utilities.axiom import get_axiom_client, initialize_axiom
 from app.utilities.wide_events import WideEventsMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +32,19 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+@app.exception_handler(ProviderUnavailable)
+async def provider_unavailable_handler(
+    _request: Request, _exc: ProviderUnavailable
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "Market data is temporarily unavailable"},
+        headers={"Retry-After": "30"},
+    )
+
+
 PaginationProvider(app)
 
 
@@ -41,7 +56,9 @@ async def startup_event():
 
     # Initialize Axiom logging with wide events
     if settings.AXIOM_API_TOKEN:
-        logger.info(f"📊 Initializing Axiom logging to dataset: {settings.AXIOM_DATASET}")
+        logger.info(
+            f"📊 Initializing Axiom logging to dataset: {settings.AXIOM_DATASET}"
+        )
         axiom_client = initialize_axiom(
             dataset=settings.AXIOM_DATASET,
             api_token=settings.AXIOM_API_TOKEN,
@@ -52,7 +69,9 @@ async def startup_event():
         await axiom_client.start()
         logger.info("✅ Axiom logging initialized successfully")
     else:
-        logger.warning("⚠️  Axiom API token not configured - logging will be to stdout only")
+        logger.warning(
+            "⚠️  Axiom API token not configured - logging will be to stdout only"
+        )
 
 
 @app.on_event("shutdown")
@@ -73,12 +92,14 @@ app.add_middleware(
     WideEventsMiddleware,
     service_name=settings.PROJECT_NAME,
     service_version="0.9.0",
-    deployment_id=settings.DEPLOYMENT_ID or os.getenv("RAILWAY_DEPLOYMENT_ID"),  # Auto-detect Railway
+    deployment_id=settings.DEPLOYMENT_ID
+    or os.getenv("RAILWAY_DEPLOYMENT_ID"),  # Auto-detect Railway
     region=settings.REGION or os.getenv("RAILWAY_REGION"),
     environment=os.getenv("ENVIRONMENT", "production"),
     sample_rate=settings.AXIOM_SAMPLE_RATE,
     slow_request_threshold_ms=settings.AXIOM_SLOW_REQUEST_THRESHOLD_MS,
 )
+
 
 @app.middleware("http")
 async def add_csp_header(request: Request, call_next):
@@ -106,6 +127,7 @@ async def add_csp_header(request: Request, call_next):
 
     return response
 
+
 security = HTTPBasic()
 
 # Note: Basic request logging is now handled by WideEventsMiddleware
@@ -116,7 +138,6 @@ security = HTTPBasic()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "*",
         "https://www.cleverbill.ing",
         "https://cleverbill.ing",
         "https://api.cleverbill.ing",
@@ -160,23 +181,24 @@ def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
 
 
 @app.get("/docs", include_in_schema=False)
-async def get_swagger_documentation(username: str = Depends(get_current_username)):
+async def get_swagger_documentation(_username: str = Depends(get_current_username)):
     return get_swagger_ui_html(openapi_url="/openapi.json", title="docs")
 
 
 @app.get("/redoc", include_in_schema=False)
-async def get_redoc_documentation(username: str = Depends(get_current_username)):
+async def get_redoc_documentation(_username: str = Depends(get_current_username)):
     return get_redoc_html(openapi_url="/openapi.json", title="docs")
 
 
 @app.get("/openapi.json", include_in_schema=False)
-async def openapi(username: str = Depends(get_current_username)):
+async def openapi(_username: str = Depends(get_current_username)):
     return get_openapi(title=app.title, version=app.version, routes=app.routes)
 
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
 app.include_router(api_router_v3, prefix=settings.API_V3_STR)
+
 
 @app.get("/api/v1/utils/health-check/")
 def health_check():

@@ -1,24 +1,19 @@
-from time import monotonic
+from math import ceil
 
 from fastapi import HTTPException
 
-
-_last_calls: dict[str, float] = {}
-_MAX_TRACKED_KEYS = 10_000
+from app.utilities.redis import r
 
 
-def enforce_investment_rate_limit(key: str, seconds: float) -> None:
-    """Apply a small per-process guard to costly investment operations."""
-    now = monotonic()
-    if len(_last_calls) >= _MAX_TRACKED_KEYS:
-        cutoff = now - 3600
-        for stale_key, called_at in list(_last_calls.items()):
-            if called_at < cutoff:
-                _last_calls.pop(stale_key, None)
-        while len(_last_calls) >= _MAX_TRACKED_KEYS:
-            _last_calls.pop(next(iter(_last_calls)))
-
-    last_call = _last_calls.get(key)
-    if last_call is not None and now - last_call < seconds:
+async def enforce_investment_rate_limit(key: str, seconds: float) -> None:
+    """Atomically throttle costly operations across workers and replicas."""
+    redis_key = f"rate-limit:investments:{key}"
+    try:
+        acquired = await r.set(redis_key, "1", nx=True, ex=max(1, ceil(seconds)))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Investment request throttling is temporarily unavailable",
+        ) from exc
+    if not acquired:
         raise HTTPException(status_code=429, detail="Too many external data requests")
-    _last_calls[key] = now

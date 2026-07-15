@@ -1,6 +1,5 @@
 from datetime import datetime
-import math
-from typing import Optional
+from decimal import Decimal
 
 from pydantic import BaseModel, root_validator, validator
 
@@ -11,17 +10,17 @@ from app.schemas.asset import ExternalAssetProvider
 
 # Shared properties
 class InvestmentTransactionBase(BaseModel):
-    holding_id: Optional[int] = None
-    account_id: Optional[int] = None
-    transaction_type: Optional[TransactionType] = None
-    quantity: Optional[float] = None
-    price_per_unit: Optional[float] = None
-    currency: Optional[Currency] = Currency.USD
-    fees: Optional[float] = 0.0
-    exchange_rate_to_usd: Optional[float] = None
-    exchange_rate_to_mxn: Optional[float] = None
-    notes: Optional[str] = None
-    executed_at: Optional[datetime] = None
+    holding_id: int | None = None
+    account_id: int | None = None
+    transaction_type: TransactionType | None = None
+    quantity: Decimal | None = None
+    price_per_unit: Decimal | None = None
+    currency: Currency | None = Currency.USD
+    fees: Decimal | None = Decimal("0")
+    exchange_rate_to_usd: Decimal | None = None
+    exchange_rate_to_mxn: Decimal | None = None
+    notes: str | None = None
+    executed_at: datetime | None = None
 
     @validator("holding_id", "account_id", pre=True)
     def identifiers_must_be_positive(cls, v):
@@ -32,7 +31,7 @@ class InvestmentTransactionBase(BaseModel):
     @validator("quantity", "price_per_unit", "fees", always=True)
     def round_floats(cls, v):
         if v is not None:
-            if not math.isfinite(v):
+            if not v.is_finite():
                 raise ValueError("Value must be finite")
             return round(v, 6)
         return v
@@ -57,7 +56,7 @@ class InvestmentTransactionBase(BaseModel):
 
     @validator("exchange_rate_to_usd", "exchange_rate_to_mxn")
     def exchange_rate_must_be_positive_and_finite(cls, v):
-        if v is not None and (not math.isfinite(v) or v <= 0 or v > 1e6):
+        if v is not None and (not v.is_finite() or v <= 0 or v > Decimal("1e6")):
             raise ValueError("Exchange rate must be finite and between 0 and 1e6")
         return v
 
@@ -76,8 +75,8 @@ class InvestmentTransactionCreate(InvestmentTransactionBase):
     holding_id: int
     account_id: int
     transaction_type: TransactionType
-    quantity: float
-    price_per_unit: float
+    quantity: Decimal
+    price_per_unit: Decimal
     executed_at: datetime
 
     @validator("executed_at", pre=True)
@@ -94,14 +93,19 @@ class InvestmentTransactionCreate(InvestmentTransactionBase):
         price = values.get("price_per_unit")
         if quantity is not None and price is not None:
             total = quantity * price
-            if not math.isfinite(total) or total > 1e30:
+            if not total.is_finite() or total > Decimal("1e30"):
                 raise ValueError("Transaction total is too large")
+            if (
+                values.get("transaction_type") == TransactionType.SELL
+                and values.get("fees", Decimal("0")) > total
+            ):
+                raise ValueError("Disposal fees cannot exceed gross proceeds")
         return values
 
 
 # Properties to receive on Transaction update
 class InvestmentTransactionUpdate(InvestmentTransactionBase):
-    updated_at: Optional[datetime] = None
+    updated_at: datetime | None = None
 
 
 # Properties shared by models stored in DB
@@ -111,9 +115,9 @@ class InvestmentTransactionInDBBase(InvestmentTransactionBase):
     account_id: int
     holding_id: int
     transaction_type: TransactionType
-    quantity: float
-    price_per_unit: float
-    total_amount: float
+    quantity: Decimal
+    price_per_unit: Decimal
+    total_amount: Decimal
     executed_at: datetime
 
     class Config:
@@ -127,14 +131,14 @@ class InvestmentTransaction(InvestmentTransactionInDBBase):
 
 # Properties stored in DB
 class InvestmentTransactionInDB(InvestmentTransactionInDBBase):
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # Transaction with asset details
 class InvestmentTransactionWithAsset(InvestmentTransaction):
-    symbol: Optional[str] = None
-    asset_name: Optional[str] = None
+    symbol: str | None = None
+    asset_name: str | None = None
 
 
 class InvestmentTransactionDeletionResponse(BaseModel):
@@ -145,27 +149,28 @@ class InvestmentTransactionDeletionResponse(BaseModel):
 class TransactionWithAssetCreate(BaseModel):
     """
     Create a transaction along with the asset and holding if they don't exist.
-    
+
     This allows users to record a transaction without first manually creating
     an asset and holding.
     """
+
     # Asset identity (required for selected external assets)
-    asset_id: Optional[int] = None
-    provider: Optional[ExternalAssetProvider] = None
-    external_id: Optional[str] = None
+    asset_id: int | None = None
+    provider: ExternalAssetProvider | None = None
+    external_id: str | None = None
 
     # Transaction details
     transaction_type: TransactionType
-    quantity: float
-    price_per_unit: float
-    fees: float = 0.0
+    quantity: Decimal
+    price_per_unit: Decimal
+    fees: Decimal = Decimal("0")
     executed_at: datetime
     account_id: int
-    notes: Optional[str] = None
-    
+    notes: str | None = None
+
     # Optional exchange rates (auto-fetched if not provided)
-    exchange_rate_to_usd: Optional[float] = None
-    exchange_rate_to_mxn: Optional[float] = None
+    exchange_rate_to_usd: Decimal | None = None
+    exchange_rate_to_mxn: Decimal | None = None
 
     @validator("asset_id", "account_id", pre=True)
     def identifiers_must_be_positive(cls, v):
@@ -203,7 +208,7 @@ class TransactionWithAssetCreate(BaseModel):
     @validator("quantity", "price_per_unit", "fees", always=True)
     def round_floats(cls, v):
         if v is not None:
-            if not math.isfinite(v):
+            if not v.is_finite():
                 raise ValueError("Value must be finite")
             return round(v, 6)
         return v
@@ -228,7 +233,7 @@ class TransactionWithAssetCreate(BaseModel):
 
     @validator("exchange_rate_to_usd", "exchange_rate_to_mxn")
     def exchange_rate_must_be_positive_and_finite(cls, v):
-        if v is not None and (not math.isfinite(v) or v <= 0 or v > 1e6):
+        if v is not None and (not v.is_finite() or v <= 0 or v > Decimal("1e6")):
             raise ValueError("Exchange rate must be finite and between 0 and 1e6")
         return v
 
@@ -252,8 +257,13 @@ class TransactionWithAssetCreate(BaseModel):
         price = values.get("price_per_unit")
         if quantity is not None and price is not None:
             total = quantity * price
-            if not math.isfinite(total) or total > 1e30:
+            if not total.is_finite() or total > Decimal("1e30"):
                 raise ValueError("Transaction total is too large")
+            if (
+                values.get("transaction_type") == TransactionType.SELL
+                and values.get("fees", Decimal("0")) > total
+            ):
+                raise ValueError("Disposal fees cannot exceed gross proceeds")
         return values
 
     class Config:
@@ -262,6 +272,7 @@ class TransactionWithAssetCreate(BaseModel):
 
 class TransactionWithAssetResponse(BaseModel):
     """Response after creating a transaction with asset info."""
+
     transaction: "InvestmentTransaction"
     asset_created: bool
     holding_created: bool

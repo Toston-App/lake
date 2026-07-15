@@ -120,7 +120,9 @@ def start_investment_event(
     operation = operation or _operation_name(request)
     investment = event.setdefault("investment", {})
     investment.setdefault("operation", operation)
-    investment.setdefault("resource", resource or _RESOURCE_BY_OPERATION.get(operation, "unknown"))
+    investment.setdefault(
+        "resource", resource or _RESOURCE_BY_OPERATION.get(operation, "unknown")
+    )
     investment.setdefault("outcome", "in_progress")
     investment.setdefault("current_stage", "access")
     investment.setdefault("completed_stages", [])

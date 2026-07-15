@@ -1,10 +1,8 @@
-from __future__ import with_statement
-
 import os
+from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
-from logging.config import fileConfig
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -34,11 +32,15 @@ def get_url():
     user = os.getenv("POSTGRES_USER", "postgres")
     password = os.getenv("POSTGRES_PASSWORD", "")
     server = os.getenv("POSTGRES_SERVER", "db")
-    TEST_MODE = os.getenv("TEST_MODE", 'False')
-    if TEST_MODE == 'True':
-        db = "postgres"
-    else:
-        db = os.getenv("POSTGRES_DB", "app")
+    db = os.getenv("POSTGRES_DB", "app")
+    test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
+    normalized_db = db.strip().lower()
+    if test_mode and not (
+        normalized_db.startswith("test_") or normalized_db.endswith("_test")
+    ):
+        raise RuntimeError(
+            "TEST_MODE migrations require an explicitly test-only database name"
+        )
     return f"postgresql://{user}:{password}@{server}/{db}"
 
 
@@ -73,7 +75,9 @@ def run_migrations_online():
     configuration = config.get_section(config.config_ini_section)
     configuration["sqlalchemy.url"] = get_url()
     connectable = engine_from_config(
-        configuration, prefix="sqlalchemy.", poolclass=pool.NullPool,
+        configuration,
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
     )
 
     with connectable.connect() as connection:

@@ -1,8 +1,9 @@
 """
 Holdings management endpoints for the Investment Dashboard.
 """
-import math
+
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -21,6 +22,7 @@ from app.schemas.holding import (
     HoldingWithAsset,
 )
 from app.services.asset_resolver import AssetResolverService
+from app.services.currency_converter import CurrencyConverter, CurrencyRateUnavailable
 from app.services.investment_rate_limiter import enforce_investment_rate_limit
 from app.utilities.investment_telemetry import (
     add_investment_context,
@@ -30,6 +32,15 @@ from app.utilities.investment_telemetry import (
 )
 
 router = APIRouter()
+
+
+async def _trusted_usd_mxn_rate() -> Decimal:
+    try:
+        return await CurrencyConverter.get_usd_to_mxn_rate()
+    except CurrencyRateUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail="A current USD/MXN rate is unavailable"
+        ) from exc
 
 
 @router.get("", response_model=list[HoldingWithAsset])
@@ -45,7 +56,7 @@ async def list_holdings(
 ) -> Any:
     """
     List all holdings for the current user.
-    
+
     Optional filters:
     - account_id: Filter by specific account
     - asset_class: Filter by EQUITIES, FIXED_INCOME, CRYPTO, or FUNDS
@@ -80,13 +91,16 @@ async def list_holdings(
                 limit=limit,
             )
 
+    latest_prices = await crud.asset_price.get_latest_prices(
+        db, asset_ids=[holding.asset_id for holding in holdings]
+    )
+
     # Enrich with asset details
     result = []
     for holding in holdings:
         asset = holding.asset
 
-        # Get latest price
-        latest_price = await crud.asset_price.get_latest_by_asset(db, asset_id=asset.id)
+        latest_price = latest_prices.get(asset.id)
 
         holding_data = HoldingWithAsset(
             id=holding.id,
@@ -134,7 +148,7 @@ async def create_holding(
 ) -> Any:
     """
     Create a new holding.
-    
+
     If a holding already exists for this asset in the account, use PUT to update it.
     """
     # Verify account belongs to user
@@ -153,7 +167,9 @@ async def create_holding(
         raise HTTPException(status_code=404, detail="Account not found")
 
     if holding_in.quantity <= 0:
-        fail_investment_event(request, reason="initial_quantity_not_positive", stage="validation")
+        fail_investment_event(
+            request, reason="initial_quantity_not_positive", stage="validation"
+        )
         raise HTTPException(
             status_code=422, detail="Initial holding quantity must be positive"
         )
@@ -167,21 +183,27 @@ async def create_holding(
             raise HTTPException(status_code=404, detail="Asset not found")
     else:
         if not holding_in.provider or not holding_in.external_id:
-            fail_investment_event(request, reason="asset_identity_missing", stage="validation")
+            fail_investment_event(
+                request, reason="asset_identity_missing", stage="validation"
+            )
             raise HTTPException(
                 status_code=422,
                 detail="Provide asset_id or provider+external_id",
             )
 
         with investment_stage(request, "rate_limit"):
-            enforce_investment_rate_limit(
+            await enforce_investment_rate_limit(
                 f"user:{current_user.id}:resolve-asset", 1.0
             )
         with investment_stage(request, "asset_resolution"):
             if holding_in.provider.value == "yahoo":
-                resolved_asset = await AssetResolverService.resolve_from_yahoo(holding_in.external_id)
+                resolved_asset = await AssetResolverService.resolve_from_yahoo(
+                    holding_in.external_id
+                )
             else:
-                resolved_asset = await AssetResolverService.resolve_from_coingecko(holding_in.external_id)
+                resolved_asset = await AssetResolverService.resolve_from_coingecko(
+                    holding_in.external_id
+                )
         add_investment_context(request, symbol=resolved_asset.symbol)
 
         if resolved_asset.coingecko_id:
@@ -196,7 +218,9 @@ async def create_holding(
                     detail="External asset symbol conflicts with an existing global asset",
                 )
         else:
-            existing_asset = await crud.asset.get_by_symbol(db, symbol=resolved_asset.symbol)
+            existing_asset = await crud.asset.get_by_symbol(
+                db, symbol=resolved_asset.symbol
+            )
         if existing_asset:
             if (
                 existing_asset.asset_type != resolved_asset.asset_type
@@ -234,6 +258,7 @@ async def create_holding(
 
     holding_in.asset_id = asset.id
     add_investment_context(request, asset_id=asset.id, symbol=asset.symbol)
+    usd_mxn_rate = await _trusted_usd_mxn_rate()
 
     # Check if holding already exists in this account
     existing = await crud.holding.get_by_account_and_asset(
@@ -243,7 +268,9 @@ async def create_holding(
         owner_id=current_user.id,
     )
     if existing:
-        fail_investment_event(request, reason="holding_already_exists", stage="identity_check")
+        fail_investment_event(
+            request, reason="holding_already_exists", stage="identity_check"
+        )
         raise HTTPException(
             status_code=409,
             detail=f"You already have a holding for {asset.symbol} in this account.",
@@ -251,11 +278,18 @@ async def create_holding(
 
     try:
         holding = await crud.holding.create_with_owner(
-            db, obj_in=holding_in, owner_id=current_user.id, commit=False
+            db,
+            obj_in=holding_in,
+            owner_id=current_user.id,
+            asset_currency=asset.currency,
+            usd_mxn_rate=usd_mxn_rate,
+            commit=False,
         )
     except IntegrityError:
         await db.rollback()
-        fail_investment_event(request, reason="holding_identity_conflict", stage="database_write")
+        fail_investment_event(
+            request, reason="holding_identity_conflict", stage="database_write"
+        )
         raise HTTPException(
             status_code=409,
             detail="A holding for this asset already exists in the account",
@@ -344,7 +378,7 @@ async def update_holding(
 ) -> Any:
     """
     Update a holding (quantity, cost basis, etc.)
-    
+
     For recording buy/sell transactions, use the transactions endpoint instead.
     """
     add_investment_context(request, holding_id=holding_id)
@@ -368,22 +402,28 @@ async def update_holding(
         asset_id=holding.asset_id,
     )
 
-    quantity = holding_in.quantity if holding_in.quantity is not None else holding.quantity
+    quantity = (
+        holding_in.quantity if holding_in.quantity is not None else holding.quantity
+    )
     avg_cost_basis = (
         holding_in.avg_cost_basis
         if holding_in.avg_cost_basis is not None
         else holding.avg_cost_basis
     )
     if holding_in.quantity is not None or holding_in.avg_cost_basis is not None:
+        usd_mxn_rate = await _trusted_usd_mxn_rate()
         total_invested = quantity * avg_cost_basis
-        if not math.isfinite(total_invested) or total_invested > 1e30:
-            fail_investment_event(request, reason="unsafe_holding_value", stage="validation")
+        if not total_invested.is_finite() or total_invested > Decimal("1e30"):
+            fail_investment_event(
+                request, reason="unsafe_holding_value", stage="validation"
+            )
             raise HTTPException(status_code=422, detail="Invested total is too large")
         holding = await crud.holding.recalculate_cost_basis(
             db,
             holding=holding,
             new_quantity=quantity,
             new_total_invested=total_invested,
+            usd_mxn_rate=usd_mxn_rate,
             commit=False,
         )
 
@@ -428,6 +468,22 @@ async def delete_holding(
 
     asset = await crud.asset.get(db, id=holding.asset_id)
     account_id = holding.account_id
+
+    transactions = await crud.investment_transaction.get_by_holding(
+        db,
+        holding_id=holding.id,
+        owner_id=holding.owner_id,
+        skip=0,
+        limit=1,
+    )
+    if transactions:
+        fail_investment_event(
+            request, reason="holding_has_immutable_ledger", stage="immutability_check"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="A holding with investment transactions cannot be deleted",
+        )
 
     add_investment_context(
         request,

@@ -10,6 +10,8 @@ Key principles:
 5. Tail sampling: always keep errors, slow requests, VIP users
 """
 
+import asyncio
+import logging
 import random
 import time
 import traceback
@@ -24,6 +26,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from app.utilities.axiom import get_axiom_client
+
+logger = logging.getLogger(__name__)
 
 INVESTMENTS_PATH_PREFIX = "/api/v1/investments"
 INVESTMENT_QUERY_ALLOWLIST = {
@@ -129,17 +133,14 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
             "_time": start_timestamp.isoformat() + "Z",
             "request_id": request_id,
             "trace_id": request.headers.get("X-Trace-ID", request_id),
-
             # Service metadata
             "service": self.service_name,
             "version": self.service_version,
             "environment": self.environment,
             "deployment_id": self.deployment_id,
             "region": self.region,
-
             # HTTP request details
             "http": _http_context(request),
-
             # Network details
             "network": {
                 "client_ip": request.client.host if request.client else None,
@@ -174,7 +175,9 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
                 event["error"] = {
                     "type": type(e).__name__,
                     "module": type(e).__module__,
-                    "stack_trace": "".join(traceback.format_list(traceback.extract_tb(e.__traceback__))),
+                    "stack_trace": "".join(
+                        traceback.format_list(traceback.extract_tb(e.__traceback__))
+                    ),
                 }
             else:
                 event["error"] = {
@@ -215,7 +218,10 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
                 # Send to Axiom
                 axiom_client = get_axiom_client()
                 if axiom_client:
-                    await axiom_client.log(event)
+                    try:
+                        await asyncio.wait_for(axiom_client.log(event), timeout=0.25)
+                    except Exception:
+                        logger.exception("Axiom event emission failed")
 
             # Re-raise the error if one occurred
             if error:
@@ -256,7 +262,10 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
 
         # Always keep VIP/Enterprise users
         user_context = event.get("user", {})
-        if user_context.get("is_superuser") or user_context.get("subscription_tier") == "enterprise":
+        if (
+            user_context.get("is_superuser")
+            or user_context.get("subscription_tier") == "enterprise"
+        ):
             event["sampling_reason"] = "vip_user"
             return True
 

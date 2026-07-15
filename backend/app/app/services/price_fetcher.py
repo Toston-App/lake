@@ -1,17 +1,19 @@
 """
 Unified price fetcher service that coordinates all price sources.
 """
+
 import logging
-from datetime import datetime
-from typing import Optional
+from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud
-from app.models.asset import Asset, AssetClass, AssetType, Currency, Market
+from app.models.asset import Asset, AssetClass, Currency
+from app.models.asset_price import AssetPrice
 from app.schemas.asset_price import AssetPriceCreate
 from app.services.coingecko import CoinGeckoService
 from app.services.currency_converter import CurrencyConverter
+from app.services.provider_errors import ProviderUnavailable
 from app.services.yahoo_finance import YahooFinanceService
 
 logger = logging.getLogger(__name__)
@@ -20,26 +22,26 @@ logger = logging.getLogger(__name__)
 class PriceFetcher:
     """
     Unified service for fetching and storing asset prices.
-    
+
     Coordinates between different price sources based on asset type:
     - Stocks/ETFs: Yahoo Finance
     - Crypto: CoinGecko
     - Bonds/CETES/Mutual Funds: Manual entry (no auto-fetch)
     """
-    
+
     @classmethod
     async def fetch_and_store_price(
         cls,
         db: AsyncSession,
         asset: Asset,
-    ) -> Optional[AssetPriceCreate]:
+    ) -> AssetPrice | None:
         """
         Fetch current price for an asset and store it in the database.
-        
+
         Args:
             db: Database session
             asset: Asset to fetch price for
-        
+
         Returns:
             Created AssetPrice or None if fetch fails
         """
@@ -47,10 +49,10 @@ class PriceFetcher:
             price_data = await cls.fetch_price(asset)
         except (ArithmeticError, ValueError) as exc:
             logger.error("Invalid upstream price for %s: %s", asset.symbol, exc)
-            return None
+            raise ProviderUnavailable("Price provider returned invalid data") from exc
         if not price_data:
             return None
-        
+
         try:
             # Price history and all affected valuations are one atomic mutation.
             asset_price = await crud.asset_price.create_with_commit(
@@ -63,12 +65,12 @@ class PriceFetcher:
         except Exception:
             await db.rollback()
             raise
-    
+
     @classmethod
-    async def fetch_price(cls, asset: Asset) -> Optional[AssetPriceCreate]:
+    async def fetch_price(cls, asset: Asset) -> AssetPriceCreate | None:
         """
         Fetch current price for an asset without storing.
-        
+
         Returns AssetPriceCreate schema or None if fetch fails.
         """
         # Determine which service to use based on asset type
@@ -81,34 +83,34 @@ class PriceFetcher:
             logger.info(f"Asset {asset.symbol} requires manual price entry")
             return None
         else:
-            logger.warning(f"Unknown asset class for {asset.symbol}: {asset.asset_class}")
+            logger.warning(
+                f"Unknown asset class for {asset.symbol}: {asset.asset_class}"
+            )
             return None
-    
+
     @classmethod
-    async def _fetch_stock_price(cls, asset: Asset) -> Optional[AssetPriceCreate]:
+    async def _fetch_stock_price(cls, asset: Asset) -> AssetPriceCreate | None:
         """Fetch price for stocks/ETFs from Yahoo Finance."""
-        stock_price = await YahooFinanceService.get_price(
-            asset.symbol, 
-            asset.market
-        )
-        
+        stock_price = await YahooFinanceService.get_price(asset.symbol, asset.market)
+
         if not stock_price:
             return None
-        
+
         # Get exchange rate for currency conversion
         usd_mxn_rate = await CurrencyConverter.get_usd_to_mxn_rate()
-        
+
         # Calculate prices in both currencies
+        native_price = Decimal(str(stock_price.price))
         if stock_price.currency == Currency.USD:
-            price_usd = stock_price.price
-            price_mxn = stock_price.price * usd_mxn_rate
+            price_usd = native_price
+            price_mxn = native_price * usd_mxn_rate
         else:  # MXN
-            price_mxn = stock_price.price
-            price_usd = stock_price.price / usd_mxn_rate
-        
+            price_mxn = native_price
+            price_usd = native_price / usd_mxn_rate
+
         return AssetPriceCreate(
             asset_id=asset.id,
-            price=stock_price.price,
+            price=native_price,
             currency=stock_price.currency,
             price_usd=price_usd,
             price_mxn=price_mxn,
@@ -122,13 +124,12 @@ class PriceFetcher:
         )
 
     @classmethod
-    async def _fetch_crypto_price(cls, asset: Asset) -> Optional[AssetPriceCreate]:
+    async def _fetch_crypto_price(cls, asset: Asset) -> AssetPriceCreate | None:
         """Fetch price for cryptocurrencies from CoinGecko."""
         crypto_price = await CoinGeckoService.get_price(
             asset.symbol,
             coingecko_id=asset.coingecko_id,
         )
-
 
         if not crypto_price:
             return None
@@ -147,15 +148,15 @@ class PriceFetcher:
     async def refresh_all_prices(
         cls,
         db: AsyncSession,
-        owner_id: Optional[int] = None,
+        owner_id: int | None = None,
     ) -> tuple[int, list[str]]:
         """
         Refresh prices for all active assets.
-        
+
         Args:
             db: Database session
             owner_id: If provided, only refresh assets held by this user
-        
+
         Returns:
             Tuple of (updated_count, failed_symbols)
         """
@@ -165,16 +166,16 @@ class PriceFetcher:
             holdings = await crud.holding.get_by_owner(
                 db, owner_id=owner_id, limit=None
             )
-            asset_ids = set(h.asset_id for h in holdings)
+            asset_ids = {h.asset_id for h in holdings}
             assets = [await crud.asset.get(db, id=aid) for aid in asset_ids]
             assets = [a for a in assets if a and a.is_active]
         else:
             # Get all active assets
             assets = await crud.asset.get_multi_filtered(db, is_active=True, limit=1000)
-        
+
         updated_count = 0
         failed_symbols = []
-        
+
         for asset in assets:
             try:
                 # A database-backed freshness check also protects deployments with
@@ -191,9 +192,9 @@ class PriceFetcher:
             except Exception as e:
                 logger.error(f"Error refreshing price for {asset.symbol}: {e}")
                 failed_symbols.append(asset.symbol)
-        
+
         return updated_count, failed_symbols
-    
+
     @classmethod
     async def _update_holdings_for_asset(
         cls,
@@ -204,15 +205,14 @@ class PriceFetcher:
         """Update all holdings' current values after price refresh."""
         # Get all holdings for this asset
         from sqlalchemy.sql.expression import select
+
         from app.models.holding import Holding
-        
+
         result = await db.execute(
-            select(Holding)
-            .filter(Holding.asset_id == asset.id)
-            .with_for_update()
+            select(Holding).filter(Holding.asset_id == asset.id).with_for_update()
         )
         holdings = result.scalars().all()
-        
+
         for holding in holdings:
             await crud.holding.update_holding_value(
                 db,
@@ -222,14 +222,14 @@ class PriceFetcher:
                 price_mxn=price_data.price_mxn,
                 commit=False,
             )
-        
+
         # Recalculate total_investments for all affected accounts
-        account_ids = set(h.account_id for h in holdings)
+        account_ids = {h.account_id for h in holdings}
         for account_id in account_ids:
             await crud.account.recalculate_total_investments(
                 db, account_id=account_id, commit=False
             )
-    
+
     @classmethod
     async def get_current_price(
         cls,
@@ -237,15 +237,15 @@ class PriceFetcher:
         asset: Asset,
         max_age_minutes: int = 15,
         allow_fetch: bool = True,
-    ) -> Optional[AssetPriceCreate]:
+    ) -> AssetPriceCreate | AssetPrice | None:
         """
         Get current price for an asset, fetching if stale.
-        
+
         Args:
             db: Database session
             asset: Asset to get price for
             max_age_minutes: Maximum age of cached price before refetching
-        
+
         Returns:
             Current price data or None
         """
@@ -268,7 +268,7 @@ class PriceFetcher:
                 change=latest.change,
                 change_percent=latest.change_percent,
             )
-        
+
         # Fetch fresh price
         if allow_fetch:
             return await cls.fetch_and_store_price(db, asset)

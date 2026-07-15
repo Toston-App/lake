@@ -1,5 +1,3 @@
-from typing import Optional
-
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +9,7 @@ from app.schemas.asset import AssetCreate, AssetUpdate
 
 
 class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
-    async def get_by_symbol(self, db: AsyncSession, *, symbol: str) -> Optional[Asset]:
+    async def get_by_symbol(self, db: AsyncSession, *, symbol: str) -> Asset | None:
         """Get an asset by its symbol."""
         result = await db.execute(
             select(self.model).filter(Asset.symbol == symbol.upper())
@@ -20,7 +18,7 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
 
     async def get_by_coingecko_id(
         self, db: AsyncSession, *, coingecko_id: str
-    ) -> Optional[Asset]:
+    ) -> Asset | None:
         result = await db.execute(
             select(self.model).filter(Asset.coingecko_id == coingecko_id.lower())
         )
@@ -30,17 +28,17 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         self,
         db: AsyncSession,
         *,
-        asset_class: Optional[AssetClass] = None,
-        asset_type: Optional[AssetType] = None,
-        currency: Optional[Currency] = None,
-        market: Optional[Market] = None,
-        is_active: Optional[bool] = True,
+        asset_class: AssetClass | None = None,
+        asset_type: AssetType | None = None,
+        currency: Currency | None = None,
+        market: Market | None = None,
+        is_active: bool | None = True,
         skip: int = 0,
         limit: int = 100,
     ) -> list[Asset]:
         """Get assets with optional filtering by class, type, currency, and market."""
         query = select(self.model)
-        
+
         filters = []
         if asset_class is not None:
             filters.append(Asset.asset_class == asset_class)
@@ -52,10 +50,10 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
             filters.append(Asset.market == market)
         if is_active is not None:
             filters.append(Asset.is_active == is_active)
-        
+
         if filters:
             query = query.filter(and_(*filters))
-        
+
         query = query.order_by(Asset.symbol).offset(skip).limit(limit)
         result = await db.execute(query)
         return result.scalars().all()
@@ -71,7 +69,7 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         """Get all assets of a specific asset class."""
         result = await db.execute(
             select(self.model)
-            .filter(Asset.asset_class == asset_class, Asset.is_active == True)
+            .filter(Asset.asset_class == asset_class, Asset.is_active)
             .order_by(Asset.symbol)
             .offset(skip)
             .limit(limit)
@@ -89,7 +87,7 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
         """Get all assets denominated in a specific currency."""
         result = await db.execute(
             select(self.model)
-            .filter(Asset.currency == currency, Asset.is_active == True)
+            .filter(Asset.currency == currency, Asset.is_active)
             .order_by(Asset.symbol)
             .offset(skip)
             .limit(limit)
@@ -106,20 +104,17 @@ class CRUDAsset(CRUDBase[Asset, AssetCreate, AssetUpdate]):
     ) -> list[Asset]:
         """Search assets by symbol or name."""
         escaped_query = (
-            query.upper()
-            .replace("\\", "\\\\")
-            .replace("%", "\\%")
-            .replace("_", "\\_")
+            query.upper().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         )
         search_term = f"%{escaped_query}%"
         result = await db.execute(
             select(self.model)
             .filter(
-                Asset.is_active == True,
+                Asset.is_active,
                 (
                     Asset.symbol.ilike(search_term, escape="\\")
                     | Asset.name.ilike(search_term, escape="\\")
-                )
+                ),
             )
             .order_by(Asset.symbol)
             .offset(skip)

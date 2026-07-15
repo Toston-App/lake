@@ -1,3 +1,5 @@
+# ruff: noqa: F401
+
 from .crud_account import account
 from .crud_asset import asset
 from .crud_asset_price import asset_price

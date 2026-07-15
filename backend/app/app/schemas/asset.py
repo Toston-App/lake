@@ -1,25 +1,31 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.models.asset import AssetClass, AssetType, Currency, Market, ASSET_TYPE_TO_CLASS
+from app.models.asset import (
+    ASSET_TYPE_TO_CLASS,
+    AssetClass,
+    AssetType,
+    Currency,
+    Market,
+)
 
 
 # Shared properties
 class AssetBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    symbol: Optional[str] = Field(default=None, max_length=32)
-    name: Optional[str] = Field(default=None, max_length=255)
-    asset_class: Optional[AssetClass] = None
-    asset_type: Optional[AssetType] = None
-    currency: Optional[Currency] = Currency.USD
-    market: Optional[Market] = Market.NYSE
-    sector: Optional[str] = Field(default=None, max_length=100)
-    country: Optional[str] = Field(default="US", max_length=32)
-    coingecko_id: Optional[str] = Field(default=None, max_length=128)
-    is_active: Optional[bool] = True
+    symbol: str | None = Field(default=None, max_length=32)
+    name: str | None = Field(default=None, max_length=255)
+    asset_class: AssetClass | None = None
+    asset_type: AssetType | None = None
+    currency: Currency | None = Currency.USD
+    market: Market | None = Market.NYSE
+    sector: str | None = Field(default=None, max_length=100)
+    country: str | None = Field(default="US", max_length=32)
+    coingecko_id: str | None = Field(default=None, max_length=128)
+    is_active: bool | None = True
 
     @field_validator("symbol", mode="before")
     @classmethod
@@ -55,7 +61,7 @@ class AssetCreate(AssetBase):
 
 # Properties to receive on Asset update
 class AssetUpdate(AssetBase):
-    updated_at: Optional[datetime] = None
+    updated_at: datetime | None = None
 
 
 # Properties shared by models stored in DB
@@ -76,17 +82,17 @@ class Asset(AssetInDBBase):
 
 # Properties stored in DB
 class AssetInDB(AssetInDBBase):
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 # Asset with current price
 class AssetWithPrice(Asset):
-    current_price: Optional[float] = None
-    price_currency: Optional[Currency] = None
-    price_change: Optional[float] = None
-    price_change_percent: Optional[float] = None
-    price_updated_at: Optional[datetime] = None
+    current_price: float | None = None
+    price_currency: Currency | None = None
+    price_change: float | None = None
+    price_change_percent: float | None = None
+    price_updated_at: datetime | None = None
 
 
 class AssetDeletionResponse(BaseModel):
@@ -108,7 +114,7 @@ class ExternalAssetSearchResult(BaseModel):
     market: Market
     currency: Currency
     country: str = Field(max_length=32)
-    exchange: Optional[str] = Field(default=None, max_length=32)
+    exchange: str | None = Field(default=None, max_length=32)
 
 
 # External crypto search result (from CoinGecko)
@@ -121,4 +127,4 @@ class ExternalCryptoSearchResult(BaseModel):
     market: Market
     currency: Currency
     coingecko_id: str = Field(max_length=128)
-    market_cap_rank: Optional[int] = None
+    market_cap_rank: int | None = None
