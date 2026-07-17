@@ -10,12 +10,10 @@ This module provides:
 """
 import os
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -46,8 +44,12 @@ os.environ.setdefault("REDIS_URL", "https://fake-redis.upstash.io")
 os.environ.setdefault("REDIS_TOKEN", "fake-token")
 os.environ.setdefault("DOCS_USER", "admin")
 os.environ.setdefault("DOCS_PASSWORD", "password")
-# SECRET_KEY must be valid base64 for the security module
-os.environ.setdefault("SECRET_KEY", "dGVzdC1wdWJsaWMta2V5LWZvci10ZXN0aW5n")
+# Authentication settings are required at application import time. These values
+# are deliberately test-only; Clerk verification tests should replace the
+# placeholder public key with the key used to sign their fixture tokens.
+os.environ.setdefault("LOCAL_JWT_SECRET", "foo")
+os.environ.setdefault("CLERK_JWT_PUBLIC_KEY", "dGVzdC1jbGVyay1wdWJsaWMta2V5")
+os.environ.setdefault("CLERK_ISSUER", "https://test.clerk.accounts.dev")
 os.environ.setdefault("PROFILE_QUERY_MODE", "False")
 os.environ.setdefault("SENTRY_DSN", "")
 
@@ -188,18 +190,10 @@ async def test_superuser(db_session: AsyncSession) -> User:
 # Auth helpers
 # ---------------------------------------------------------------------------
 def create_test_token(user: User) -> str:
-    """Create a valid HS256 JWT token for the given user (uses the dev 'foo' key)."""
-    expire = datetime.utcnow() + timedelta(hours=1)
-    payload = {
-        "exp": expire,
-        "user": {
-            "name": user.name,
-            "email": user.email,
-            "country": user.country,
-            "id": user.id,
-        },
-    }
-    return jwt.encode(payload, "foo", algorithm="HS256")
+    """Create a valid local JWT using the same contract as the application."""
+    from app.core.security import create_access_token
+
+    return create_access_token(user.id)
 
 
 @pytest.fixture

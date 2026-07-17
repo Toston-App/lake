@@ -2,20 +2,31 @@
 Tests for authentication endpoints and JWT token validation.
 
 Covers:
-- POST /api/v1/login/access-token  (OAuth2 login)
-- POST /api/v1/login/test-token    (token validation)
-- HS256 dev token acceptance/rejection
+- POST /api/v1/login/access-token (OAuth2 login)
+- GET /api/v1/users/me (token validation)
+- Local HS256 token acceptance/rejection
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-import pytest
+from app.models.user import User
 from httpx import AsyncClient
 from jose import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
 from tests.conftest import create_test_token
 from tests.utils import create_test_user
+
+
+def local_token_payload(user_id: int, *, expires_delta: timedelta) -> dict[str, object]:
+    """Build claims matching ``schemas.LocalTokenPayload``."""
+    now = datetime.now(timezone.utc)
+    return {
+        "sub": str(user_id),
+        "iss": "local",
+        "iat": int(now.timestamp()),
+        "exp": int((now + expires_delta).timestamp()),
+        "jti": "test-jti",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -42,12 +53,18 @@ class TestLoginAccessToken:
         assert "access_token" in body
         assert body["token_type"] == "bearer"
 
-        # Verify the returned token is a valid HS256 JWT with expected payload
-        decoded = jwt.decode(body["access_token"], "foo", algorithms=["HS256"])
-        assert decoded["user"]["email"] == user.email
-        assert decoded["user"]["id"] == user.id
-        assert decoded["user"]["name"] == user.name
-        assert "exp" in decoded
+        # Local tokens contain only identity and standard validation claims;
+        # user profile data is intentionally not embedded in the JWT.
+        decoded = jwt.decode(
+            body["access_token"],
+            "foo",
+            algorithms=["HS256"],
+            issuer="local",
+        )
+        assert decoded["sub"] == str(user.id)
+        assert decoded["iss"] == "local"
+        assert {"iat", "exp", "jti"} <= decoded.keys()
+        assert "user" not in decoded
 
     async def test_login_wrong_password(
         self, unauth_client: AsyncClient, db_session: AsyncSession
@@ -96,10 +113,10 @@ class TestLoginAccessToken:
 
 
 # ---------------------------------------------------------------------------
-# Test-token endpoint: POST /api/v1/login/test-token
+# Protected endpoint: GET /api/v1/users/me
 # ---------------------------------------------------------------------------
-class TestTestToken:
-    """Test the token validation endpoint."""
+class TestProtectedEndpoint:
+    """Test authentication through a registered protected endpoint."""
 
     async def test_valid_token_returns_user(
         self,
@@ -108,79 +125,70 @@ class TestTestToken:
         auth_headers: dict[str, str],
     ):
         """A valid Bearer token returns the current user's data."""
-        response = await unauth_client.post(
-            "/api/v1/login/test-token",
+        response = await unauth_client.get(
+            "/api/v1/users/me",
             headers=auth_headers,
         )
 
         assert response.status_code == 200
         body = response.json()
-        assert body["email"] == test_user.email
-        assert body["name"] == test_user.name
-        assert body["id"] == test_user.id
+        assert body == {"country": test_user.country}
 
     async def test_no_token_returns_401(self, unauth_client: AsyncClient):
         """Request without Authorization header is rejected."""
-        response = await unauth_client.post("/api/v1/login/test-token")
+        response = await unauth_client.get("/api/v1/users/me")
 
-        # OAuth2PasswordBearer returns 401 when no token is provided
         assert response.status_code == 401
 
-    async def test_invalid_token_returns_403(self, unauth_client: AsyncClient):
-        """A completely invalid token string is rejected with 403."""
-        response = await unauth_client.post(
-            "/api/v1/login/test-token",
+    async def test_invalid_token_returns_401(self, unauth_client: AsyncClient):
+        """A completely invalid token string is rejected with 401."""
+        response = await unauth_client.get(
+            "/api/v1/users/me",
             headers={"Authorization": "Bearer not-a-valid-jwt"},
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 401
         assert response.json()["detail"] == "Could not validate credentials"
 
 
 # ---------------------------------------------------------------------------
-# HS256 dev token validation (through the real auth dependency)
+# Local HS256 token validation (through the real auth dependency)
 # ---------------------------------------------------------------------------
 class TestHS256TokenValidation:
-    """Test that HS256 tokens signed with the 'foo' key are properly validated."""
+    """Test local tokens signed with LOCAL_JWT_SECRET."""
 
     async def test_valid_hs256_token_accepted(
         self,
         unauth_client: AsyncClient,
         test_user: User,
     ):
-        """A properly formed HS256 token with key 'foo' is accepted."""
+        """A properly formed local token is accepted."""
         token = create_test_token(test_user)
-        response = await unauth_client.post(
-            "/api/v1/login/test-token",
+        response = await unauth_client.get(
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token}"},
         )
 
         assert response.status_code == 200
-        assert response.json()["id"] == test_user.id
+        assert response.json() == {"country": test_user.country}
 
     async def test_expired_token_rejected(
         self,
         unauth_client: AsyncClient,
         test_user: User,
     ):
-        """An expired HS256 token is rejected with 403."""
-        expired_payload = {
-            "exp": datetime.utcnow() - timedelta(hours=1),
-            "user": {
-                "name": test_user.name,
-                "email": test_user.email,
-                "country": test_user.country,
-                "id": test_user.id,
-            },
-        }
+        """An expired local token is rejected with 401."""
+        expired_payload = local_token_payload(
+            test_user.id, expires_delta=timedelta(hours=-1)
+        )
         expired_token = jwt.encode(expired_payload, "foo", algorithm="HS256")
 
-        response = await unauth_client.post(
-            "/api/v1/login/test-token",
+        response = await unauth_client.get(
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {expired_token}"},
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 401
         assert response.json()["detail"] == "Could not validate credentials"
 
     async def test_wrong_signing_key_rejected(
@@ -189,42 +197,26 @@ class TestHS256TokenValidation:
         test_user: User,
     ):
         """A token signed with a different key is rejected."""
-        payload = {
-            "exp": datetime.utcnow() + timedelta(hours=1),
-            "user": {
-                "name": test_user.name,
-                "email": test_user.email,
-                "country": test_user.country,
-                "id": test_user.id,
-            },
-        }
+        payload = local_token_payload(test_user.id, expires_delta=timedelta(hours=1))
         bad_token = jwt.encode(payload, "wrong-key", algorithm="HS256")
 
-        response = await unauth_client.post(
-            "/api/v1/login/test-token",
+        response = await unauth_client.get(
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {bad_token}"},
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 401
         assert response.json()["detail"] == "Could not validate credentials"
 
     async def test_token_for_nonexistent_user(
         self, unauth_client: AsyncClient
     ):
         """A valid token referencing a non-existent user ID returns 404."""
-        payload = {
-            "exp": datetime.utcnow() + timedelta(hours=1),
-            "user": {
-                "name": "Ghost",
-                "email": "ghost@example.com",
-                "country": "USD",
-                "id": 999999,
-            },
-        }
+        payload = local_token_payload(999999, expires_delta=timedelta(hours=1))
         token = jwt.encode(payload, "foo", algorithm="HS256")
 
-        response = await unauth_client.post(
-            "/api/v1/login/test-token",
+        response = await unauth_client.get(
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -232,34 +224,32 @@ class TestHS256TokenValidation:
         assert response.json()["detail"] == "User not found"
 
     async def test_malformed_payload_rejected(self, unauth_client: AsyncClient):
-        """A token with missing 'user' dict is rejected."""
+        """A token missing required local claims is rejected."""
         payload = {
-            "exp": datetime.utcnow() + timedelta(hours=1),
+            "iss": "local",
             "sub": "some-string",
         }
         token = jwt.encode(payload, "foo", algorithm="HS256")
 
-        response = await unauth_client.post(
-            "/api/v1/login/test-token",
+        response = await unauth_client.get(
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token}"},
         )
 
-        # The dep tries payload.get("user", {}).get("email") → None (falsy),
-        # then TokenPayloadUuid(**payload) fails with ValidationError (missing
-        # required fields), which is caught → 403.
-        assert response.status_code == 403
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Could not validate credentials"
 
 
 # ---------------------------------------------------------------------------
 # Full login-then-use flow (integration)
 # ---------------------------------------------------------------------------
 class TestLoginFlow:
-    """End-to-end: login, get token, use token to access protected endpoint."""
+    """End-to-end: login, then use the token on a protected endpoint."""
 
     async def test_login_then_test_token(
         self, unauth_client: AsyncClient, db_session: AsyncSession
     ):
-        """Login, receive a token, then use it on the test-token endpoint."""
+        """Login, receive a token, then retrieve the current user."""
         user = await create_test_user(
             db_session, email="flow@example.com", password="flowpass"
         )
@@ -273,10 +263,9 @@ class TestLoginFlow:
         token = login_resp.json()["access_token"]
 
         # Step 2: use the token
-        verify_resp = await unauth_client.post(
-            "/api/v1/login/test-token",
+        verify_resp = await unauth_client.get(
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert verify_resp.status_code == 200
-        assert verify_resp.json()["email"] == user.email
-        assert verify_resp.json()["id"] == user.id
+        assert verify_resp.json() == {"country": user.country}
