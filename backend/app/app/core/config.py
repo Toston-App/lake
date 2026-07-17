@@ -1,9 +1,7 @@
-import secrets
-from typing import Any, Optional
+from typing import Annotated, Any
 
-from pydantic import AnyHttpUrl, EmailStr, HttpUrl, PostgresDsn
-from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import AnyHttpUrl, EmailStr, HttpUrl, PostgresDsn, field_validator
+from pydantic_settings import BaseSettings, NoDecode
 
 
 class AsyncPostgresDsn(PostgresDsn):
@@ -13,8 +11,49 @@ class AsyncPostgresDsn(PostgresDsn):
 class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     API_V2_STR: str = "/api/v2"
-    # used for jwt
-    SECRET_KEY: str = secrets.token_urlsafe(32)
+    API_V3_STR: str = "/api/v3"
+
+    # HS256 signing secret for our own (email/password) access tokens
+    # and password-reset tokens. MUST be set; no insecure default.
+    LOCAL_JWT_SECRET: str
+
+    # Clerk JWT verification (RS256). The public key is base64-encoded PEM,
+    # CLERK_ISSUER is the full issuer URL (e.g. https://your-app.clerk.accounts.dev),
+    # and CLERK_AUTHORIZED_PARTIES is the allow-list of acceptable `azp` values
+    # (your frontend origins). Accepts either a JSON array or a comma-separated
+    # string from the environment.
+    CLERK_JWT_PUBLIC_KEY: str
+    CLERK_ISSUER: str
+    # NoDecode tells pydantic-settings not to JSON-parse this field's raw env
+    # value, so our `mode="before"` validator below sees the original string
+    # and can accept either a JSON array or a comma-separated list.
+    CLERK_AUTHORIZED_PARTIES: Annotated[list[str], NoDecode] = []
+
+    @field_validator("CLERK_AUTHORIZED_PARTIES", mode="before")
+    def split_authorized_parties(cls, v: Any) -> Any:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            if v.startswith("["):
+                import json
+
+                return json.loads(v)
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+    @field_validator("LOCAL_JWT_SECRET", "CLERK_JWT_PUBLIC_KEY", "CLERK_ISSUER")
+    def _require_non_empty(cls, v: str, info) -> str:
+        # Fail-fast on empty strings. Without this, pydantic happily loads
+        # `FOO=` from .env as the empty string and the auth code blows up
+        # later in obscure ways (broken JWT signature checks, invalid
+        # base64, etc.).
+        if not v or not v.strip():
+            raise ValueError(f"{info.field_name} must be set to a non-empty value.")
+        return v
+
     # used for encryption with Fernet
     ENCRYPTION_KEY: str
 
@@ -25,11 +64,11 @@ class Settings(BaseSettings):
     PROFILE_QUERY_MODE: bool = False
 
     PROJECT_NAME: str
-    SENTRY_DSN: Optional[HttpUrl] = None
+    SENTRY_DSN: HttpUrl | None = None
 
-    @field_validator("SENTRY_DSN", mode='before')
-    def sentry_dsn_can_be_blank(cls, v: str) -> Optional[str]:
-        if len(v) == 0:
+    @field_validator("SENTRY_DSN", mode="before")
+    def sentry_dsn_can_be_blank(cls, v: str | None) -> str | None:
+        if v is None or len(v) == 0:
             return None
         return v
 
@@ -37,11 +76,11 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str
-    SQLALCHEMY_DATABASE_URI: Optional[PostgresDsn] = None
-    SQLALCHEMY_DATABASE_URI_ASYNC: Optional[AsyncPostgresDsn] = None
+    SQLALCHEMY_DATABASE_URI: PostgresDsn | None = None
+    SQLALCHEMY_DATABASE_URI_ASYNC: AsyncPostgresDsn | None = None
 
-    @field_validator("SQLALCHEMY_DATABASE_URI", mode='before')
-    def assemble_db_connection(cls, v: Optional[str], info: dict[str, Any]) -> Any:
+    @field_validator("SQLALCHEMY_DATABASE_URI", mode="before")
+    def assemble_db_connection(cls, v: str | None, info: dict[str, Any]) -> Any:
         if isinstance(v, str):
             return v
         return PostgresDsn.build(
@@ -52,10 +91,8 @@ class Settings(BaseSettings):
             path=f"{info.data.get('POSTGRES_DB') or ''}",
         )
 
-    @field_validator("SQLALCHEMY_DATABASE_URI_ASYNC", mode='before')
-    def assemble_async_db_connection(
-        cls, v: Optional[str], info: dict[str, Any]
-    ) -> Any:
+    @field_validator("SQLALCHEMY_DATABASE_URI_ASYNC", mode="before")
+    def assemble_async_db_connection(cls, v: str | None, info: dict[str, Any]) -> Any:
         if isinstance(v, str):
             return v
         return AsyncPostgresDsn.build(
@@ -67,24 +104,24 @@ class Settings(BaseSettings):
         )
 
     SMTP_TLS: bool = True
-    SMTP_PORT: Optional[int] = None
-    SMTP_HOST: Optional[str] = None
-    SMTP_USER: Optional[str] = None
-    SMTP_PASSWORD: Optional[str] = None
-    EMAILS_FROM_EMAIL: Optional[EmailStr] = None
-    EMAILS_FROM_NAME: Optional[str] = None
+    SMTP_PORT: int | None = None
+    SMTP_HOST: str | None = None
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    EMAILS_FROM_EMAIL: EmailStr | None = None
+    EMAILS_FROM_NAME: str | None = None
 
     @field_validator("EMAILS_FROM_NAME")
-    def get_project_name(cls, v: Optional[str], info: dict[str, Any]) -> str:
+    def get_project_name(cls, v: str | None, info: dict[str, Any]) -> str | None:
         if not v:
-            return info.data["PROJECT_NAME"]
+            return info.data.get("PROJECT_NAME")
         return v
 
     EMAIL_RESET_TOKEN_EXPIRE_HOURS: int = 48
     EMAIL_TEMPLATES_DIR: str = "/app/app/email-templates/build"
     EMAILS_ENABLED: bool = False
 
-    @field_validator("EMAILS_ENABLED", mode='before')
+    @field_validator("EMAILS_ENABLED", mode="before")
     def get_emails_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
         return bool(
             info.data.get("SMTP_HOST")
@@ -95,6 +132,45 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER: EmailStr
     FIRST_SUPERUSER_PASSWORD: str
     USERS_OPEN_REGISTRATION: bool = False
+
+    # Investment feature access
+    INVESTMENTS_ENABLED: bool = False
+    INVESTMENTS_ALLOWED_USER_IDS: str = ""
+    INVESTMENTS_ALLOWED_USER_UUIDS: str = ""
+
+    @field_validator("INVESTMENTS_ALLOWED_USER_IDS")
+    def validate_investment_user_ids(cls, v: str) -> str:
+        for raw_id in v.split(","):
+            raw_id = raw_id.strip()
+            if not raw_id:
+                continue
+            try:
+                user_id = int(raw_id)
+            except ValueError as exc:
+                raise ValueError(
+                    "INVESTMENTS_ALLOWED_USER_IDS must contain comma-separated integers"
+                ) from exc
+            if user_id <= 0:
+                raise ValueError(
+                    "INVESTMENTS_ALLOWED_USER_IDS must contain positive integers"
+                )
+        return v
+
+    @property
+    def investments_allowed_user_ids(self) -> set[int]:
+        return {
+            int(raw_id.strip())
+            for raw_id in self.INVESTMENTS_ALLOWED_USER_IDS.split(",")
+            if raw_id.strip()
+        }
+
+    @property
+    def investments_allowed_user_uuids(self) -> set[str]:
+        return {
+            raw_uuid.strip()
+            for raw_uuid in self.INVESTMENTS_ALLOWED_USER_UUIDS.split(",")
+            if raw_uuid.strip()
+        }
 
     SEED_DATABASE: bool = False
 
@@ -109,9 +185,11 @@ class Settings(BaseSettings):
     # OpenRouter Settings (for WhatsApp AI parsing)
     OPENROUTER_API_KEY: str
     OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
-    OPENROUTER_FALLBACK_MODELS: Optional[str] = None  # Comma-separated list of fallback models
-    OPENROUTER_SITE_URL: Optional[str] = None
-    OPENROUTER_APP_NAME: Optional[str] = None
+    OPENROUTER_FALLBACK_MODELS: str | None = (
+        None  # Comma-separated list of fallback models
+    )
+    OPENROUTER_SITE_URL: str | None = None
+    OPENROUTER_APP_NAME: str | None = None
 
     # Feedback
     TELEGRAM_BOT_TOKEN: str
@@ -120,8 +198,8 @@ class Settings(BaseSettings):
     # WhatsApp Integration Settings
     WHATSAPP_ENABLED: bool = False
     WHATSAPP_ACCESS_TOKEN: str
-    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
-    WHATSAPP_VERIFY_TOKEN: Optional[str] = None
+    WHATSAPP_PHONE_NUMBER_ID: str | None = None
+    WHATSAPP_VERIFY_TOKEN: str | None = None
     WHATSAPP_API_VERSION: str = "v22.0"
 
     # WAHA
@@ -132,13 +210,27 @@ class Settings(BaseSettings):
     REDIS_URL: str
     REDIS_TOKEN: str
 
-    @field_validator("WHATSAPP_ENABLED", mode='before')
+    # Axiom Logging Settings
+    AXIOM_DATASET: str = "cleverbill"
+    AXIOM_API_TOKEN: str | None = None
+    AXIOM_ENABLED: bool = False
+    AXIOM_SAMPLE_RATE: float = 0.05  # Sample 5% of successful requests
+    AXIOM_SLOW_REQUEST_THRESHOLD_MS: int = 2000  # Consider requests >2s as slow
+
+    DEPLOYMENT_ID: str | None = None  # For tracking deployments
+    REGION: str | None = None  # e.g., "us-east-1", "eu-west-1"
+
+    @field_validator("WHATSAPP_ENABLED", mode="before")
     def get_whatsapp_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
         return bool(
             info.data.get("WHATSAPP_ACCESS_TOKEN")
             and info.data.get("WHATSAPP_PHONE_NUMBER_ID")
             and bool(info.data.get("WHATSAPP_VERIFY_TOKEN"))
         )
+
+    @field_validator("AXIOM_ENABLED", mode="before")
+    def get_axiom_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
+        return bool(info.data.get("AXIOM_API_TOKEN"))
 
     class Config:
         case_sensitive = True

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import phonenumbers
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic.networks import EmailStr
@@ -15,12 +15,14 @@ from app.core import security
 from app.core.config import settings
 from app.utilities.encryption import hash_sha256
 from app.utils import send_new_account_email
+from app.utilities.wide_events import enrich_event, mark_for_logging, timed
 
 router = APIRouter()
 
 
 @router.get("", response_model=list[schemas.User])
 async def read_users(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     skip: int = 0,
     limit: int = 100,
@@ -29,14 +31,26 @@ async def read_users(
     """
     Retrieve users.
     """
-    users = await crud.user.get_multi(db, skip=skip, limit=limit)
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email, "is_superuser": True},
+        query={"type": "list_users", "skip": skip, "limit": limit},
+    )
+
+    with timed() as t:
+        users = await crud.user.get_multi(db, skip=skip, limit=limit)
+
+    enrich_event(
+        request,
+        database={"operation": "list_users", "duration_ms": t.ms, "results_count": len(users)},
+    )
     return users
 
 
-# avoid send all model to the client
 @router.put("/me", response_model=bool)
 async def update_user_me(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     password: str = Body(None),
     name: str = Body(None),
@@ -48,6 +62,23 @@ async def update_user_me(
     """
     Update own user.
     """
+    fields_updating = [
+        f for f, v in [
+            ("password", password), ("name", name), ("email", email),
+            ("country", country), ("phone", phone),
+        ] if v is not None
+    ]
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={
+            "type": "update_self",
+            "fields_updating": fields_updating,
+            "has_password_change": password is not None,
+            "has_phone_change": phone is not None,
+        },
+    )
+
     current_user_data = jsonable_encoder(current_user)
     user_in = schemas.UserUpdate(**current_user_data)
 
@@ -70,8 +101,9 @@ async def update_user_me(
                     detail="Invalid phone number",
                 )
 
-            formatted_phone = phonenumbers.format_number(phone_num, phonenumbers.PhoneNumberFormat.E164)
-            print("🚀 ~ formatted_phone:", formatted_phone)
+            formatted_phone = phonenumbers.format_number(
+                phone_num, phonenumbers.PhoneNumberFormat.E164
+            )
 
             # Ensure Mexican mobile numbers start with +521 (add '1' if missing), this to match whatsapp phone format
             if phone_num.country_code == 52 and not formatted_phone.startswith("+521"):
@@ -102,32 +134,50 @@ async def update_user_me(
     await crud.user.update(db, db_obj=current_user, obj_in=user_in)
     return True
 
-# we don't need this endpoint for now
-# @router.get("/me", response_model=schemas.User)
-# async def read_user_me(
-#     db: AsyncSession = Depends(deps.async_get_db),
-#     current_user: models.User = Depends(deps.get_current_active_user),
-# ) -> Any:
-#     """
-#     Get current user.
-#     """
-#     return current_user
+@router.get("/me", response_model=schemas.UserGetMe)
+async def read_user_me(
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Get current user.
+    """
+    return current_user
 
 
 @router.post("/open", response_model=schemas.Msg)
 async def create_user_open(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-    uuid: str = Body(...),
     use_email: bool = Body(False),
     email: EmailStr = Body(None),
     password: str = Body(None),
     name: str = Body(None),
     country: str = Body(None),
+    bearer_token: str | None = Depends(deps.reusable_oauth2),
+    cookie_token: str | None = Depends(deps.cookie_scheme),
 ) -> Any:
     """
     Create new user without the need to be logged in.
+
+    - `use_email=True`: classic email/password registration. Anyone may call
+      it (subject to `USERS_OPEN_REGISTRATION`).
+    - `use_email=False`: bootstrap a local row for a Clerk-authenticated
+      user. Requires a valid Clerk session token (bearer or `__session`
+      cookie). The `sub` from the verified token is used as the UUID; the
+      request body is NOT trusted for the UUID, since it previously allowed
+      anyone to create a row for any Clerk user id.
     """
+    mark_for_logging(request)
+    enrich_event(
+        request,
+        operation={
+            "type": "user_registration",
+            "method": "email" if use_email else "uuid",
+        },
+    )
+
     if not settings.USERS_OPEN_REGISTRATION:
         raise HTTPException(
             status_code=403,
@@ -143,6 +193,7 @@ async def create_user_open(
 
         user = await crud.user.get_by_email(db, email=email)
         if user:
+            enrich_event(request, auth={"outcome": "failure", "reason": "email_exists"})
             raise HTTPException(
                 status_code=400,
                 detail="The user with this email already exists in the system",
@@ -153,9 +204,15 @@ async def create_user_open(
         )
         user = await crud.user.create(db, obj_in=user_in)
 
+        enrich_event(
+            request,
+            auth={"outcome": "success"},
+            user={"id": user.id, "email": user.email, "country": country},
+        )
+
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = security.create_access_token(
-            jsonable_encoder(user), expires_delta=access_token_expires
+            user.id, expires_delta=access_token_expires
         )
 
         response = JSONResponse(
@@ -171,9 +228,34 @@ async def create_user_open(
         )
         return response
 
-    # UUID auth
+    # UUID (Clerk) branch: require a valid Clerk session and trust only its
+    # verified `sub` as the user uuid. The previous implementation accepted
+    # any UUID from the body, which let anyone create a row impersonating
+    # any Clerk account.
+    token = bearer_token or cookie_token
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Clerk session required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        clerk_payload = deps.verify_clerk_token(token)
+    except Exception:
+        enrich_event(
+            request, auth={"outcome": "failure", "reason": "invalid_clerk_session"}
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Clerk session",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    uuid = clerk_payload.sub
+
     user = await crud.user.get_by_uuid(db, uuid=uuid)
     if user:
+        enrich_event(request, auth={"outcome": "failure", "reason": "uuid_exists"})
         raise HTTPException(
             status_code=400,
             detail="The user with this username already exists in the system",
@@ -181,11 +263,18 @@ async def create_user_open(
     user_in = schemas.UserCreateUuid(uuid=uuid)
     user = await crud.user.create(db, obj_in=user_in)
 
+    enrich_event(
+        request,
+        auth={"outcome": "success"},
+        user={"id": user.id},
+    )
+
     return {"msg": "User created successfully"}
 
 
 @router.get("/{user_id}", response_model=schemas.User)
 async def read_user_by_id(
+    request: Request,
     user_id: int,
     current_user: models.User = Depends(deps.get_current_active_user),
     db: AsyncSession = Depends(deps.async_get_db),
@@ -193,6 +282,12 @@ async def read_user_by_id(
     """
     Get a specific user by id.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email, "is_superuser": current_user.is_superuser},
+        query={"type": "get_user_by_id", "target_user_id": user_id},
+    )
+
     if not crud.user.is_superuser(current_user):
         raise HTTPException(
             status_code=400, detail="The user doesn't have enough privileges"
@@ -206,6 +301,7 @@ async def read_user_by_id(
 @router.put("/{user_id}", response_model=schemas.User)
 async def update_user(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     user_id: int,
     user_in: schemas.UserUpdate,
@@ -214,6 +310,12 @@ async def update_user(
     """
     Update a user.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email, "is_superuser": True},
+        operation={"type": "admin_update_user", "target_user_id": user_id},
+    )
+
     user = await crud.user.get(db, id=user_id)
 
     if user.id != current_user.id and not crud.user.is_superuser(current_user):
@@ -235,6 +337,7 @@ async def update_user(
 @router.delete("/{id}", response_model=schemas.User)
 async def delete_user(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     id: int,
     current_user: models.User = Depends(deps.get_current_active_superuser),
@@ -242,6 +345,13 @@ async def delete_user(
     """
     Delete a user.
     """
+    mark_for_logging(request)
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email, "is_superuser": True},
+        operation={"type": "delete_user", "target_user_id": id},
+    )
+
     user = await crud.user.get(db, id=id)
 
     if user.id != current_user.id and not crud.user.is_superuser(current_user):
@@ -269,6 +379,7 @@ async def delete_user(
 @router.put("/me/default-account", response_model=AccountSchema)
 async def set_default_account(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     account_id: int = Body(...),
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -276,9 +387,18 @@ async def set_default_account(
     """
     Set the default account for WhatsApp transactions.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={
+            "type": "set_default_account",
+            "account_id": account_id,
+            "previous_default": current_user.default_account_id,
+        },
+    )
+
     try:
         await crud.user.set_default_account(db, user_id=current_user.id, account_id=account_id)
-        # Return the account details
         account = await crud.account.get_by_id(db, owner_id=current_user.id, id=account_id)
         return account
     except ValueError as e:
@@ -288,12 +408,19 @@ async def set_default_account(
 @router.get("/me/default-account", response_model=AccountSchema)
 async def get_default_account(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Get the default account for WhatsApp transactions.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        query={"type": "get_default_account"},
+    )
+
     account = await crud.user.get_default_account(db, user_id=current_user.id)
     if not account:
         raise HTTPException(status_code=404, detail="No default account set")
@@ -303,12 +430,22 @@ async def get_default_account(
 @router.delete("/me/default-account", response_model=bool)
 async def clear_default_account(
     *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
     Clear the default account for WhatsApp transactions.
     """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={
+            "type": "clear_default_account",
+            "previous_default": current_user.default_account_id,
+        },
+    )
+
     try:
         await crud.user.clear_default_account(db, user_id=current_user.id)
         return True

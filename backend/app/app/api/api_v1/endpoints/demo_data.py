@@ -3,7 +3,7 @@ import random
 from typing import Any, Optional
 
 from faker import Faker
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,12 +15,13 @@ from app.api.api_v1.endpoints.expenses import create_expenses_bulk
 from app.api.api_v1.endpoints.incomes import create_incomes_bulk
 from app.api.api_v1.endpoints.places import create_place, read_places
 from app.api.api_v1.endpoints.transfers import create_transfer
-from app.models.account import AccountType  # For creating accounts with specific types
+from app.models.account import AccountType
+from app.utilities.wide_events import enrich_event, mark_for_logging
 
 router = APIRouter()
 fake = Faker()
 
-async def _get_or_create_base_data_orm(db: AsyncSession, from_user: models.User) -> dict[str, list]:
+async def _get_or_create_base_data_orm(request: Request, db: AsyncSession, from_user: models.User) -> dict[str, list]:
     """
     Fetches existing base data (accounts, categories, subcategories, places) for the user.
     Creates minimal default data if necessary (e.g., ensuring at least 4 accounts,
@@ -34,7 +35,7 @@ async def _get_or_create_base_data_orm(db: AsyncSession, from_user: models.User)
     }
 
     # 1. Accounts
-    existing_accounts = await read_accounts(db=db, current_user=from_user)
+    existing_accounts = await read_accounts(request=request, db=db, current_user=from_user)
     fetched_data["accounts"].extend(existing_accounts)
 
     if len(fetched_data["accounts"]) < 4:
@@ -60,22 +61,22 @@ async def _get_or_create_base_data_orm(db: AsyncSession, from_user: models.User)
                 initial_balance=initial_balance
             )
 
-            account = await create_account(db=db, account_in=account_in, current_user=from_user)
+            account = await create_account(request=request, db=db, account_in=account_in, current_user=from_user)
             fetched_data["accounts"].append(account)
 
     # 2. Categories & Subcategories
-    fetched_data["categories"] = await read_categories(db=db, current_user=from_user)
+    fetched_data["categories"] = await read_categories(request=request, db=db, current_user=from_user)
     # this must exist in the DB
 
     # 3. Places
-    existing_places = await read_places(db=db, current_user=from_user)
+    existing_places = await read_places(request=request, db=db, current_user=from_user)
 
     if not existing_places:
         place_names = ["Supermarket", "Online Retailer", "Local Cafe", "Gas Station", "Utility Company"]
 
         for name in place_names:
             place_in = schemas.PlaceCreate(name=name)
-            place = await create_place(db=db, place_in=place_in, current_user=from_user)
+            place = await create_place(request=request, db=db, place_in=place_in, current_user=from_user)
             fetched_data["places"].append(place)
     else:
         fetched_data["places"].extend(existing_places)
@@ -85,6 +86,7 @@ async def _get_or_create_base_data_orm(db: AsyncSession, from_user: models.User)
 
 @router.post("/generate-demo-data", response_model=schemas.Msg, status_code=201)
 async def generate_fake_user_data(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     user_id: int = Body(..., embed=True, description="ID of the user to generate data for."),
     num_transactions: int = Body(50, ge=1, le=5000, embed=True, description="Number of transactions to generate."),
@@ -96,6 +98,17 @@ async def generate_fake_user_data(
     Generate fake financial data (transactions) for a specified user, using existing or default accounts, categories, and places.
     Only accessible by superusers.
     """
+    mark_for_logging(request)
+    enrich_event(
+        request,
+        user={"id": current_superuser.id, "email": current_superuser.email, "is_superuser": True},
+        operation={
+            "type": "generate_demo_data",
+            "target_user_id": user_id,
+            "num_transactions": num_transactions,
+        },
+    )
+
     user = await crud.user.get(db, id=user_id)
 
     if not user:
@@ -112,7 +125,7 @@ async def generate_fake_user_data(
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="Start date cannot be after end date.")
 
-    base_data_map = await _get_or_create_base_data_orm(db=db, from_user=user)
+    base_data_map = await _get_or_create_base_data_orm(request=request, db=db, from_user=user)
     usable_accounts: list[models.Account] = base_data_map["accounts"]
     all_categories: list[models.Category] = base_data_map["categories"]
     usable_places: list[models.Place] = base_data_map["places"]
@@ -174,22 +187,34 @@ async def generate_fake_user_data(
                 from_acc=from_acc_orm.id, to_acc=to_acc_orm.id
             )
             # Transfers are still created one-by-one
-            await create_transfer(db=db, transfer_in=transfer_in, current_user=user)
+            await create_transfer(request=request, db=db, transfer_in=transfer_in, current_user=user)
             transfers_created_count += 1
 
     # --- Create Incomes and Expenses in Bulk ---
     if incomes_to_create_bulk:
-        await create_incomes_bulk(db=db, incomes_in=incomes_to_create_bulk, current_user=user)
+        await create_incomes_bulk(request=request, db=db, incomes_in=incomes_to_create_bulk, current_user=user)
     if expenses_to_create_bulk:
-        await create_expenses_bulk(db=db, expenses_in=expenses_to_create_bulk, current_user=user)
+        await create_expenses_bulk(request=request, db=db, expenses_in=expenses_to_create_bulk, current_user=user)
 
     total_generated = len(incomes_to_create_bulk) + len(expenses_to_create_bulk) + transfers_created_count
+
+    enrich_event(
+        request,
+        demo_data={
+            "total_generated": total_generated,
+            "incomes": len(incomes_to_create_bulk),
+            "expenses": len(expenses_to_create_bulk),
+            "transfers": transfers_created_count,
+            "attempted": transactions_attempted,
+        },
+    )
 
     return schemas.Msg(msg=f"Successfully generated {total_generated} transactions ({len(incomes_to_create_bulk)} incomes, {len(expenses_to_create_bulk)} expenses, {transfers_created_count} transfers) for user {user_id}. Attempted to generate {transactions_attempted} based on num_transactions param.")
 
 
 @router.post("/delete-user-financial-data", response_model=schemas.Msg, status_code=200)
 async def delete_user_financial_data(
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     user_id: int = Body(..., embed=True, description="ID of the user whose financial data is to be deleted."),
     current_superuser: models.User = Depends(deps.get_current_active_superuser)
@@ -198,6 +223,13 @@ async def delete_user_financial_data(
     Delete all financial data (accounts, places, incomes, expenses, transfers) for a specified user.
     Only accessible by superusers.
     """
+    mark_for_logging(request)
+    enrich_event(
+        request,
+        user={"id": current_superuser.id, "email": current_superuser.email, "is_superuser": True},
+        operation={"type": "delete_user_financial_data", "target_user_id": user_id},
+    )
+
     user_to_clear = await crud.user.get(db, id=user_id)
 
     if not user_to_clear:
@@ -271,7 +303,12 @@ async def delete_user_financial_data(
         "places": deleted_places_count
     }
 
-    await db.commit() # Commit all deletions
+    await db.commit()
+
+    enrich_event(
+        request,
+        deletion_results=deleted_counts,
+    )
 
     return schemas.Msg(
         msg=(f"Successfully deleted financial data for user {user_id}. "

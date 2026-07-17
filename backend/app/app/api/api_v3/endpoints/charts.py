@@ -1,0 +1,244 @@
+import asyncio
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import crud, models
+from app.api import deps
+from app.api.deps import DateFilterType
+from app.api.api_v3.utils import parse_date_range, get_previous_period_date_range
+from app.process_data.process import (
+    account_charts,
+    categories_charts,
+    get_df,
+    income_vs_expense_chart,
+    net_chart,
+)
+from app.process_data.utils import calculate_summary
+from app.schemas.dashboard import ChartsResponse
+from app.utilities.redis import get_cached, store_cached
+from app.utilities.wide_events import enrich_event, timed
+
+router = APIRouter()
+
+
+@router.get("/{date_filter_type}/{date}", response_model=ChartsResponse)
+async def get_charts(
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    date_filter_type: DateFilterType = DateFilterType.date,
+    date: str = None,
+    account_id: Optional[int] = Query(None, description="Filter by account ID"),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Retrieve chart data for a date range.
+    Returns transaction timeline, category drilldown, and per-account balance charts.
+    Optionally filtered by a specific account.
+    Cached in Redis with 7-day TTL, invalidated on writes.
+    """
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        query={
+            "type": "v3_charts",
+            "date_filter_type": date_filter_type.value,
+            "date_param": date,
+            "account_id": account_id,
+        },
+    )
+
+    if account_id is not None:
+        account = await crud.account.get_by_id(
+            db, owner_id=current_user.id, id=account_id
+        )
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+    cache_date_key = f"{date}:acc:{account_id or 'all'}"
+
+    # Check cache first
+    cached = await get_cached(
+        "charts", current_user.id, date_filter_type.value, cache_date_key
+    )
+    if cached:
+        enrich_event(request, cache={"hit": True, "prefix": "charts"})
+        return cached
+
+    enrich_event(request, cache={"hit": False, "prefix": "charts"})
+
+    date_range = parse_date_range(date_filter_type, date)
+    prev_date_range = get_previous_period_date_range(date_filter_type, date)
+
+    with timed() as t_db:
+        # Fetch both current and previous period data
+        (
+            incomes,
+            expenses,
+            transfers,
+            accounts,
+            places,
+            categories,
+            prev_incomes,
+            prev_expenses,
+        ) = await asyncio.gather(
+            # Current period
+            crud.income.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+                account_id=account_id,
+            ),
+            crud.expense.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+                account_id=account_id,
+            ),
+            crud.transfer.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=date_range.start_date,
+                end_date=date_range.end_date,
+                account_id=account_id,
+            ),
+            crud.account.get_multi_by_owner(db=db, owner_id=current_user.id),
+            crud.place.get_multi_by_owner(db=db, owner_id=current_user.id),
+            crud.category.get_multi_by_owner(db=db, owner_id=current_user.id),
+            # Previous period (for comparison)
+            crud.income.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=prev_date_range.start_date,
+                end_date=prev_date_range.end_date,
+                account_id=account_id,
+            ),
+            crud.expense.get_multi_by_date(
+                db=db,
+                owner_id=current_user.id,
+                start_date=prev_date_range.start_date,
+                end_date=prev_date_range.end_date,
+                account_id=account_id,
+            ),
+        )
+
+    enrich_event(
+        request,
+        database={
+            "operation": "v3_charts_fetch",
+            "duration_ms": t_db.ms,
+            "incomes_count": len(incomes),
+            "expenses_count": len(expenses),
+            "transfers_count": len(transfers),
+        },
+    )
+
+    # Empty data — return empty charts
+    if not incomes and not expenses:
+        result = ChartsResponse(
+            net=[],
+            income_vs_expense=[],
+            categories=[],
+            accounts={},
+        )
+        await store_cached(
+            "charts",
+            current_user.id,
+            date_filter_type.value,
+            cache_date_key,
+            result.model_dump(),
+        )
+        return result
+
+    with timed() as t_processing:
+        dfs = get_df(
+            expenses=jsonable_encoder(expenses),
+            incomes=jsonable_encoder(incomes),
+            transfers=jsonable_encoder(transfers),
+            accounts=jsonable_encoder(accounts),
+            places=jsonable_encoder(places),
+            categories=jsonable_encoder(categories),
+        )
+
+        # Get previous period DFs for comparison
+        prev_dfs = get_df(
+            expenses=jsonable_encoder(prev_expenses),
+            incomes=jsonable_encoder(prev_incomes),
+            transfers=[],  # Not needed for net calculation
+            accounts=jsonable_encoder(accounts),
+            places=jsonable_encoder(places),
+            categories=jsonable_encoder(categories),
+        )
+
+        # Calculate current period net
+        net_chart_data = net_chart(
+            date_filter_type=date_filter_type,
+            expenses_df=dfs["expenses"],
+            incomes_df=dfs["incomes"],
+        )
+
+        # Calculate previous period net total (handle empty period)
+        if prev_incomes or prev_expenses:
+            prev_net_chart_data = net_chart(
+                date_filter_type=date_filter_type,
+                expenses_df=prev_dfs["expenses"],
+                incomes_df=prev_dfs["incomes"],
+            )
+            previous_total = sum(prev_net_chart_data["series"][0]["data"])
+        else:
+            # No transactions in previous period
+            previous_total = 0.0
+
+        # Calculate summary comparison
+        current_total = sum(net_chart_data["series"][0]["data"])
+        summary = calculate_summary(current_total, previous_total)
+
+        # Add summary to net chart data
+        net_chart_data["summary"] = summary
+
+        income_vs_expense_chart_data = income_vs_expense_chart(
+            date_filter_type=date_filter_type,
+            expenses_df=dfs["expenses"],
+            incomes_df=dfs["incomes"],
+        )
+        categories_chart = categories_charts(
+            expenses_df=dfs["expenses"],
+            incomes_df=dfs["incomes"],
+        )
+
+        # API V3 redesign removed accounts charts since they were not clear for users. We can re add in the future
+        # account_chart = account_charts(
+        #     incomes_df=dfs["incomes"],
+        #     expenses_df=dfs["expenses"],
+        #     transfers_df=dfs["transfers"],
+        # )
+
+    enrich_event(
+        request,
+        performance={
+            "processing_duration_ms": t_processing.ms,
+            "charts_generated": 3,
+        },
+    )
+
+    result = ChartsResponse(
+        net=net_chart_data,
+        income_vs_expense=income_vs_expense_chart_data,
+        categories=categories_chart,
+        # accounts=account_chart,
+    )
+
+    # Store in cache
+    await store_cached(
+        "charts",
+        current_user.id,
+        date_filter_type.value,
+        cache_date_key,
+        result.model_dump(),
+    )
+
+    return result

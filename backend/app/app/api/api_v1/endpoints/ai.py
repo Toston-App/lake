@@ -4,7 +4,7 @@ import tempfile
 from typing import Any
 
 import filetype
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.utilities.logger import setup_logger
 from app.utilities.simplifier import categories as simplify_categories
 from app.utilities.simplifier import places as simplify_places
+from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
 logger = setup_logger("ocr_requests", "ocr_requests.log")
@@ -59,13 +60,23 @@ def validate_file_type(file: UploadFile) -> None:
 
 @router.post("/ocr", response_model=Any)
 async def ocr_image(
-    *,
+    request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
     image: UploadFile = File(...),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     logger.info(
         f"OCR request received - User ID: {current_user.id} - File: {image.filename}"
+    )
+
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={
+            "type": "ocr",
+            "filename": image.filename,
+            "content_type": image.content_type,
+        },
     )
 
     validate_file_type(image)
@@ -77,15 +88,29 @@ async def ocr_image(
             temp_file.write(contents)
             temp_file.flush()
 
+            enrich_event(request, file={"size_bytes": len(contents)})
+
             try:
-                places_task =  crud.place.get_multi_by_owner(db=db, owner_id=current_user.id)
-                categories_task =  crud.category.get_multi_by_owner(db=db, owner_id=current_user.id)
+                places_task = crud.place.get_multi_by_owner(db=db, owner_id=current_user.id)
+                categories_task = crud.category.get_multi_by_owner(db=db, owner_id=current_user.id)
 
                 (places, categories) = await asyncio.gather(places_task, categories_task)
 
-                transaction = await ocr.analyze_image(temp_file.name, simplify_categories(categories), simplify_places(places))
+                with timed() as t_ocr:
+                    transaction = await ocr.analyze_image(temp_file.name, simplify_categories(categories), simplify_places(places))
+
+                enrich_event(
+                    request,
+                    ai={
+                        "provider": "openai",
+                        "operation": "ocr_analyze",
+                        "duration_ms": t_ocr.ms,
+                        "context_items": {"categories": len(categories), "places": len(places)},
+                    },
+                )
 
                 if transaction == "Insufficient API credits":
+                    enrich_event(request, ai={"outcome": "failure", "reason": "insufficient_credits"})
                     logger.info(
                         f"OCR request failed - User ID: {current_user.id} - File: {image.filename} - Error: Insufficient API credits"
                     )
@@ -97,6 +122,8 @@ async def ocr_image(
                 parsed_transaction = await ocr.parse_response(
                     db=db, owner_id=current_user.id, response_text=transaction
                 )
+
+                enrich_event(request, ai={"outcome": "success"})
                 logger.info(
                     f"OCR request completed - User ID: {current_user.id} - File: {image.filename}"
                 )
@@ -109,6 +136,7 @@ async def ocr_image(
     except HTTPException:
         raise
     except Exception as e:
+        enrich_event(request, ai={"outcome": "error", "error": str(e)})
         logger.error(
             f"OCR request failed - User ID: {current_user.id} - File: {image.filename} - Error: {str(e)}"
         )
