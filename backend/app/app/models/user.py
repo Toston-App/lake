@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, ForeignKey
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -11,13 +11,15 @@ if TYPE_CHECKING:
     from .balance_adjustment import BalanceAdjustment  # noqa: F401
     from .category import Category  # noqa: F401
     from .expense import Expense  # noqa: F401
+    from .feedback import Feedback  # noqa: F401
+    from .holding import Holding  # noqa: F401
     from .imports import Import  # noqa: F401
     from .income import Income  # noqa: F401
+    from .investment_transaction import InvestmentTransaction  # noqa: F401
     from .item import Item  # noqa: F401
     from .place import Place  # noqa: F401
     from .subcategory import Subcategory  # noqa: F401
     from .transfer import Transfer  # noqa: F401
-    from .feedback import Feedback  # noqa: F401
 
 
 class User(Base):
@@ -54,7 +56,10 @@ class User(Base):
         "Transfer", back_populates="owner", cascade="all, delete-orphan"
     )
     accounts: list["Account"] = relationship(
-        "Account", back_populates="owner", cascade="all, delete-orphan", foreign_keys="[Account.owner_id]"
+        "Account",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        foreign_keys="[Account.owner_id]",
     )
     categories: list["Category"] = relationship(
         "Category", back_populates="owner", cascade="all, delete-orphan"
@@ -70,4 +75,11 @@ class User(Base):
     )
     balance_adjustments: list["BalanceAdjustment"] = relationship(
         "BalanceAdjustment", back_populates="owner", cascade="all, delete-orphan"
+    )
+    # Investment tracking
+    holdings: list["Holding"] = relationship(
+        "Holding", back_populates="owner", cascade="all, delete-orphan"
+    )
+    investment_transactions: list["InvestmentTransaction"] = relationship(
+        "InvestmentTransaction", back_populates="owner", cascade="all, delete-orphan"
     )
