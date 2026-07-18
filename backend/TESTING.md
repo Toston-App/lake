@@ -91,19 +91,31 @@ backend/app/tests/
 │   ├── test_auth.py                     # Login, token validation, JWT flows
 │   ├── test_categories.py               # GET/POST/PUT/DELETE /api/v1/categories
 │   ├── test_expenses.py                 # GET/POST/PUT/DELETE /api/v1/expenses
-│   └── test_incomes.py                  # GET/POST/PUT/DELETE /api/v1/incomes
+│   ├── test_incomes.py                   # GET/POST/PUT/DELETE /api/v1/incomes
+│   ├── test_investment_assets.py         # Asset catalog, search, and prices
+│   ├── test_investment_holdings.py       # Position ownership and valuation
+│   ├── test_investment_transactions.py   # Ledger and position-changing math
+│   ├── test_investment_portfolio.py      # Summary and allocation analytics
+│   ├── test_investment_security.py       # Feature gate and security invariants
+│   └── test_investment_telemetry.py      # Wide-event retention and redaction
 ├── crud/                                # CRUD layer tests (database-level)
 │   ├── __init__.py
 │   ├── test_crud_account.py             # Account CRUD operations
 │   ├── test_crud_category.py            # Category CRUD with subcategories
 │   ├── test_crud_expense.py             # Expense CRUD with side effects
 │   ├── test_crud_income.py              # Income CRUD with side effects
+│   ├── test_crud_asset.py                # Investment asset CRUD and search
+│   ├── test_crud_asset_price.py          # Price cache ordering and staleness
+│   ├── test_crud_holding.py              # Cost basis and valuation CRUD
+│   ├── test_crud_investment_transaction.py # Investment ledger CRUD
 │   ├── test_crud_transfer.py            # Transfer CRUD with account updates
 │   └── test_crud_user.py                # User CRUD, auth, balance updates
 └── business_logic/                      # Business rule tests
     ├── __init__.py
-    ├── test_balance_updates.py          # Balance propagation across entities
-    └── test_date_filtering.py           # Date-range query behavior
+    ├── test_balance_updates.py           # Balance propagation across entities
+    ├── test_date_filtering.py            # Date-range query behavior
+    ├── test_investment_position_math.py  # Multi-transaction position chains
+    └── test_investment_valuation_flow.py # Prices, gains, and account totals
 ```
 
 ### Test Layers
@@ -127,6 +139,8 @@ Defined in `conftest.py`:
 | `auth_headers`           | function | `{"Authorization": "Bearer <token>"}` for `test_user`       |
 | `superuser_auth_headers` | function | `{"Authorization": "Bearer <token>"}` for `test_superuser`  |
 | `client`                 | function | `AsyncClient` with DB and auth overrides (authenticated)     |
+| `superuser_client`       | function | `AsyncClient` authenticated as `test_superuser`              |
+| `enable_investments`     | function | Enables access and patches FX, Redis rate limiting           |
 | `unauth_client`          | function | `AsyncClient` with DB override only (no auth, for login tests) |
 
 ### Test Isolation
@@ -152,8 +166,20 @@ from tests.utils import (
     create_test_income,      # Create an Income (no balance update)
     create_test_transfer,    # Create a Transfer (no account update)
     create_test_place,       # Create a Place
+    create_test_asset,       # Create an investment Asset
+    create_test_asset_price, # Create a cached AssetPrice
+    create_test_holding,     # Create a Holding with realistic conversions
+    create_test_investment_transaction, # Create an immutable ledger row
 )
 ```
+
+### Investment tests
+
+Investment API tests opt into the function-scoped `enable_investments` fixture. It
+allowlists `test_user`, fixes USD/MXN at 18, and replaces the three endpoint-local rate
+limiter references with async no-ops. Tests that resolve assets or refresh prices patch
+the relevant provider or `PriceFetcher` service method, so the suite never calls Yahoo
+Finance, CoinGecko, Upstash, or another live service.
 
 ## Authentication in Tests
 

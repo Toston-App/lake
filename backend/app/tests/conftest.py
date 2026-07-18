@@ -8,8 +8,11 @@ This module provides:
 - FastAPI test client with dependency overrides
 - Authentication fixtures (test user + JWT token)
 """
+
 import os
 from collections.abc import AsyncGenerator
+from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -53,23 +56,30 @@ os.environ.setdefault("CLERK_ISSUER", "https://test.clerk.accounts.dev")
 os.environ.setdefault("PROFILE_QUERY_MODE", "False")
 os.environ.setdefault("SENTRY_DSN", "")
 
+from app.api.deps import (  # noqa: E402
+    async_get_db,
+    get_current_active_user,
+    get_current_user,
+)
+from app.core.config import settings  # noqa: E402
 from app.db.base_class import Base  # noqa: E402
 from app.main import app  # noqa: E402
-from app.api.deps import async_get_db, get_current_user, get_current_active_user  # noqa: E402
-from app.models.user import User  # noqa: E402
+
 # Import all models so Base.metadata knows about them
 from app.models import (  # noqa: E402, F401
     Account,
     BalanceAdjustment,
     Category,
+    Expense,
+    Import,
+    Income,
+    Item,
+    Place,
     Subcategory,
     Transfer,
-    Income,
-    Expense,
-    Place,
-    Item,
-    Import,
 )
+from app.models.user import User  # noqa: E402
+from app.services.currency_converter import CurrencyConverter  # noqa: E402
 
 try:
     from app.models.feedback import Feedback  # noqa: F401
@@ -79,7 +89,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Test database engine
 # ---------------------------------------------------------------------------
-TEST_DATABASE_URL = "postgresql+asyncpg://test_user:test_password@localhost:5433/test_toston"
+TEST_DATABASE_URL = (
+    "postgresql+asyncpg://test_user:test_password@localhost:5433/test_toston"
+)
 
 test_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
 TestSessionLocal = sessionmaker(
@@ -104,6 +116,7 @@ async def setup_database():
         # Use CASCADE to handle circular foreign key dependencies
         # between account, import, and user tables.
         from sqlalchemy import text
+
         await conn.execute(text("DROP SCHEMA public CASCADE"))
         await conn.execute(text("CREATE SCHEMA public"))
     await test_engine.dispose()
@@ -128,7 +141,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
         # Re-create a savepoint every time the application commits
         @event.listens_for(session.sync_session, "after_transaction_end")
-        def restart_savepoint(session_sync, transaction_sync):
+        def restart_savepoint(_session_sync, transaction_sync):
             nonlocal nested
             if transaction_sync.nested and not transaction_sync._parent.nested:
                 nested = connection.sync_connection.begin_nested()
@@ -227,6 +240,51 @@ async def client(
 
     async def _override_get_current_user() -> User:
         return test_user
+
+    app.dependency_overrides[async_get_db] = _override_get_db
+    app.dependency_overrides[get_current_user] = _override_get_current_user
+    app.dependency_overrides[get_current_active_user] = _override_get_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def enable_investments(monkeypatch: pytest.MonkeyPatch, test_user: User) -> None:
+    """Enable investment endpoints and isolate all common external dependencies."""
+    monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
+    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", str(test_user.id))
+    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "")
+    monkeypatch.setattr(
+        CurrencyConverter,
+        "get_usd_to_mxn_rate",
+        AsyncMock(return_value=Decimal("18")),
+    )
+    for module in (
+        "app.api.api_v1.endpoints.assets",
+        "app.api.api_v1.endpoints.holdings",
+        "app.api.api_v1.endpoints.investment_transactions",
+    ):
+        monkeypatch.setattr(
+            f"{module}.enforce_investment_rate_limit",
+            AsyncMock(return_value=None),
+        )
+
+
+@pytest.fixture
+async def superuser_client(
+    db_session: AsyncSession, test_superuser: User
+) -> AsyncGenerator[AsyncClient, None]:
+    """Authenticated client whose dependency override returns the superuser."""
+
+    async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        yield db_session
+
+    async def _override_get_current_user() -> User:
+        return test_superuser
 
     app.dependency_overrides[async_get_db] = _override_get_db
     app.dependency_overrides[get_current_user] = _override_get_current_user
