@@ -93,6 +93,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# testing
+coverage
+
 # mkdocs documentation
 /site
 
