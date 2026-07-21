@@ -630,15 +630,19 @@ def build_toolset(tier: Tier) -> FunctionToolset[ChatDeps]:
 
 
 def _args_as_dict(args: Any) -> dict[str, Any] | None:
-    if isinstance(args, dict):
-        return args
+    if args is None:
+        return None
     dump = getattr(args, "model_dump", None)
     if callable(dump):
         try:
-            return dump()  # type: ignore[no-any-return]
+            return dump(mode="json")  # type: ignore[no-any-return]
         except Exception:
-            return None
-    return None
+            pass
+    try:
+        encoded = jsonable_encoder(args)
+        return encoded if isinstance(encoded, dict) else {"value": encoded}
+    except Exception:
+        return None
 
 
 async def _obs_tool_execute(

@@ -14,7 +14,6 @@ class TierOut(BaseModel):
     monthly_message_limit: Optional[int] = None
     monthly_token_limit: Optional[int] = None
     features: list[str]
-    polar_product_id: Optional[str] = None
     price_hint: Optional[str] = None
     # Whether this tier is currently purchasable (has a configured product id).
     available: bool = False
@@ -35,9 +34,8 @@ class SubscriptionOut(BaseModel):
     status: str
     current_period_start: Optional[datetime] = None
     current_period_end: Optional[datetime] = None
-    polar_customer_id: Optional[str] = None
-    # Polar customer-portal URL when available (None if not subscribed / disabled).
-    manage_url: Optional[str] = None
+    # True when the user can open the Polar customer portal (has a bound customer).
+    can_manage: bool = False
 
     class Config:
         orm_mode = True

@@ -8,6 +8,7 @@ from app.models import (  # noqa
     ChatObsToolCall,
     ChatObsTurn,
     Item,
+    PolarWebhookEvent,
     User,
     UserSubscription,
 )

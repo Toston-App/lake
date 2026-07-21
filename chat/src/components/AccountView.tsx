@@ -103,7 +103,7 @@ export function AccountView({
                   </span>
                 </div>
               )}
-              {isActive && (
+              {isActive && sub.can_manage && (
                 <button
                   type="button"
                   className="logout-btn"
