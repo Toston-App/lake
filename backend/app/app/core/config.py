@@ -61,7 +61,6 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     SERVER_NAME: str
     SERVER_HOST: AnyHttpUrl
-    TEST_MODE: bool = False
     PROFILE_QUERY_MODE: bool = False
 
     PROJECT_NAME: str
@@ -79,19 +78,6 @@ class Settings(BaseSettings):
     POSTGRES_DB: str
     SQLALCHEMY_DATABASE_URI: PostgresDsn | None = None
     SQLALCHEMY_DATABASE_URI_ASYNC: AsyncPostgresDsn | None = None
-
-    @field_validator("POSTGRES_DB", mode="before")
-    def assemble_db_name(cls, v: str | None, info: dict[str, Any]) -> Any:
-        if isinstance(v, str):
-            normalized = v.strip().lower()
-            if info.data.get("TEST_MODE") and not (
-                normalized.startswith("test_") or normalized.endswith("_test")
-            ):
-                raise ValueError(
-                    "TEST_MODE requires an explicitly test-only POSTGRES_DB name"
-                )
-            return v
-        return v
 
     @field_validator("SQLALCHEMY_DATABASE_URI", mode="before")
     def assemble_db_connection(cls, v: str | None, info: dict[str, Any]) -> Any:
@@ -143,7 +129,6 @@ class Settings(BaseSettings):
             and info.data.get("EMAILS_FROM_EMAIL")
         )
 
-    EMAIL_TEST_USER: EmailStr = "test@example.com"  # type: ignore
     FIRST_SUPERUSER: EmailStr
     FIRST_SUPERUSER_PASSWORD: str
     USERS_OPEN_REGISTRATION: bool = False

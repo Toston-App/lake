@@ -33,14 +33,6 @@ def get_url():
     password = os.getenv("POSTGRES_PASSWORD", "")
     server = os.getenv("POSTGRES_SERVER", "db")
     db = os.getenv("POSTGRES_DB", "app")
-    test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
-    normalized_db = db.strip().lower()
-    if test_mode and not (
-        normalized_db.startswith("test_") or normalized_db.endswith("_test")
-    ):
-        raise RuntimeError(
-            "TEST_MODE migrations require an explicitly test-only database name"
-        )
     return f"postgresql://{user}:{password}@{server}/{db}"
 
 

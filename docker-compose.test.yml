@@ -1,16 +1,18 @@
 services:
-  investment-test-db:
+  db-test:
     image: postgres:16
-    environment:
-      POSTGRES_USER: investment_test
-      POSTGRES_PASSWORD: investment_test
-      POSTGRES_DB: investment_test
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d test_toston"]
+      interval: 5s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
     ports:
-      - "127.0.0.1:${INVESTMENT_TEST_DB_PORT:-55432}:5432"
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: test_toston
     tmpfs:
       - /var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U investment_test -d investment_test"]
-      interval: 2s
-      timeout: 2s
-      retries: 20

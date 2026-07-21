@@ -537,10 +537,25 @@ Common responses include:
 
 ## Testing Structure
 
-Investment security regression tests are located at:
+Investment tests are part of the live backend suite:
 
 ```text
-backend/app/app/tests/api/api_v1/test_investments_security.py
+backend/app/tests/
+├── api/
+│   ├── test_investment_assets.py
+│   ├── test_investment_holdings.py
+│   ├── test_investment_transactions.py
+│   ├── test_investment_portfolio.py
+│   ├── test_investment_security.py
+│   └── test_investment_telemetry.py
+├── crud/
+│   ├── test_crud_asset.py
+│   ├── test_crud_asset_price.py
+│   ├── test_crud_holding.py
+│   └── test_crud_investment_transaction.py
+└── business_logic/
+    ├── test_investment_position_math.py
+    └── test_investment_valuation_flow.py
 ```
 
 Coverage includes:
@@ -555,15 +570,11 @@ Coverage includes:
 - Redaction of search text, monetary data, notes, and exception parameters.
 - Atomic rollback and representative investment workflow outcomes.
 
-Additional high-value test cases for future expansion include:
-
-- Two concurrent sells against the same holding.
-- Atomic rollback after a forced database error.
-- Cross-user account, holding, and transaction ID attempts.
-- Duplicate holding creation races.
-- Provider symbol collisions and CoinGecko ID conflicts.
-- Price refresh effects across several accounts and currencies.
-- Migration tests against representative legacy data.
+The suite uses the `enable_investments` fixture to enable the feature gate, allowlist the
+test user, provide a deterministic USD/MXN rate, and neutralize endpoint-local Redis rate
+limiting. External provider and price fetches are patched at their service boundaries.
+All database-facing cases run against the isolated PostgreSQL test container and roll
+back through a per-test savepoint.
 
 Tests use a fixture that drops and recreates its configured database. Always point the
 suite at an isolated test database, never a development or production database.
