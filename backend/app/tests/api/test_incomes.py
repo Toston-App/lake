@@ -13,9 +13,6 @@ Covers:
 Note: Incomes don't have category_id directly. They have subcategory_id,
 and the subcategory references a category.
 """
-from datetime import date
-
-import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -145,7 +142,7 @@ class TestGetIncomes:
             db_session, owner_id=other_user.id, amount=500.0
         )
         resp = await client.get(f"{PREFIX}/{income.id}")
-        assert resp.status_code == 400
+        assert resp.status_code == 403
         assert "permissions" in resp.json()["detail"].lower()
 
 
@@ -234,4 +231,4 @@ class TestBulkDeleteIncomes:
             db_session, owner_id=other_user.id, amount=50.0
         )
         resp = await client.delete(f"{PREFIX}/bulk/{income.id}")
-        assert resp.status_code == 400
+        assert resp.status_code == 403

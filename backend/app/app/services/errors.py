@@ -18,7 +18,7 @@ class NotFoundError(ServiceError):
 
 
 class PermissionDeniedError(ServiceError):
-    status_code = 400
+    status_code = 403
 
 
 class DomainError(ServiceError):

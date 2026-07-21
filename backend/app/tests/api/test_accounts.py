@@ -8,7 +8,6 @@ Covers:
   - PUT    /accounts/{id}     (update — uses Body params, not schema)
   - DELETE /accounts/{id}     (delete, clears default_account_id)
 """
-import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -117,7 +116,7 @@ class TestGetAccountById:
             db_session, owner_id=other_user.id, name="Private"
         )
         resp = await client.get(f"{PREFIX}/{account.id}")
-        assert resp.status_code == 400
+        assert resp.status_code == 403
         assert "permissions" in resp.json()["detail"].lower()
 
 
@@ -214,4 +213,4 @@ class TestDeleteAccount:
         other_user = await create_test_user(db_session, email="del_acc@test.com")
         account = await create_test_account(db_session, owner_id=other_user.id)
         resp = await client.delete(f"{PREFIX}/{account.id}")
-        assert resp.status_code == 400
+        assert resp.status_code == 403

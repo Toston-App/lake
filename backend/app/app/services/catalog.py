@@ -50,7 +50,11 @@ async def update_category(
 ):
     category = await get_category(db, user, category_id)
     category_in.updated_at = datetime.now(timezone.utc)
-    return await crud.category.update(db=db, db_obj=category, obj_in=category_in)
+    await crud.category.update(db=db, db_obj=category, obj_in=category_in)
+    # CRUDBase.update() commits and refreshes the scalar fields, which expires
+    # relationships. Re-fetch with get_category() so response serialization
+    # never attempts the Category.subcategories lazy="raise_on_sql" loader.
+    return await get_category(db, user, category_id)
 
 
 async def delete_category(db: AsyncSession, user: models.User, category_id: int):
