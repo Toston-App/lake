@@ -10,18 +10,85 @@ Key principles:
 5. Tail sampling: always keep errors, slow requests, VIP users
 """
 
-import time
-import uuid
+import asyncio
+import logging
 import random
+import time
+import traceback
+import uuid
 from contextlib import contextmanager
-from typing import Any, Dict, Optional
 from datetime import datetime
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import Request, Response
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from app.utilities.axiom import get_axiom_client
+
+logger = logging.getLogger(__name__)
+
+INVESTMENTS_PATH_PREFIX = "/api/v1/investments"
+INVESTMENT_QUERY_ALLOWLIST = {
+    "skip",
+    "limit",
+    "asset_class",
+    "asset_type",
+    "currency",
+    "market",
+    "is_active",
+    "account_id",
+    "holding_id",
+    "transaction_type",
+    "refresh",
+    "only_my_holdings",
+}
+
+
+def _http_context(request: Request) -> dict[str, Any]:
+    """Build request metadata, redacting investment search input and raw URLs."""
+    is_investment = request.url.path.startswith(INVESTMENTS_PATH_PREFIX)
+    if is_investment:
+        query_params = {
+            key: value
+            for key, value in request.query_params.items()
+            if key in INVESTMENT_QUERY_ALLOWLIST
+        }
+        if "q" in request.query_params:
+            query_params["search_query_present"] = True
+            query_params["search_query_length"] = len(request.query_params["q"])
+        url = str(request.url.replace(query=""))
+        raw_referer = request.headers.get("referer")
+        if raw_referer:
+            referer_parts = urlsplit(raw_referer)
+            referer = urlunsplit(
+                (
+                    referer_parts.scheme,
+                    referer_parts.netloc,
+                    referer_parts.path,
+                    "",
+                    "",
+                )
+            )
+        else:
+            referer = None
+    else:
+        query_params = dict(request.query_params)
+        url = str(request.url)
+        referer = request.headers.get("referer")
+
+    return {
+        "method": request.method,
+        "path": request.url.path,
+        "url": url,
+        "scheme": request.url.scheme,
+        "query_params": query_params,
+        "user_agent": request.headers.get("user-agent"),
+        "referer": referer,
+        "host": request.headers.get("host"),
+        "content_type": request.headers.get("content-type"),
+    }
 
 
 class WideEventsMiddleware(BaseHTTPMiddleware):
@@ -37,8 +104,8 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
         app: ASGIApp,
         service_name: str,
         service_version: str,
-        deployment_id: Optional[str] = None,
-        region: Optional[str] = None,
+        deployment_id: str | None = None,
+        region: str | None = None,
         environment: str = "production",
         sample_rate: float = 0.05,  # Sample 5% of successful requests
         slow_request_threshold_ms: int = 2000,  # P99 threshold
@@ -61,32 +128,19 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
 
         # Initialize the wide event with request context
-        event: Dict[str, Any] = {
+        event: dict[str, Any] = {
             # Timestamps and identifiers
             "_time": start_timestamp.isoformat() + "Z",
             "request_id": request_id,
             "trace_id": request.headers.get("X-Trace-ID", request_id),
-
             # Service metadata
             "service": self.service_name,
             "version": self.service_version,
             "environment": self.environment,
             "deployment_id": self.deployment_id,
             "region": self.region,
-
             # HTTP request details
-            "http": {
-                "method": request.method,
-                "path": request.url.path,
-                "url": str(request.url),
-                "scheme": request.url.scheme,
-                "query_params": dict(request.query_params),
-                "user_agent": request.headers.get("user-agent"),
-                "referer": request.headers.get("referer"),
-                "host": request.headers.get("host"),
-                "content_type": request.headers.get("content-type"),
-            },
-
+            "http": _http_context(request),
             # Network details
             "network": {
                 "client_ip": request.client.host if request.client else None,
@@ -104,7 +158,7 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
 
         try:
             response = await call_next(request)
-            event["outcome"] = "success"
+            event["outcome"] = "error" if response.status_code >= 400 else "success"
             event["http"]["status_code"] = response.status_code
 
             # Add response headers metadata
@@ -115,21 +169,37 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
             event["outcome"] = "error"
             event["http"]["status_code"] = 500
 
-            # Capture detailed error information
-            event["error"] = {
-                "type": type(e).__name__,
-                "message": str(e),
-                "module": type(e).__module__,
-            }
-
-            # Try to capture stack trace for serious errors
-            import traceback
-            event["error"]["stack_trace"] = traceback.format_exc()
+            # Investment exceptions can include financial values or raw provider/SQL
+            # parameters. Keep code locations, but not the free-form exception text.
+            if request.url.path.startswith(INVESTMENTS_PATH_PREFIX):
+                event["error"] = {
+                    "type": type(e).__name__,
+                    "module": type(e).__module__,
+                    "stack_trace": "".join(
+                        traceback.format_list(traceback.extract_tb(e.__traceback__))
+                    ),
+                }
+            else:
+                event["error"] = {
+                    "type": type(e).__name__,
+                    "message": str(e),
+                    "module": type(e).__module__,
+                    "stack_trace": traceback.format_exc(),
+                }
 
         finally:
             # Calculate request duration
             duration_ms = (time.time() - start_time) * 1000
             event["duration_ms"] = round(duration_ms, 2)
+
+            # Complete the investment-specific contract even when validation or a
+            # dependency ended the request before the route handler ran.
+            from app.utilities.investment_telemetry import finalize_investment_response
+
+            finalize_investment_response(
+                request,
+                event.get("http", {}).get("status_code", 500),
+            )
 
             # Add performance classification
             if duration_ms < 100:
@@ -148,7 +218,10 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
                 # Send to Axiom
                 axiom_client = get_axiom_client()
                 if axiom_client:
-                    await axiom_client.log(event)
+                    try:
+                        await asyncio.wait_for(axiom_client.log(event), timeout=0.25)
+                    except Exception:
+                        logger.exception("Axiom event emission failed")
 
             # Re-raise the error if one occurred
             if error:
@@ -159,7 +232,7 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
 
         return response
 
-    def _should_sample(self, event: Dict[str, Any], duration_ms: float) -> bool:
+    def _should_sample(self, event: dict[str, Any], duration_ms: float) -> bool:
         """
         Tail sampling logic: intelligently decide which events to keep
 
@@ -174,10 +247,12 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
 
         # Always keep errors
         if event.get("outcome") == "error":
+            event["sampling_reason"] = "error"
             return True
 
         status_code = event.get("http", {}).get("status_code", 200)
         if status_code >= 400:
+            event["sampling_reason"] = "http_error"
             return True
 
         # Always keep slow requests (above p99 threshold)
@@ -187,7 +262,10 @@ class WideEventsMiddleware(BaseHTTPMiddleware):
 
         # Always keep VIP/Enterprise users
         user_context = event.get("user", {})
-        if user_context.get("is_superuser") or user_context.get("subscription_tier") == "enterprise":
+        if (
+            user_context.get("is_superuser")
+            or user_context.get("subscription_tier") == "enterprise"
+        ):
             event["sampling_reason"] = "vip_user"
             return True
 
@@ -243,7 +321,7 @@ def mark_for_logging(request: Request) -> None:
         request.state.wide_event["force_log"] = True
 
 
-def get_request_id(request: Request) -> Optional[str]:
+def get_request_id(request: Request) -> str | None:
     """Get the request ID for this request"""
     return getattr(request.state, "request_id", None)
 
@@ -264,4 +342,3 @@ def timed():
         yield t
     finally:
         t.ms = round((time.time() - start) * 1000, 2)
-

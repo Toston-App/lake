@@ -9,8 +9,10 @@ from app.api.api_v1.endpoints import (
     chat,
     demo_data,
     expenses,
+    feedback,
     imports,
     incomes,
+    investments,
     login,
     places,
     polar,
@@ -23,7 +25,6 @@ from app.api.api_v1.endpoints import (
     utils,
     waha,
     whatsapp,
-    feedback
 )
 
 api_router = APIRouter()
@@ -40,7 +41,9 @@ api_router.include_router(
 )
 api_router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
 api_router.include_router(
-    balance_adjustments.router, prefix="/balance-adjustments", tags=["balance-adjustments"]
+    balance_adjustments.router,
+    prefix="/balance-adjustments",
+    tags=["balance-adjustments"],
 )
 api_router.include_router(categories.router, prefix="/categories", tags=["categories"])
 api_router.include_router(
@@ -52,6 +55,9 @@ api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"]
 api_router.include_router(waha.router, prefix="/waha", tags=["whatsapp", "waha"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(recap.router, prefix="/recap", tags=["recap"])
+api_router.include_router(
+    investments.router, prefix="/investments", tags=["investments"]
+)
 api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
 api_router.include_router(
     subscriptions.router,

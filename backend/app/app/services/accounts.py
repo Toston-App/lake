@@ -53,6 +53,7 @@ async def update_account(
     initial_balance: float | None = None,
     color: str | None = None,
     type: AccountType | None = None,
+    logo: str | None = None,
     account_in: schemas.AccountUpdate | None = None,
 ):
     account = await get_account(db, user, account_id)
@@ -70,6 +71,8 @@ async def update_account(
             color = account_in.color
         if type is None and "type" in provided_fields:
             type = account_in.type
+        if logo is None and "logo" in provided_fields:
+            logo = account_in.logo
 
     if name is not None:
         update_in.name = name
@@ -86,6 +89,8 @@ async def update_account(
         update_in.color = color
     if type is not None:
         update_in.type = type
+    if logo is not None:
+        update_in.logo = logo
 
     update_in.updated_at = datetime.now(timezone.utc)
     account = await crud.account.update(db=db, db_obj=account, obj_in=update_in)

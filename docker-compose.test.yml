@@ -1,0 +1,18 @@
+services:
+  db-test:
+    image: postgres:16
+    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test_user -d test_toston"]
+      interval: 5s
+      retries: 5
+      start_period: 10s
+      timeout: 5s
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: test_user
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: test_toston
+    tmpfs:
+      - /var/lib/postgresql/data

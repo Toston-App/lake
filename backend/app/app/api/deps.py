@@ -1,9 +1,8 @@
 import logging
 from collections.abc import AsyncGenerator, Generator
 from enum import Enum
-from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
 from jose import jwt
 from pydantic import ValidationError
@@ -94,8 +93,8 @@ def verify_clerk_token(token: str) -> schemas.ClerkTokenPayload:
 
 async def get_current_user(
     db: AsyncSession = Depends(async_get_db),
-    bearer_token: Optional[str] = Depends(reusable_oauth2),
-    cookie_token: Optional[str] = Depends(cookie_scheme),
+    bearer_token: str | None = Depends(reusable_oauth2),
+    cookie_token: str | None = Depends(cookie_scheme),
 ) -> models.User:
     token = bearer_token or cookie_token
     if not token:
@@ -130,8 +129,8 @@ async def get_current_user(
 
 
 async def get_clerk_session_sub(
-    bearer_token: Optional[str] = Depends(reusable_oauth2),
-    cookie_token: Optional[str] = Depends(cookie_scheme),
+    bearer_token: str | None = Depends(reusable_oauth2),
+    cookie_token: str | None = Depends(cookie_scheme),
 ) -> str:
     """Require a valid Clerk session and return the verified `sub` (user uuid).
 
@@ -163,6 +162,42 @@ def get_current_active_user(
 ) -> models.User:
     if not crud.user.is_active(current_user):
         raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
+
+
+def require_investments_access(
+    current_user: models.User = Depends(get_current_active_user),
+    request: Request = None,
+) -> models.User:
+    if request is not None:
+        from app.utilities.investment_telemetry import (
+            complete_investment_stage,
+            fail_investment_event,
+            start_investment_event,
+        )
+
+        start_investment_event(request, user_id=current_user.id)
+
+    allowed_by_id = current_user.id in settings.investments_allowed_user_ids
+    allowed_by_uuid = (
+        current_user.uuid is not None
+        and current_user.uuid in settings.investments_allowed_user_uuids
+    )
+    if not settings.INVESTMENTS_ENABLED or not (
+        crud.user.is_superuser(current_user) or allowed_by_id or allowed_by_uuid
+    ):
+        if request is not None:
+            fail_investment_event(
+                request,
+                reason="feature_access_denied",
+                stage="access",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Investments feature access is not enabled for this user",
+        )
+    if request is not None:
+        complete_investment_stage(request, "access")
     return current_user
 
 

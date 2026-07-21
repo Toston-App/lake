@@ -11,3 +11,9 @@ from app.models import (  # noqa
     User,
     UserSubscription,
 )
+from app.models.account import Account  # noqa
+from app.models.asset import Asset  # noqa
+from app.models.asset_price import AssetPrice  # noqa
+from app.models.holding import Holding  # noqa
+from app.models.investment_transaction import InvestmentTransaction  # noqa
+

@@ -68,7 +68,8 @@ async def create_account(
         operation={
             "type": "create_account",
             "account_type": account_in.type.value if account_in.type else None,
-            "has_initial_balance": account_in.initial_balance is not None and account_in.initial_balance != 0,
+            "has_initial_balance": account_in.initial_balance is not None
+            and account_in.initial_balance != 0,
         },
     )
 
@@ -85,7 +86,9 @@ async def create_account(
         transaction={
             "type": "account",
             "id": account.id if account else None,
-            "initial_balance": float(account_in.initial_balance) if account_in.initial_balance else 0,
+            "initial_balance": float(account_in.initial_balance)
+            if account_in.initial_balance
+            else 0,
         },
     )
 
@@ -125,6 +128,7 @@ async def update_account(
     initial_balance: float = Body(None),
     color: str = Body(None),
     type: AccountType = Body(None),
+    logo: str = Body(None),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -147,6 +151,8 @@ async def update_account(
     if type is not None:
         existing = await read_account(db=db, id=id, current_user=current_user, request=request)
         changes["type"] = {"from": existing.type.value if existing.type else None, "to": type.value}
+    if logo is not None:
+        changes["logo"] = logo
 
     try:
         with timed() as t:
@@ -158,9 +164,15 @@ async def update_account(
                 initial_balance=initial_balance,
                 color=color,
                 type=type,
+                logo=logo,
             )
     except ServiceError as exc:
         raise_http(exc)
+
+    changes["initial_balance"] = {
+        "from": float(account.initial_balance),
+        "to": initial_balance,
+    }
 
     enrich_event(
         request,
