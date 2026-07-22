@@ -5,6 +5,7 @@ type PricingPlansProps = {
   currentTier: TierSlug | null
   onChoose: (tier: TierSlug) => void
   busyTier: TierSlug | null
+  changingPlan: boolean
 }
 
 const FEATURE_LABELS: Record<string, string> = {
@@ -29,6 +30,7 @@ export function PricingPlans({
   currentTier,
   onChoose,
   busyTier,
+  changingPlan,
 }: PricingPlansProps) {
   const payingTiers = tiers.filter((t) => t.tier !== 'free')
 
@@ -70,7 +72,9 @@ export function PricingPlans({
                   ? 'Redirecting…'
                   : !tier.available
                     ? 'Unavailable'
-                    : 'Choose'}
+                    : changingPlan
+                      ? 'Change plan'
+                      : 'Choose'}
             </button>
           </div>
         )

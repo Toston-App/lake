@@ -1,6 +1,13 @@
 from typing import Annotated, Any
 
-from pydantic import AnyHttpUrl, EmailStr, HttpUrl, PostgresDsn, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    EmailStr,
+    HttpUrl,
+    PostgresDsn,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, NoDecode
 
 
@@ -59,8 +66,8 @@ class Settings(BaseSettings):
 
     # 60 minutes * 24 hours * 8 days = 8 days
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
-    SERVER_NAME: str
-    SERVER_HOST: AnyHttpUrl
+    SERVER_NAME: str = "localhost"
+    SERVER_HOST: AnyHttpUrl = AnyHttpUrl("http://localhost")
     PROFILE_QUERY_MODE: bool = False
 
     PROJECT_NAME: str
@@ -174,9 +181,6 @@ class Settings(BaseSettings):
 
     SEED_DATABASE: bool = False
 
-    SERVER_NAME: str = "localhost"
-    SERVER_HOST: str = "http://localhost"
-
     DOCS_USER: str = "user"
     DOCS_PASSWORD: str = "password"
 
@@ -195,11 +199,13 @@ class Settings(BaseSettings):
     CHAT_ENABLED: bool = True
     CHAT_MAX_TOOL_ROUNDS: int = 8
     CHAT_CONVERSATION_TTL_SECONDS: int = 60 * 60 * 24 * 7
-    CHAT_MODEL: str | None = 'openai/gpt-5.4-mini'
+    CHAT_MODEL: str | None = "openai/gpt-5.4-mini"
     TAVILY_API_KEY: str | None = None
     CHAT_WEB_SEARCH_MAX_RESULTS: int = 5
     # Chat observability: persist turns/llm-calls/tool-calls to Postgres.
     CHAT_OBSERVABILITY_ENABLED: bool = True
+    # In-progress billing reservations older than this stop consuming quota.
+    CHAT_TURN_RESERVATION_TTL_SECONDS: int = 900
 
     # Feedback
     TELEGRAM_BOT_TOKEN: str
@@ -238,12 +244,13 @@ class Settings(BaseSettings):
     POLAR_SERVER: str = "sandbox"
     # Public base URL of this backend, used to build Polar success_url for
     # checkout. Falls back to SERVER_HOST when not set.
-    POLAR_SUCCESS_URL_BASE: str | None = None
-    # Polar product ids per paying tier. Optional: only required to actually
-    # create checkouts. The webhook maps incoming product ids back to tiers.
+    POLAR_SUCCESS_URL_BASE: AnyHttpUrl | None = None
+    # Polar product ids per paying tier. Optional in sandbox; production
+    # startup requires three non-empty, unique ids.
     POLAR_PRODUCT_TIER1_ID: str | None = None
     POLAR_PRODUCT_TIER2_ID: str | None = None
     POLAR_PRODUCT_TIER3_ID: str | None = None
+    POLAR_WEBHOOK_MAX_BYTES: int = 262_144
     # Master switch. None/unset = auto-enable when POLAR_ACCESS_TOKEN is set.
     # Explicit false always disables (even if a token is present). Explicit true
     # (or auto-enable) requires access token + webhook secret + org id.
@@ -256,7 +263,7 @@ class Settings(BaseSettings):
     def _polar_server_value(cls, v: str) -> str:
         v = (v or "").strip().lower()
         if v not in ("sandbox", "production"):
-            return "sandbox"
+            raise ValueError("POLAR_SERVER must be 'sandbox' or 'production'")
         return v
 
     @field_validator("SUBSCRIPTIONS_DEV_DEFAULT_TIER")
@@ -303,6 +310,28 @@ class Settings(BaseSettings):
                     "SUBSCRIPTIONS_ENABLED=true requires: " + ", ".join(missing)
                 )
         return enabled
+
+    @model_validator(mode="after")
+    def _validate_production_polar(self) -> "Settings":
+        if not self.SUBSCRIPTIONS_ENABLED or self.POLAR_SERVER != "production":
+            return self
+
+        product_ids = [
+            (self.POLAR_PRODUCT_TIER1_ID or "").strip(),
+            (self.POLAR_PRODUCT_TIER2_ID or "").strip(),
+            (self.POLAR_PRODUCT_TIER3_ID or "").strip(),
+        ]
+        if not all(product_ids):
+            raise ValueError(
+                "Production subscriptions require all POLAR_PRODUCT_TIER*_ID values"
+            )
+        if len(set(product_ids)) != len(product_ids):
+            raise ValueError("Production Polar product ids must be unique")
+
+        success_base = str(self.POLAR_SUCCESS_URL_BASE or self.SERVER_HOST)
+        if not success_base.lower().startswith("https://"):
+            raise ValueError("Production Polar checkout success URL must use HTTPS")
+        return self
 
     @field_validator("WHATSAPP_ENABLED", mode="before")
     def get_whatsapp_enabled(cls, v: bool, info: dict[str, Any]) -> bool:

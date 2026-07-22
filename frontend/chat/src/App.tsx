@@ -26,20 +26,29 @@ function App() {
   const [view, setView] = useState<View>('chat')
 
   useEffect(() => {
-    if (isAuthenticated) {
-      void loadConversations()
-      fetchMe()
-        .then((me) => setIsSuperuser(me.is_superuser))
-        .catch((err) => {
-          // 403/401 just means no access; ignore other errors silently.
-          if (err instanceof ApiError && err.status >= 500) {
-            // eslint-disable-next-line no-console
-            console.error('Failed to load user profile', err)
-          }
-        })
-    } else {
-      setIsSuperuser(false)
-      setView('chat')
+    let cancelled = false
+    const task = window.setTimeout(() => {
+      if (isAuthenticated) {
+        void loadConversations()
+        fetchMe()
+          .then((me) => {
+            if (!cancelled) setIsSuperuser(me.is_superuser)
+          })
+          .catch((err) => {
+            // 403/401 just means no access; report only server failures.
+            if (err instanceof ApiError && err.status >= 500) {
+              console.error('Failed to load user profile', err)
+            }
+          })
+      } else {
+        setIsSuperuser(false)
+        setView('chat')
+      }
+    }, 0)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(task)
     }
   }, [isAuthenticated, loadConversations])
 

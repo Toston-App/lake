@@ -22,16 +22,36 @@ from app.utilities.wide_events import enrich_event, mark_for_logging
 router = APIRouter()
 
 
+async def _bounded_body(request: Request) -> bytes:
+    limit = settings.POLAR_WEBHOOK_MAX_BYTES
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > limit:
+                raise HTTPException(status_code=413, detail="Webhook payload too large")
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid Content-Length"
+            ) from None
+
+    payload = bytearray()
+    async for chunk in request.stream():
+        payload.extend(chunk)
+        if len(payload) > limit:
+            raise HTTPException(status_code=413, detail="Webhook payload too large")
+    return bytes(payload)
+
+
 @router.post("/webhook")
 async def polar_webhook(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-):
+) -> Response:
     if not settings.SUBSCRIPTIONS_ENABLED:
         # Acknowledge silently when disabled so Polar doesn't keep retrying.
         return Response(status_code=202)
 
-    payload = await request.body()
+    payload = await _bounded_body(request)
     webhook_id = request.headers.get("webhook-id")
 
     mark_for_logging(request)
@@ -44,12 +64,8 @@ async def polar_webhook(
         },
     )
 
-    if webhook_id and await crud_subscription.is_webhook_processed(db, webhook_id):
-        enrich_event(request, webhook={"outcome": "duplicate"})
-        return Response(status_code=202)
-
     try:
-        from polar_sdk.webhooks import (  # type: ignore[import-not-found]
+        from polar_sdk.webhooks import (
             WebhookUnknownTypeError,
             WebhookVerificationError,
             validate_event,
@@ -76,20 +92,31 @@ async def polar_webhook(
         # Signature was valid but the event type isn't known to this SDK
         # version. Acknowledge so Polar doesn't retry; safe to ignore.
         if webhook_id:
-            await crud_subscription.mark_webhook_processed(
-                db, webhook_id, event_type="unknown"
-            )
+            await crud_subscription.claim_webhook(db, webhook_id, event_type="unknown")
+            await db.commit()
         enrich_event(request, webhook={"outcome": "unknown_event_type"})
         return Response(status_code=202)
     except Exception as exc:  # malformed payload etc.
         enrich_event(request, webhook={"outcome": "error", "error": str(exc)})
-        raise HTTPException(status_code=400, detail="Malformed webhook payload") from exc
+        raise HTTPException(
+            status_code=400, detail="Malformed webhook payload"
+        ) from exc
 
     event_type = getattr(event, "TYPE", None) or getattr(event, "type", None)
 
     try:
+        if webhook_id and not await crud_subscription.claim_webhook(
+            db,
+            webhook_id,
+            event_type=str(event_type) if event_type else None,
+        ):
+            await db.commit()
+            enrich_event(request, webhook={"outcome": "duplicate"})
+            return Response(status_code=202)
         await handle_polar_event(db, event, request=request)
+        await db.commit()
     except Exception as exc:
+        await db.rollback()
         # 5xx so Polar retries; do not mark webhook_id as processed.
         enrich_event(
             request,
@@ -103,14 +130,7 @@ async def polar_webhook(
                 "error": str(exc),
             },
         )
-        raise HTTPException(
-            status_code=500, detail="Webhook handler failed"
-        ) from exc
-
-    if webhook_id:
-        await crud_subscription.mark_webhook_processed(
-            db, webhook_id, event_type=str(event_type) if event_type else None
-        )
+        raise HTTPException(status_code=500, detail="Webhook handler failed") from exc
 
     enrich_event(
         request,

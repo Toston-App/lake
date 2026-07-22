@@ -15,16 +15,17 @@ Async convention: the polar-sdk exposes async variants with an `_async` suffix
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, cast
 
 from fastapi import HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.tiers import Tier, get_tier_config
-from app.crud import crud_subscription, crud_user
+from app.crud import crud_subscription
+from app.crud.crud_user import user as crud_user
 from app.models.user import User
-from app.schemas.subscription import CheckoutOut, PortalOut
+from app.schemas.subscription import ChangePlanOut, CheckoutOut, PortalOut
 from app.utilities.wide_events import enrich_event, mark_for_logging
 
 _polar_client: Any = None
@@ -45,7 +46,7 @@ SUBSCRIPTION_EVENTS = frozenset(
 CUSTOMER_EVENTS = frozenset({"customer.created", "customer.updated"})
 
 
-def _polar_log(request: Optional[Request], **fields: Any) -> None:
+def _polar_log(request: Request | None, **fields: Any) -> None:
     """Attach Polar context to the request wide event (Axiom)."""
     if request is None:
         return
@@ -64,7 +65,7 @@ def get_polar_client() -> Any:
     if not _enabled():
         return None
     if _polar_client is None:
-        from polar_sdk import Polar  # type: ignore[import-not-found]
+        from polar_sdk import Polar
 
         _polar_client = Polar(
             access_token=settings.POLAR_ACCESS_TOKEN,
@@ -95,16 +96,13 @@ def _external_id(user: User) -> str:
 
 
 def _success_url() -> str:
-    base = (
-        settings.POLAR_SUCCESS_URL_BASE
-        or str(settings.SERVER_HOST).rstrip("/")
-    )
+    base = str(settings.POLAR_SUCCESS_URL_BASE or settings.SERVER_HOST).rstrip("/")
     return f"{base}/account?checkout=success"
 
 
 async def _resolve_user_by_external_id(
     db: AsyncSession, external_id: str
-) -> Optional[User]:
+) -> User | None:
     """external_id is `User.uuid` or `str(User.id)`."""
     # Try Clerk UUID first.
     user = await crud_user.get_by_uuid(db, uuid=external_id)
@@ -119,7 +117,7 @@ async def _resolve_user_by_external_id(
 
 
 async def ensure_customer(
-    db: AsyncSession, user: User, request: Optional[Request] = None
+    db: AsyncSession, user: User, request: Request | None = None
 ) -> str:
     """Return the Polar customer id for `user`, creating the customer if needed.
 
@@ -135,18 +133,12 @@ async def ensure_customer(
     ext_id = _external_id(user)
     # First try to look up by external id (the customer may already exist
     # from a prior checkout that didn't finish, or created in the dashboard).
+    from polar_sdk.models import ResourceNotFound
+
     try:
         existing = await polar.customers.get_external_async(external_id=ext_id)
         customer_id = existing.id
-    except Exception as exc:
-        # ResourceNotFound -> create; anything else -> bubble up.
-        if "ResourceNotFound" not in type(exc).__name__ and "404" not in str(exc):
-            _polar_log(
-                request,
-                level="warning",
-                op="customers.get_external",
-                error=str(exc),
-            )
+    except ResourceNotFound:
         # Create a new customer tied to our external id.
         try:
             created = await polar.customers.create_async(
@@ -165,7 +157,19 @@ async def ensure_customer(
                 op="customers.create",
                 error=str(create_exc),
             )
-            raise HTTPException(status_code=502, detail="Failed to create Polar customer") from create_exc
+            raise HTTPException(
+                status_code=502, detail="Failed to create Polar customer"
+            ) from create_exc
+    except Exception as exc:
+        _polar_log(
+            request,
+            level="error",
+            op="customers.get_external",
+            error=type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=502, detail="Failed to look up Polar customer"
+        ) from exc
 
     try:
         await crud_subscription.set_polar_customer_id(db, user.id, customer_id)
@@ -181,22 +185,34 @@ async def ensure_customer(
             status_code=409,
             detail="Polar customer is already linked to another account",
         ) from exc
+    await db.commit()
     # Keep the in-memory user in sync for the rest of the request.
     user.polar_customer_id = customer_id
-    return customer_id
+    return cast(str, customer_id)
 
 
 async def create_checkout(
     db: AsyncSession,
     user: User,
     tier: Tier,
-    request: Optional[Request] = None,
+    request: Request | None = None,
 ) -> CheckoutOut:
     """Create a Polar checkout session for the given tier's product."""
     if not _enabled():
         raise HTTPException(status_code=503, detail="Subscriptions are disabled")
     if tier == Tier.free:
         raise HTTPException(status_code=400, detail="Cannot subscribe to the free tier")
+
+    existing_subscription = await crud_subscription.get_by_user(db, user.id)
+    if (
+        existing_subscription is not None
+        and existing_subscription.polar_subscription_id
+        and existing_subscription.status in {"active", "trialing", "past_due"}
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Manage the existing subscription instead of starting a new checkout",
+        )
 
     _configure_product_ids()
     cfg = get_tier_config(tier)
@@ -220,13 +236,107 @@ async def create_checkout(
         )
     except Exception as exc:
         _polar_log(request, level="error", op="checkouts.create", error=str(exc))
-        raise HTTPException(status_code=502, detail="Failed to create checkout session") from exc
+        raise HTTPException(
+            status_code=502, detail="Failed to create checkout session"
+        ) from exc
 
     return CheckoutOut(url=checkout.url, checkout_id=checkout.id)
 
 
+async def change_plan(
+    db: AsyncSession,
+    user: User,
+    tier: Tier,
+    request: Request | None = None,
+) -> ChangePlanOut:
+    """Change the product on the user's one active Polar subscription."""
+    if not _enabled():
+        raise HTTPException(status_code=503, detail="Subscriptions are disabled")
+    if tier == Tier.free:
+        raise HTTPException(status_code=400, detail="Cannot change to the free tier")
+
+    _configure_product_ids()
+    target = get_tier_config(tier)
+    if not target.polar_product_id:
+        raise HTTPException(
+            status_code=409, detail=f"No Polar product configured for {tier.value}"
+        )
+
+    subscription = await crud_subscription.get_by_user(db, user.id)
+    if subscription is None or not subscription.polar_subscription_id:
+        raise HTTPException(
+            status_code=409, detail="No existing subscription to change"
+        )
+    if subscription.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Only an active subscription can change plans; use the customer portal",
+        )
+    if subscription.tier == tier.value:
+        raise HTTPException(status_code=409, detail="This is already the current plan")
+
+    try:
+        current_tier = Tier(subscription.tier)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409, detail="Current subscription tier is invalid"
+        ) from exc
+    if current_tier == Tier.free:
+        raise HTTPException(
+            status_code=409,
+            detail="Current subscription product is unresolved; contact support",
+        )
+
+    rank = {Tier.free: 0, Tier.tier1: 1, Tier.tier2: 2, Tier.tier3: 3}
+    is_upgrade = rank[tier] > rank[current_tier]
+    effective = "immediate" if is_upgrade else "next_period"
+
+    from polar_sdk.models import SubscriptionLocked
+    from polar_sdk.models.subscriptionprorationbehavior import (
+        SubscriptionProrationBehavior,
+    )
+
+    polar = get_polar_client()
+    try:
+        updated = await polar.subscriptions.update_async(
+            id=subscription.polar_subscription_id,
+            subscription_update={
+                "product_id": target.polar_product_id,
+                "proration_behavior": (
+                    SubscriptionProrationBehavior.INVOICE
+                    if is_upgrade
+                    else SubscriptionProrationBehavior.NEXT_PERIOD
+                ),
+            },
+        )
+    except SubscriptionLocked as exc:
+        raise HTTPException(
+            status_code=409, detail="The subscription is busy; retry shortly"
+        ) from exc
+    except Exception as exc:
+        _polar_log(
+            request,
+            level="error",
+            op="subscriptions.update",
+            error=type(exc).__name__,
+            user_id=user.id,
+            requested_tier=tier.value,
+        )
+        raise HTTPException(
+            status_code=502, detail="Failed to change subscription plan"
+        ) from exc
+
+    pending = getattr(updated, "pending_update", None)
+    effective_at = getattr(pending, "applies_at", None) if pending else None
+    return ChangePlanOut(
+        requested_tier=tier.value,
+        effective=effective,
+        effective_at=effective_at,
+    )
+
+
 async def create_portal_session(
-    user: User, request: Optional[Request] = None
+    user: User, request: Request | None = None
 ) -> PortalOut:
     """Create a Polar customer-portal session for self-service management."""
     if not _enabled():
@@ -245,7 +355,9 @@ async def create_portal_session(
         _polar_log(
             request, level="error", op="customer_sessions.create", error=str(exc)
         )
-        raise HTTPException(status_code=502, detail="Failed to create portal session") from exc
+        raise HTTPException(
+            status_code=502, detail="Failed to create portal session"
+        ) from exc
 
     return PortalOut(url=session.customer_portal_url)
 
@@ -254,37 +366,44 @@ async def create_portal_session(
 
 
 async def handle_polar_event(
-    db: AsyncSession, event: Any, request: Optional[Request] = None
+    db: AsyncSession, event: Any, request: Request | None = None
 ) -> None:
     """Dispatch a verified Polar webhook event to the right upsert path.
 
     `event` is the pydantic model returned by `polar_sdk.webhooks.validate_event`.
     Each payload has a `.type` string and a `.data` object.
     """
-    event_type: str = (getattr(event, "TYPE", None) or getattr(event, "type", "") or "")
+    event_type: str = getattr(event, "TYPE", None) or getattr(event, "type", "") or ""
     data: Any = getattr(event, "data", None)
 
     _configure_product_ids()
 
     if event_type in SUBSCRIPTION_EVENTS:
-        await _handle_subscription_event(db, event_type, data, request=request)
+        await _handle_subscription_event(
+            db,
+            event_type,
+            data,
+            event_at=_event_at(event, data, request),
+            request=request,
+        )
     elif event_type in CUSTOMER_EVENTS:
         await _handle_customer_event(db, data)
     else:
         # Acknowledge but ignore (checkout.*, order.*, benefit_grant.*, etc.)
-        _polar_log(
-            request, level="info", op="ignore_event", event_type=event_type
-        )
+        _polar_log(request, level="info", op="ignore_event", event_type=event_type)
 
 
-def _coerce_dt(value: Any) -> Optional[Any]:
+def _coerce_dt(value: Any) -> Any | None:
     if value is None:
         return None
     return value
 
 
-def _event_at(data: Any, request: Optional[Request] = None) -> datetime:
+def _event_at(event: Any, data: Any, request: Request | None = None) -> datetime:
     """Best-effort event time for out-of-order webhook protection."""
+    value = getattr(event, "timestamp", None)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     for attr in ("modified_at", "updated_at", "created_at"):
         value = getattr(data, attr, None) if data is not None else None
         if value is None:
@@ -304,8 +423,8 @@ def _event_at(data: Any, request: Optional[Request] = None) -> datetime:
 async def _resolve_user_from_polar_customer(
     db: AsyncSession,
     polar_customer_id: str,
-    request: Optional[Request] = None,
-) -> Optional[User]:
+    request: Request | None = None,
+) -> User | None:
     """Find our User from a Polar customer id.
 
     Resolution order:
@@ -323,21 +442,31 @@ async def _resolve_user_from_polar_customer(
 
     # 0. Fast path: User row already carries polar_customer_id.
     user = (
-        await db.execute(
-            select(UserModel).where(UserModel.polar_customer_id == polar_customer_id)
+        (
+            await db.execute(
+                select(UserModel).where(
+                    UserModel.polar_customer_id == polar_customer_id
+                )
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if user is not None:
-        return user
+        return cast(User, user)
 
     # 1. Subscription row lookup (kept for resilience / older rows).
     row = (
-        await db.execute(
-            select(UserSubscription).where(
-                UserSubscription.polar_customer_id == polar_customer_id
+        (
+            await db.execute(
+                select(UserSubscription).where(
+                    UserSubscription.polar_customer_id == polar_customer_id
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if row is not None:
         user = await crud_user.get(db, id=row.user_id)
         if user is not None:
@@ -347,19 +476,34 @@ async def _resolve_user_from_polar_customer(
     polar = get_polar_client()
     if polar is None:
         return None
+    from polar_sdk.models import ResourceNotFound
+
     try:
-        customer = await polar.customers.get_async(id=polar_customer_id)
-    except Exception as exc:
+        customer = await polar.customers.get_async(
+            id=polar_customer_id, timeout_ms=1_500
+        )
+    except ResourceNotFound as exc:
         _polar_log(
             request,
             level="warning",
             op="customers.get",
             polar_customer_id=polar_customer_id,
-            error=str(exc),
+            reason="unresolved_customer",
+            error=type(exc).__name__,
         )
         return None
+    except Exception as exc:
+        _polar_log(
+            request,
+            level="error",
+            op="customers.get",
+            polar_customer_id=polar_customer_id,
+            reason="retryable_lookup_failure",
+            error=type(exc).__name__,
+        )
+        raise
     try:
-        from polar_sdk.types import UNSET  # type: ignore[import-not-found]
+        from polar_sdk.types import UNSET
 
         external_id = getattr(customer, "external_id", None)
         if external_id is UNSET or external_id is None:
@@ -371,7 +515,9 @@ async def _resolve_user_from_polar_customer(
     user = await _resolve_user_by_external_id(db, external_id)
     if user is not None:
         try:
-            await crud_subscription.set_polar_customer_id(db, user.id, polar_customer_id)
+            await crud_subscription.set_polar_customer_id(
+                db, user.id, polar_customer_id
+            )
             user.polar_customer_id = polar_customer_id
         except ValueError as exc:
             _polar_log(
@@ -389,11 +535,13 @@ async def _handle_subscription_event(
     db: AsyncSession,
     event_type: str,
     data: Any,
-    request: Optional[Request] = None,
+    *,
+    event_at: datetime,
+    request: Request | None = None,
 ) -> None:
     if data is None:
         return
-    polar_customer_id: Optional[str] = getattr(data, "customer_id", None)
+    polar_customer_id: str | None = getattr(data, "customer_id", None)
     if not polar_customer_id:
         _polar_log(
             request,
@@ -414,17 +562,41 @@ async def _handle_subscription_event(
             op="subscription_event",
             event_type=event_type,
             polar_customer_id=polar_customer_id,
-            reason="no_local_user",
+            reason="unresolved_customer",
         )
         return
 
-    product_id: Optional[str] = getattr(data, "product_id", None)
+    product_id: str | None = getattr(data, "product_id", None)
     # Map the event type to a status string we persist.
     status = _subscription_status_for_event(event_type, data)
     # Derive the tier we'll persist from the configured product id.
     from app.core.tiers import tier_for_product
 
     resolved_tier = tier_for_product(product_id)
+    if resolved_tier == Tier.free:
+        _polar_log(
+            request,
+            level="error",
+            op="subscription_event",
+            event_type=event_type,
+            user_id=user.id,
+            polar_customer_id=polar_customer_id,
+            product_id=product_id,
+            reason="unknown_product",
+        )
+        return
+
+    pending_tier: str | None = None
+    pending_effective_at: datetime | None = None
+    pending_update = getattr(data, "pending_update", None)
+    if pending_update is not None:
+        pending_product_id = getattr(pending_update, "product_id", None)
+        mapped_pending = tier_for_product(pending_product_id)
+        if mapped_pending != Tier.free:
+            pending_tier = mapped_pending.value
+            pending_effective_at = _coerce_dt(
+                getattr(pending_update, "applies_at", None)
+            )
 
     _polar_log(
         request,
@@ -447,8 +619,10 @@ async def _handle_subscription_event(
         current_period_start=_coerce_dt(getattr(data, "current_period_start", None)),
         current_period_end=_coerce_dt(getattr(data, "current_period_end", None)),
         canceled_at=_coerce_dt(getattr(data, "canceled_at", None)),
+        pending_tier=pending_tier,
+        pending_effective_at=pending_effective_at,
         metadata={"event_type": event_type},
-        event_at=_event_at(data, request),
+        event_at=event_at,
     )
     if row is None:
         _polar_log(
@@ -488,8 +662,8 @@ def _subscription_status_for_event(event_type: str, data: Any) -> str:
 async def _handle_customer_event(db: AsyncSession, data: Any) -> None:
     if data is None:
         return
-    polar_customer_id: Optional[str] = getattr(data, "id", None)
-    external_id: Optional[str] = getattr(data, "external_id", None)
+    polar_customer_id: str | None = getattr(data, "id", None)
+    external_id: str | None = getattr(data, "external_id", None)
     if not polar_customer_id or not external_id:
         return
     user = await _resolve_user_by_external_id(db, external_id)

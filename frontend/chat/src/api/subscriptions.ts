@@ -1,5 +1,6 @@
 import { apiFetch } from './client'
 import type {
+  ChangePlanOut,
   CheckoutOut,
   PortalOut,
   SubscriptionMeOut,
@@ -27,5 +28,12 @@ export function createCheckout(tier: TierSlug): Promise<CheckoutOut> {
 export function createPortalSession(): Promise<PortalOut> {
   return apiFetch<PortalOut>(`${PREFIX}/portal`, {
     method: 'POST',
+  })
+}
+
+export function changePlan(tier: TierSlug): Promise<ChangePlanOut> {
+  return apiFetch<ChangePlanOut>(`${PREFIX}/change-plan`, {
+    method: 'POST',
+    body: JSON.stringify({ tier }),
   })
 }

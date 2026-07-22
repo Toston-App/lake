@@ -150,8 +150,11 @@ export function ObservabilityDashboard({ onBack }: Props) {
   )
 
   useEffect(() => {
-    void loadOverview(range)
-    void loadTurns(range, statusFilter, search)
+    const task = window.setTimeout(() => {
+      void loadOverview(range)
+      void loadTurns(range, statusFilter, search)
+    }, 0)
+    return () => window.clearTimeout(task)
   }, [range, statusFilter, search, loadOverview, loadTurns])
 
   const chartData = useMemo(

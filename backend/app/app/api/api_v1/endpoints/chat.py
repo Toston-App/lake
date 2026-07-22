@@ -1,5 +1,6 @@
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,13 +11,13 @@ from pydantic_ai.run import AgentRunResult
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import models
 from app.ai.agent import ChatDeps, build_obs_hooks, build_toolset
 from app.ai.agent import get_chat_agent as get_pydantic_agent
 from app.ai.chat_tools import execute_tool, merge_confirm_tool_args
 from app.api import deps
 from app.core.config import settings
 from app.core.tiers import Tier
+from app.models.user import User
 from app.schemas.chat import (
     ChatAction,
     ChatConfirmRequest,
@@ -27,11 +28,14 @@ from app.schemas.chat import (
     ToolStep,
     chat_action_detail,
 )
-from app.services.entitlements import check_quota
+from app.services.entitlements import (
+    QuotaReservationError,
+    check_quota,
+    reserve_chat_turn,
+)
 from app.utilities.observability import (
     finalize_turn,
     record_tool_call,
-    start_turn,
     upsert_conversation,
 )
 from app.utilities.redis import (
@@ -62,7 +66,9 @@ def _require_chat_enabled() -> None:
         raise HTTPException(status_code=503, detail="Chat is disabled")
 
 
-async def _enforce_quota(db: AsyncSession, user: models.User) -> tuple[bool, Tier, dict]:
+async def _enforce_quota(
+    db: AsyncSession, user: User
+) -> tuple[bool, Tier, dict[str, Any]]:
     """Check the user's subscription quota before a chat turn.
 
     Returns (allowed, tier, usage_dict). Raises HTTPException(402) when over
@@ -88,8 +94,8 @@ def _conversation_title(message: str) -> str:
 
 
 def _merge_messages(
-    existing: list[dict], new_messages: list[dict]
-) -> list[dict]:
+    existing: list[dict[str, Any]], new_messages: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     merged = list(existing)
     for msg in new_messages:
         entry = {
@@ -99,8 +105,6 @@ def _merge_messages(
         }
         merged.append(entry)
     return merged
-
-
 
 
 # Vercel AI SDK UI Message Stream Protocol endpoint (Pydantic AI + VercelAIAdapter)
@@ -137,7 +141,7 @@ def _last_assistant_text(messages: list[Any]) -> str:
 async def chat_vercel(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Response:
     """Vercel AI data-stream chat endpoint (sdk_version=6).
 
@@ -146,16 +150,40 @@ async def chat_vercel(
     response and emits the protocol chunks that `useChat` consumes.
     """
     _require_chat_enabled()
-    _, tier, _usage = await _enforce_quota(db, current_user)
-
     agent = get_pydantic_agent()
-    adapter = await VercelAIAdapter.from_request(
-        request, agent=agent, sdk_version=6
-    )
+    adapter = await VercelAIAdapter.from_request(request, agent=agent, sdk_version=6)
 
     conversation_id = adapter.conversation_id or str(uuid.uuid4())
     user_msg = _last_user_text(adapter.messages)
     title = _conversation_title(user_msg) if user_msg else "Conversation"
+
+    trace_id, request_id = _trace_ids(request)
+    try:
+        quota, turn_id = await reserve_chat_turn(
+            db,
+            current_user,
+            conversation_id=conversation_id,
+            user_message=user_msg,
+            model=settings.CHAT_MODEL or settings.OPENROUTER_MODEL,
+            trace_id=trace_id,
+            request_id=request_id,
+        )
+    except QuotaReservationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "quota_unavailable"},
+        ) from exc
+    if not quota.allowed:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "reason": quota.reason or "quota_exceeded",
+                "usage": quota.usage.model_dump(mode="json"),
+                "tier": quota.tier.value,
+                "upgrade_url": "/account",
+            },
+        )
+    tier = quota.tier
 
     enrich_event(
         request,
@@ -171,16 +199,6 @@ async def chat_vercel(
         },
     )
 
-    trace_id, request_id = _trace_ids(request)
-    turn_id = await start_turn(
-        conversation_id=conversation_id,
-        user_id=current_user.id,
-        user_message=user_msg,
-        model=settings.CHAT_MODEL or settings.OPENROUTER_MODEL,
-        trace_id=trace_id,
-        request_id=request_id,
-    )
-
     deps = ChatDeps(
         db=db,
         user=current_user,
@@ -189,9 +207,11 @@ async def chat_vercel(
         turn_id=turn_id,
     )
     started = time.perf_counter()
+    completed = False
 
     async def on_complete(result: AgentRunResult) -> None:
         """Persist conversation + finalize observability after a successful run."""
+        nonlocal completed
         duration_ms = int((time.perf_counter() - started) * 1000)
         is_pending = deps.had_pending_confirmation
         usage = result.usage
@@ -208,6 +228,7 @@ async def chat_vercel(
             total_completion_tokens=usage.output_tokens,
             total_tokens=usage.input_tokens + usage.output_tokens,
         )
+        completed = True
         try:
             ui_msgs = VercelAIAdapter.dump_messages(all_msgs, sdk_version=6)
             await save_conversation(
@@ -240,12 +261,26 @@ async def chat_vercel(
         capabilities=[build_obs_hooks()],
         on_complete=on_complete,
     )
-    return adapter.streaming_response(event_stream)
+
+    async def metered_stream() -> AsyncIterator[Any]:
+        try:
+            async for event in event_stream:
+                yield event
+        finally:
+            if not completed:
+                await finalize_turn(
+                    turn_id,
+                    status="error",
+                    error="stream_interrupted",
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                )
+
+    return adapter.streaming_response(metered_stream())
 
 
 @router.get("/conversations", response_model=list[ConversationSummary])
 async def list_conversations(
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     _require_chat_enabled()
     rows = await list_user_conversations(current_user.id)
@@ -265,7 +300,7 @@ async def list_conversations(
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation_detail(
     conversation_id: str,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     _require_chat_enabled()
     conv = await get_conversation(conversation_id, current_user.id)
@@ -327,11 +362,10 @@ def _ui_message_text(ui_message: dict[str, Any]) -> str:
     return "".join(chunks)
 
 
-
 @router.delete("/conversations/{conversation_id}")
 async def remove_conversation(
     conversation_id: str,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> dict[str, bool]:
     _require_chat_enabled()
     ok = await delete_conversation(conversation_id, current_user.id)
@@ -349,16 +383,20 @@ async def confirm_chat_action(
     conversation_id: str,
     body: ChatConfirmRequest,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     _require_chat_enabled()
     await _enforce_quota(db, current_user)
 
     pending = await get_pending_action(body.action_id, current_user.id)
     if not pending:
-        raise HTTPException(status_code=404, detail="Pending action not found or expired")
+        raise HTTPException(
+            status_code=404, detail="Pending action not found or expired"
+        )
     if pending.get("conversation_id") != conversation_id:
-        raise HTTPException(status_code=400, detail="Action does not belong to this conversation")
+        raise HTTPException(
+            status_code=400, detail="Action does not belong to this conversation"
+        )
 
     enrich_event(
         request,
@@ -378,7 +416,9 @@ async def confirm_chat_action(
 
     orig_turn_id = pending.get("turn_id")
 
-    print(f"🚀 [CONFIRM_CHAT_ACTION] Confirming tool {pending['tool_name']} with args {tool_args} for user {current_user.id} in conversation {conversation_id}")
+    print(
+        f"🚀 [CONFIRM_CHAT_ACTION] Confirming tool {pending['tool_name']} with args {tool_args} for user {current_user.id} in conversation {conversation_id}"
+    )
 
     with timed() as t:
         result, action_type = await execute_tool(
@@ -424,7 +464,7 @@ async def confirm_chat_action(
         )
         reply = f"Done. {action_type.replace('_', ' ')} completed successfully."
     else:
-        reply = result.get("error") or "The action could not be completed."
+        reply = str(result.get("error") or "The action could not be completed.")
 
     conv = await get_conversation(conversation_id, current_user.id)
     history = conv.get("messages", []) if conv else []
@@ -436,7 +476,7 @@ async def confirm_chat_action(
     updated_messages = _merge_messages(
         history, [confirm_user_msg, confirm_assistant_msg]
     )
-    title = conv.get("title") if conv else "Conversation"
+    title = str(conv.get("title") or "Conversation") if conv else "Conversation"
     await save_conversation(
         conversation_id,
         current_user.id,

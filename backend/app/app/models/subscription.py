@@ -42,6 +42,10 @@ class UserSubscription(Base):
     current_period_start = Column(DateTime(timezone=True), nullable=True)
     current_period_end = Column(DateTime(timezone=True), nullable=True)
     canceled_at = Column(DateTime(timezone=True), nullable=True)
+    # A scheduled Polar plan change. The current tier remains effective until
+    # this timestamp and the corresponding webhook changes product_id.
+    pending_tier: str | None = Column(String, nullable=True)
+    pending_effective_at = Column(DateTime(timezone=True), nullable=True)
     # Timestamp of the newest Polar event applied to this row (ordering guard).
     last_event_at = Column(DateTime(timezone=True), nullable=True)
     # Raw Polar payload (last webhook event) for debugging/auditing.
@@ -49,6 +53,4 @@ class UserSubscription(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    user: "User" = relationship(
-        "User", back_populates="subscription", uselist=False
-    )
+    user: "User" = relationship("User", back_populates="subscription", uselist=False)

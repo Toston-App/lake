@@ -1,12 +1,16 @@
 import { useState } from 'react'
-import type { SubscriptionMeOut, TierSlug } from '../types/subscription'
+import type {
+  ChangePlanOut,
+  SubscriptionMeOut,
+  TierSlug,
+} from '../types/subscription'
 import { PricingPlans } from './PricingPlans'
 
 type AccountViewProps = {
   data: SubscriptionMeOut | null
   tiers: SubscriptionMeOut['tier_config'][]
   loading: boolean
-  onChooseTier: (tier: TierSlug) => Promise<void>
+  onChooseTier: (tier: TierSlug) => Promise<ChangePlanOut | void>
   onManage: () => Promise<void>
   onBack: () => void
 }
@@ -32,12 +36,14 @@ export function AccountView({
   const [busyTier, setBusyTier] = useState<TierSlug | null>(null)
   const [managing, setManaging] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [planChange, setPlanChange] = useState<ChangePlanOut | null>(null)
 
   async function handleChoose(tier: TierSlug) {
     setError(null)
     setBusyTier(tier)
     try {
-      await onChooseTier(tier)
+      const result = await onChooseTier(tier)
+      if (result) setPlanChange(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start checkout')
     } finally {
@@ -60,6 +66,10 @@ export function AccountView({
   const sub = data?.subscription
   const usage = data?.usage
   const isActive = sub?.status === 'active' || sub?.status === 'trialing'
+  const pendingTier = sub?.pending_tier ?? (
+    planChange?.effective === 'next_period' ? planChange.requested_tier : null
+  )
+  const pendingAt = sub?.pending_effective_at ?? planChange?.effective_at ?? null
 
   return (
     <div className="app app-account">
@@ -103,7 +113,18 @@ export function AccountView({
                   </span>
                 </div>
               )}
-              {isActive && sub.can_manage && (
+              {planChange?.effective === 'immediate' && (
+                <p className="muted">
+                  Upgrading to {planChange.requested_tier}; awaiting billing confirmation…
+                </p>
+              )}
+              {pendingTier && (
+                <p className="muted">
+                  Scheduled change to {pendingTier}
+                  {pendingAt ? ` on ${new Date(pendingAt).toLocaleDateString()}` : ''}.
+                </p>
+              )}
+              {sub.can_manage && (
                 <button
                   type="button"
                   className="logout-btn"
@@ -124,6 +145,7 @@ export function AccountView({
             currentTier={sub?.tier ?? null}
             onChoose={handleChoose}
             busyTier={busyTier}
+            changingPlan={sub?.status === 'active'}
           />
         </section>
       </main>

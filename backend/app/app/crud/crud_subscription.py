@@ -7,8 +7,9 @@ go through the entitlements service (which adds a Redis cache).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, cast
 
+from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
@@ -17,12 +18,14 @@ from app.core.tiers import Tier, tier_for_product
 from app.models.polar_webhook_event import PolarWebhookEvent
 from app.models.subscription import UserSubscription
 
+_SUBSCRIPTION_LOCK_NAMESPACE = 0x53554253  # "SUBS"
 
-async def get_by_user(db: AsyncSession, user_id: int) -> Optional[UserSubscription]:
+
+async def get_by_user(db: AsyncSession, user_id: int) -> UserSubscription | None:
     result = await db.execute(
         select(UserSubscription).where(UserSubscription.user_id == user_id)
     )
-    return result.scalars().first()
+    return cast(UserSubscription | None, result.scalars().first())
 
 
 async def ensure_free_row(db: AsyncSession, user_id: int) -> None:
@@ -37,42 +40,40 @@ async def ensure_free_row(db: AsyncSession, user_id: int) -> None:
     await db.commit()
 
 
-async def is_webhook_processed(db: AsyncSession, webhook_id: str) -> bool:
-    result = await db.execute(
-        select(PolarWebhookEvent.webhook_id).where(
-            PolarWebhookEvent.webhook_id == webhook_id
-        )
-    )
-    return result.scalars().first() is not None
+async def claim_webhook(
+    db: AsyncSession, webhook_id: str, event_type: str | None = None
+) -> bool:
+    """Claim a delivery in the caller's transaction.
 
-
-async def mark_webhook_processed(
-    db: AsyncSession, webhook_id: str, event_type: Optional[str] = None
-) -> None:
-    """Record a Standard Webhooks delivery id after successful handling."""
+    The insert and all webhook state changes must be committed together. A
+    rollback removes the claim so Polar can safely retry the same delivery.
+    """
     stmt = (
         insert(PolarWebhookEvent)
         .values(webhook_id=webhook_id, event_type=event_type)
         .on_conflict_do_nothing(index_elements=["webhook_id"])
+        .returning(PolarWebhookEvent.webhook_id)
     )
-    await db.execute(stmt)
-    await db.commit()
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none() is not None
 
 
 async def upsert_from_webhook(
     db: AsyncSession,
     *,
     user_id: int,
-    polar_customer_id: Optional[str],
-    polar_subscription_id: Optional[str],
-    product_id: Optional[str],
+    polar_customer_id: str | None,
+    polar_subscription_id: str | None,
+    product_id: str | None,
     status: str,
-    current_period_start: Optional[datetime],
-    current_period_end: Optional[datetime],
-    canceled_at: Optional[datetime],
-    metadata: Optional[dict[str, Any]] = None,
-    event_at: Optional[datetime] = None,
-) -> Optional[UserSubscription]:
+    current_period_start: datetime | None,
+    current_period_end: datetime | None,
+    canceled_at: datetime | None,
+    pending_tier: str | None = None,
+    pending_effective_at: datetime | None = None,
+    metadata: dict[str, Any] | None = None,
+    event_at: datetime | None = None,
+) -> UserSubscription | None:
     """Insert or update a subscription row from a Polar webhook payload.
 
     Returns None when a newer event was already applied (out-of-order delivery).
@@ -80,18 +81,16 @@ async def upsert_from_webhook(
     subscription is not active, the row's `tier` is kept (for history) but the
     *effective* tier (used by entitlements) falls back to free.
     """
+    # Separate event types have different webhook ids and can arrive at the
+    # same time. Serialize mutations for one local user so concurrent first
+    # deliveries cannot race across the user/customer unique indexes.
+    await db.execute(
+        select(func.pg_advisory_xact_lock(_SUBSCRIPTION_LOCK_NAMESPACE, user_id))
+    )
+
     product_tier = tier_for_product(product_id)
     if event_at is not None and event_at.tzinfo is None:
         event_at = event_at.replace(tzinfo=timezone.utc)
-
-    existing = await get_by_user(db, user_id)
-    if (
-        existing is not None
-        and event_at is not None
-        and existing.last_event_at is not None
-        and event_at < existing.last_event_at
-    ):
-        return None
 
     stmt = insert(UserSubscription).values(
         user_id=user_id,
@@ -102,6 +101,8 @@ async def upsert_from_webhook(
         current_period_start=current_period_start,
         current_period_end=current_period_end,
         canceled_at=canceled_at,
+        pending_tier=pending_tier,
+        pending_effective_at=pending_effective_at,
         last_event_at=event_at,
         polar_metadata=metadata,
     )
@@ -115,19 +116,26 @@ async def upsert_from_webhook(
             "current_period_start": current_period_start,
             "current_period_end": current_period_end,
             "canceled_at": canceled_at,
+            "pending_tier": pending_tier,
+            "pending_effective_at": pending_effective_at,
             "last_event_at": event_at,
             "polar_metadata": metadata,
             "updated_at": datetime.now(timezone.utc),
         },
-    ).returning(UserSubscription)
+        where=or_(
+            UserSubscription.last_event_at.is_(None),
+            stmt.excluded.last_event_at > UserSubscription.last_event_at,
+        ),
+    ).returning(UserSubscription.id)
     result = await db.execute(stmt)
-    row = result.scalars().first()
-    await db.commit()
-    return row  # type: ignore[no-any-return]
+    applied_id = result.scalar_one_or_none()
+    if applied_id is None:
+        return None
+    return await get_by_user(db, user_id)
 
 
 async def set_free(
-    db: AsyncSession, user_id: int, *, canceled_at: Optional[datetime] = None
+    db: AsyncSession, user_id: int, *, canceled_at: datetime | None = None
 ) -> None:
     """Mark a user's subscription as canceled/free (keeps history)."""
     row = await get_by_user(db, user_id)
@@ -135,7 +143,7 @@ async def set_free(
         return
     row.status = "canceled" if canceled_at is not None else "free"
     row.canceled_at = canceled_at
-    await db.commit()
+    await db.flush()
 
 
 async def set_polar_customer_id(
@@ -150,33 +158,43 @@ async def set_polar_customer_id(
     from app.models.user import User
 
     existing_user = (
-        await db.execute(
-            select(User).where(User.polar_customer_id == polar_customer_id)
+        (
+            await db.execute(
+                select(User).where(User.polar_customer_id == polar_customer_id)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing_user is not None and existing_user.id != user_id:
         raise ValueError(
             f"polar_customer_id {polar_customer_id!r} already bound to user {existing_user.id}"
         )
 
     existing_sub = (
-        await db.execute(
-            select(UserSubscription).where(
-                UserSubscription.polar_customer_id == polar_customer_id
+        (
+            await db.execute(
+                select(UserSubscription).where(
+                    UserSubscription.polar_customer_id == polar_customer_id
+                )
             )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     if existing_sub is not None and existing_sub.user_id != user_id:
         raise ValueError(
             f"polar_customer_id {polar_customer_id!r} already bound to user {existing_sub.user_id}"
         )
 
     await db.execute(
-        update(User).where(User.id == user_id).values(polar_customer_id=polar_customer_id)
+        update(User)
+        .where(User.id == user_id)
+        .values(polar_customer_id=polar_customer_id)
     )
     await db.execute(
         update(UserSubscription)
         .where(UserSubscription.user_id == user_id)
         .values(polar_customer_id=polar_customer_id)
     )
-    await db.commit()
+    await db.flush()

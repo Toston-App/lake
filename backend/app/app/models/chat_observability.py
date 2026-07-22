@@ -52,7 +52,7 @@ class ChatObsTurn(Base):
     provider: str = Column(String, nullable=False, default="openrouter")
     user_message: str = Column(Text, nullable=True)
     assistant_reply: str = Column(Text, nullable=True)
-    # ok | error | max_rounds | pending_confirmation | pending_question
+    # in_progress | ok | error | max_rounds | pending_confirmation | pending_question
     status: str = Column(String, nullable=False, default="ok", index=True)
     error: str = Column(Text, nullable=True)
     duration_ms: int = Column(Integer, nullable=True)

@@ -1,9 +1,9 @@
-"""Entitlement resolution + usage quota enforcement for the chat.
+"""Entitlement resolution + atomic usage quota enforcement for the chat.
 
-The chat endpoints call `check_quota(db, user)` before each turn. The result
-carries the effective tier (used to gate tool definitions) and a usage
-snapshot. When the user is over their message or token cap, `allowed` is
-False and the chat endpoint returns 402.
+Before model execution, the chat endpoint calls `reserve_chat_turn`. It holds
+a per-user PostgreSQL advisory lock while resolving the entitlement, counting
+usage, and inserting an `in_progress` turn. Over-quota requests return 402;
+reservation failures fail closed with 503 while subscriptions are enabled.
 
 Resolution order:
 1. If `SUBSCRIPTIONS_ENABLED` is False -> return the dev-default tier
@@ -15,17 +15,17 @@ Resolution order:
 
 The usage window starts at the subscription's `current_period_start` for
 active subscriptions, or the first day of the current calendar month for
-free users. Usage is aggregated from `chat_obs_turns` (counts messages and
-sums `total_tokens`), reusing the existing observability telemetry.
+free users. Usage is persisted in `chat_obs_turns` even when optional detailed
+chat observability is disabled. Expired reservations and errored turns do not
+consume quota.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -43,13 +43,20 @@ from app.utilities.redis import (
 
 # Statuses that grant the subscribed tier; anything else falls back to free.
 _ACTIVE_STATUSES = frozenset({"active", "trialing"})
+_QUOTA_LOCK_NAMESPACE = (
+    0x504F4C52  # "POLR"; avoids colliding with other advisory locks.
+)
+
+
+class QuotaReservationError(RuntimeError):
+    """Billing usage could not be reserved safely."""
 
 
 @dataclass
 class QuotaResult:
     tier: Tier
     allowed: bool
-    reason: Optional[str]
+    reason: str | None
     usage: UsageOut
     period_start: datetime
 
@@ -65,9 +72,11 @@ def _external_id(user: User) -> str:
     return user.uuid or str(user.id)
 
 
-def _effective_tier_from_row(row: Optional[UserSubscription]) -> tuple[Tier, UserSubscription]:
+def _effective_tier_from_row(
+    row: UserSubscription | None,
+) -> tuple[Tier, UserSubscription | None]:
     if row is None:
-        return Tier.free, None  # type: ignore[return-value]
+        return Tier.free, None
     if row.status in _ACTIVE_STATUSES:
         try:
             tier = tier_from_value(row.tier)
@@ -79,7 +88,7 @@ def _effective_tier_from_row(row: Optional[UserSubscription]) -> tuple[Tier, Use
 
 async def get_user_tier(
     db: AsyncSession, user_id: int
-) -> tuple[Tier, Optional[UserSubscription]]:
+) -> tuple[Tier, UserSubscription | None]:
     """Resolve the effective tier for a user (Redis-cached when enabled)."""
     if not settings.SUBSCRIPTIONS_ENABLED:
         try:
@@ -105,10 +114,14 @@ async def get_user_tier(
             "tier": tier.value,
             "status": row.status if row else "free",
             "current_period_start": (
-                row.current_period_start.isoformat() if row and row.current_period_start else None
+                row.current_period_start.isoformat()
+                if row and row.current_period_start
+                else None
             ),
             "current_period_end": (
-                row.current_period_end.isoformat() if row and row.current_period_end else None
+                row.current_period_end.isoformat()
+                if row and row.current_period_end
+                else None
             ),
         },
     )
@@ -117,7 +130,7 @@ async def get_user_tier(
 
 async def _load_row_for_period(
     db: AsyncSession, user_id: int
-) -> tuple[Tier, Optional[UserSubscription]]:
+) -> tuple[Tier, UserSubscription | None]:
     """Load the row (bypassing cache) so we can read period dates."""
     if not settings.SUBSCRIPTIONS_ENABLED:
         try:
@@ -144,6 +157,14 @@ async def get_period_usage(
         .where(ChatObsTurn.user_id == user_id)
         .where(ChatObsTurn.started_at >= period_start)
         .where(ChatObsTurn.status != "error")
+        .where(
+            or_(
+                ChatObsTurn.status != "in_progress",
+                ChatObsTurn.started_at
+                >= datetime.now(timezone.utc)
+                - timedelta(seconds=settings.CHAT_TURN_RESERVATION_TTL_SECONDS),
+            )
+        )
     )
     row = (await db.execute(stmt)).one()
     return {
@@ -172,16 +193,19 @@ async def check_quota(db: AsyncSession, user: User) -> QuotaResult:
     messages_used = usage_raw["messages_used"]
     tokens_used = usage_raw["tokens_used"]
 
-    reason: Optional[str] = None
+    reason: str | None = None
     allowed = True
-    if cfg.monthly_message_limit is not None and messages_used >= cfg.monthly_message_limit:
+    if (
+        cfg.monthly_message_limit is not None
+        and messages_used >= cfg.monthly_message_limit
+    ):
         allowed = False
         reason = "message_limit_reached"
     elif cfg.monthly_token_limit is not None and tokens_used >= cfg.monthly_token_limit:
         allowed = False
         reason = "token_limit_reached"
 
-    remaining: Optional[int] = None
+    remaining: int | None = None
     if cfg.monthly_message_limit is not None:
         remaining = max(0, cfg.monthly_message_limit - messages_used)
 
@@ -194,7 +218,67 @@ async def check_quota(db: AsyncSession, user: User) -> QuotaResult:
         tokens_limit=cfg.monthly_token_limit,
         remaining=remaining,
     )
-    return QuotaResult(tier=tier, allowed=allowed, reason=reason, usage=usage, period_start=period_start)
+    return QuotaResult(
+        tier=tier,
+        allowed=allowed,
+        reason=reason,
+        usage=usage,
+        period_start=period_start,
+    )
+
+
+async def reserve_chat_turn(
+    db: AsyncSession,
+    user: User,
+    *,
+    conversation_id: str,
+    user_message: str,
+    model: str,
+    trace_id: str | None = None,
+    request_id: str | None = None,
+) -> tuple[QuotaResult, int | None]:
+    """Atomically check quota and reserve one message slot for a chat turn."""
+    try:
+        await db.execute(
+            select(func.pg_advisory_xact_lock(_QUOTA_LOCK_NAMESPACE, user.id))
+        )
+        quota = await check_quota(db, user)
+        if not quota.allowed:
+            await db.commit()
+            return quota, None
+
+        should_record = bool(
+            settings.SUBSCRIPTIONS_ENABLED or settings.CHAT_OBSERVABILITY_ENABLED
+        )
+        if not should_record:
+            await db.commit()
+            return quota, None
+
+        turn = ChatObsTurn(
+            **{
+                "conversation_id": conversation_id,
+                "user_id": user.id,
+                "user_message": (
+                    user_message if settings.CHAT_OBSERVABILITY_ENABLED else None
+                ),
+                "model": model,
+                "provider": "openrouter",
+                "status": "in_progress",
+                "trace_id": trace_id,
+                "request_id": request_id,
+            }
+        )
+        db.add(turn)
+        await db.flush()
+        turn_id = int(turn.id)
+        await db.commit()
+        return quota, turn_id
+    except Exception as exc:
+        await db.rollback()
+        if settings.SUBSCRIPTIONS_ENABLED:
+            raise QuotaReservationError("quota reservation failed") from exc
+        quota = await check_quota(db, user)
+        return quota, None
 
 
 async def invalidate(user_id: int) -> None:

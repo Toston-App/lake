@@ -6,7 +6,7 @@ Polar is the **billing provider**. Lake owns **entitlements**, **usage counting*
 
 For chat API behavior (including HTTP **402** when over quota), see [CHAT_API.md](./CHAT_API.md).
 
-**Reference client:** [`chat/`](../chat/) — `chat/src/api/subscriptions.ts`, `chat/src/hooks/useSubscription.ts`.
+**Reference client:** [`frontend/chat/`](../frontend/chat/) — `src/api/subscriptions.ts`, `src/hooks/useSubscription.ts`.
 
 ---
 
@@ -57,9 +57,11 @@ Copy the Polar block from `.env.develop` into `.env` and fill values for the env
 | `POLAR_PRODUCT_TIER1_ID` | for checkout | — | Polar product id for tier 1 |
 | `POLAR_PRODUCT_TIER2_ID` | for checkout | — | Polar product id for tier 2 |
 | `POLAR_PRODUCT_TIER3_ID` | for checkout | — | Polar product id for tier 3 |
+| `POLAR_WEBHOOK_MAX_BYTES` | no | `262144` | Maximum raw webhook body size |
+| `CHAT_TURN_RESERVATION_TTL_SECONDS` | no | `900` | Maximum age of an in-progress quota reservation |
 | `SUBSCRIPTIONS_DEV_DEFAULT_TIER` | no | `tier3` | Tier when subscriptions are disabled. Forced to `free` if `POLAR_SERVER=production` |
 
-Product ids are optional for app boot, but **required to create checkouts**. They are also the mapping used when webhooks arrive: unknown product id → effective tier `free`.
+Product ids are optional for sandbox app boot, but all three are required and must be unique in production. Unknown webhook product ids are logged and ignored without changing the user's current entitlement.
 
 ### Enable rules
 
@@ -113,6 +115,7 @@ Do this once per environment (sandbox org for local/staging, production org for 
 8. **Paste product ids** into `POLAR_PRODUCT_TIER1_ID` / `TIER2` / `TIER3`.
 9. Set `POLAR_SERVER` to `sandbox` or `production` to match the org you used.
 10. Set `POLAR_SUCCESS_URL_BASE` to the **public origin users hit for the chat app** if it differs from `SERVER_HOST` (checkout returns to `{base}/account?checkout=success`).
+11. Disable **multiple subscriptions per customer** in Polar. Application plan changes update the one existing subscription. Portal plan changes may remain disabled because the application enforces upgrade/downgrade proration itself.
 
 ### 3. Database migrations
 
@@ -122,6 +125,8 @@ Subscription tables ship as Alembic revisions:
 |----------|----------------|
 | `a1b3c5d7e9f0` | `user_subscription`, `user.polar_customer_id` |
 | `b2c4d6e8f0a1` | Unique customer binding, `last_event_at`, `polar_webhook_event` idempotency ledger |
+| `c3d9e7f1a2b4` | Billing usage and chat observability foundations |
+| `d5e7f9a1b3c4` | Pending plan-change fields and quota lookup index |
 
 After pull:
 
@@ -179,14 +184,14 @@ Defined in `backend/app/app/core/tiers.py` (numbers are tunable starting default
 
 | Tier | Message limit / mo | Token limit / mo | Features (examples) |
 |------|--------------------|------------------|---------------------|
-| `free` | 100 | 900_000 | none |
+| `free` | 10 | 20_000 | none |
 | `tier1` | 100 | 200_000 | `search_web` |
 | `tier2` | 500 | 1_000_000 | + `charts`, `advanced_analytics` |
 | `tier3` | unlimited | unlimited | all (`bulk_operations`, `priority_support`, …) |
 
 - `polar_product_id` is injected from env via `configure_product_ids`.
 - Checkout uses product id → Polar.
-- Webhooks reverse-map product id → tier via `tier_for_product`. **Unknown product id → `free`.**
+- Webhooks reverse-map product id → tier via `tier_for_product`. Unknown products are quarantined without mutating entitlement state.
 
 Feature keys gate tools and system-prompt sections in `ai/chat_tools.py` (`has_feature`).
 
@@ -224,7 +229,7 @@ POST /api/v1/subscriptions/portal
   → { url } → redirect to Polar portal
 ```
 
-`GET /me` sets `can_manage=true` only when the user has a bound Polar customer **and** a subscription row with status `active` or `trialing`.
+`GET /me` sets `can_manage=true` whenever the user has a bound Polar customer, including `past_due` and canceled recovery states.
 
 ### Webhook pipeline
 
@@ -232,9 +237,10 @@ POST /api/v1/subscriptions/portal
 POST /api/v1/polar/webhook  (no auth header; signature only)
   │
   ├─ SUBSCRIPTIONS_ENABLED=false → 202 (silent ack, no retries)
-  ├─ webhook-id already in polar_webhook_event → 202
+  ├─ body exceeds configured limit → 413
   ├─ missing secret / no SDK → 503
   ├─ invalid signature → 403
+  ├─ valid signature + webhook-id already claimed → 202
   ├─ unknown event type (valid signature) → mark id, 202
   ├─ handler error → 500 (Polar retries; do NOT mark id processed)
   └─ success → mark webhook-id processed, 202
@@ -246,7 +252,7 @@ POST /api/v1/polar/webhook  (no auth header; signature only)
 2. Else `UserSubscription.polar_customer_id`
 3. Else Polar API `customers.get` → `external_id` → local user by uuid or numeric id; then bind
 
-If no local user is found, the event is logged (`no_local_user`) and skipped (still 202 after successful handler path that returns early — no state change).
+If no local user can be mapped permanently, the event is logged as `unresolved_customer` and acknowledged without mutation. Transient Polar lookup failures return 500 so the delivery is retried.
 
 #### Idempotence
 
@@ -270,8 +276,8 @@ Layer 2 — state ordering (different deliveries, out of order)
 |-------|--------|
 | Header | Standard Webhooks `webhook-id` (unique per Polar delivery attempt identity) |
 | Table | `polar_webhook_event` — PK = `webhook_id` |
-| Check | At the start of `POST /polar/webhook`: if id already stored → **202** `outcome=duplicate`, handler not run |
-| Record | **Only after** successful handling (or safe unknown-type ack). Failed handlers return **500** and **do not** insert the id so Polar can retry |
+| Claim | Inserted with `ON CONFLICT DO NOTHING RETURNING` in the same transaction as the subscription mutation; only the transaction that claims it handles the event |
+| Commit | Claim and mutation commit together. A failed handler rolls both back, returns **500**, and leaves the delivery retryable |
 | Insert | `ON CONFLICT DO NOTHING` so concurrent marks cannot double-insert |
 
 Flow:
@@ -295,18 +301,18 @@ receive webhook
 
 Subscription writes go through `upsert_from_webhook` (`crud_subscription.py`):
 
-1. Derive `event_at` from the payload (`modified_at` / `updated_at` / `created_at`) or the `webhook-timestamp` header, else “now”.
-2. If the user already has `last_event_at` and `event_at < last_event_at` → **return without writing** (stale).
-3. Otherwise `INSERT … ON CONFLICT (user_id) DO UPDATE` the full subscription snapshot and set `last_event_at = event_at`.
+1. Derive `event_at` from the webhook's top-level `timestamp`, with payload/header fallbacks.
+2. Claim `webhook-id` and apply the state change in one database transaction.
+3. Use `INSERT … ON CONFLICT (user_id) DO UPDATE … WHERE excluded.last_event_at > last_event_at`; older or equal snapshots cannot overwrite current state.
 
 So:
 
 | Situation | Result |
 |-----------|--------|
-| Same logical sub state applied twice with **different** delivery ids but same/newer timestamps | Second write overwrites with equivalent fields (harmless) |
+| Same logical sub state applied twice with **different** delivery ids and equal timestamps | Second write is skipped |
 | Older event arrives after a newer one was applied | Skipped (`subscription_event_skipped` / `stale_event`) |
-| Retry of a failed handler that **already committed** the upsert but **died before** marking `webhook-id` | Layer 1 does not short-circuit; layer 2 re-applies the same or newer snapshot (upsert is safe) |
-| Two different events with the **same** `event_at` | Second is **not** rejected by the `<` check (only strictly older is skipped); last write wins |
+| Handler failure | The transaction rolls back both the event claim and state change, then Polar retries |
+| Two events with the **same** `event_at` | First committed snapshot wins; the second is skipped |
 
 ##### Other “safe to retry” paths
 
@@ -321,8 +327,7 @@ So:
 ##### What is *not* guaranteed
 
 - **Exactly-once side effects outside this DB** — we only control local rows + Redis invalidation. Polar’s own charges are Polar’s domain.
-- **Strict equality of concurrent handlers** for the *same* new `webhook-id`: two workers could both pass the “not processed” check before either inserts the ledger. In practice you run one backend writer path; the PK + ordering still keep the subscription row consistent. If you scale webhook receivers horizontally, prefer a single consumer or rely on the unique `webhook_id` insert race (one wins; both may have run the handler once — still safe if upsert is pure).
-- **Checkout button double-click** — may open two checkout sessions; only one subscription should result on Polar’s side; we follow whatever webhooks arrive.
+- **Exactly-once calls to Polar APIs** — checkout and plan-change requests remain external operations; local webhook state is atomic and idempotent.
 
 ##### Operator checklist
 
@@ -355,14 +360,14 @@ Usage window:
 - Paying active sub with `current_period_start` → that timestamp to `current_period_end`.
 - Free / inactive → first day of current UTC calendar month.
 
-Usage sources: aggregate `chat_obs_turns` for the user since period start, **excluding** `status = error` turns (errors do not burn quota).
+Usage sources: aggregate `chat_obs_turns` for the user since period start, excluding errors and expired `in_progress` reservations. Before model execution, the backend holds a per-user PostgreSQL advisory lock, checks usage, and inserts an `in_progress` reservation atomically. Billing reservations remain enabled even when optional observability is disabled.
 
 Limits from the tier config:
 
 - `messages_used >= monthly_message_limit` → deny (`message_limit_reached`)
 - `tokens_used >= monthly_token_limit` → deny (`token_limit_reached`)
 
-Chat endpoints call `check_quota` and return **HTTP 402** with usage payload when denied. Successful subscription webhooks call `invalidate_entitlement` so the next turn sees the new tier without waiting for TTL.
+Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Successful subscription webhooks invalidate Redis so the next turn sees the new tier without waiting for TTL.
 
 ### Chat client surface
 
@@ -370,8 +375,8 @@ Chat endpoints call `check_quota` and return **HTTP 402** with usage payload whe
 |----|----------|
 | Usage indicator | Shows tier + remaining; upgrade opens account |
 | Upgrade banner | When over quota |
-| Account / pricing | Lists tiers from `GET /tiers`; Choose → checkout redirect |
-| Manage | Portal session when `can_manage` |
+| Account / pricing | New subscriptions use checkout; active subscriptions use the change-plan API |
+| Manage | Portal session whenever a Polar customer is bound, including `past_due` recovery |
 
 ---
 
@@ -379,13 +384,13 @@ Chat endpoints call `check_quota` and return **HTTP 402** with usage payload whe
 
 1. **Webhooks are the source of truth.** Do not grant paid tiers from the success URL alone.
 2. **Sandbox ≠ production.** Separate tokens, secrets, org ids, and product ids. Mixing them causes “paid but free” or API failures.
-3. **Product ids must match on every webhook consumer.** A deploy with wrong or empty product ids maps paid products to `free`.
+3. **Product ids must match on every webhook consumer.** Wrong or empty mappings trigger `unknown_product`; the event is acknowledged without overwriting the existing entitlement.
 4. **Webhook target = chat backend.** Same database and Redis; otherwise the UI never sees upgrades.
 5. **1:1 customer binding.** One Polar customer cannot be reassigned to another local user (checkout **409**; webhook bind refused).
 6. **Idempotency and ordering.** Duplicate `webhook-id` → skip; older `last_event_at` → skip.
 7. **Production fail-closed.** With Polar off and `POLAR_SERVER=production`, everyone is free.
 8. **Secrets.** Never commit real OATs or webhook secrets. Use placeholders in docs and sample env.
-9. **Observability.** Webhook and Polar ops attach to wide events (Axiom). Look for `webhook.outcome`, `polar.op`, `reason=no_local_user`, `stale_event`, etc.
+9. **Observability.** Webhook and Polar ops attach to wide events (Axiom). Monitor `handler_error`, `unresolved_customer`, `unknown_product`, `stale_event`, webhook latency, quota reservation failures, and stale reservations.
 10. **Tier numbers are product decisions.** Change limits/features in `tiers.py`; change prices in Polar (and optionally `price_hint`).
 
 ---
@@ -421,7 +426,7 @@ Check in order:
 | Webhook deliveries | Polar UI: non-2xx or missing deliveries |
 | Signature | **403** → wrong `POLAR_WEBHOOK_SECRET` |
 | Product mapping | Env product id must equal payload `product_id` |
-| User resolution | Logs with `reason=no_local_user` or missing `external_id` |
+| User resolution | Logs with `reason=unresolved_customer` or missing `external_id` |
 | Stale event | `subscription_event_skipped` / older `last_event_at` |
 | Redis | Key `chat:ent:{user_id}` still old for up to 1h if invalidation failed — delete key |
 | Disabled flag | If `SUBSCRIPTIONS_ENABLED=false`, webhooks **202** and do nothing |
@@ -543,6 +548,8 @@ Current subscription, usage, and active tier config.
     "status": "active",
     "current_period_start": "...",
     "current_period_end": "...",
+    "pending_tier": null,
+    "pending_effective_at": null,
     "can_manage": true
   },
   "usage": {
@@ -570,7 +577,27 @@ When subscriptions are disabled, synthesizes an active sub from the dev default 
 |--------|------|
 | **200** | `{ "url", "checkout_id" }` — redirect the browser to `url` |
 | **400** | Invalid tier or `free` |
-| **409** | No product configured for tier; or customer bind conflict |
+| **409** | No product configured, customer bind conflict, or an existing live subscription must be managed instead |
+| **502** | Polar API failure |
+| **503** | Subscriptions disabled |
+
+### `POST /subscriptions/change-plan`
+
+```json
+{ "tier": "tier2" }
+```
+
+An active subscription is updated in place. Upgrades use `invoice`: Polar
+collects the prorated difference immediately, and the product changes only if
+that payment succeeds. Downgrades use `next_period` and remain visible through
+`pending_tier` and `pending_effective_at` until Polar applies them. Webhooks
+remain the entitlement source of truth in both cases.
+
+| Status | When |
+|--------|------|
+| **200** | `{ "requested_tier", "effective", "effective_at" }` |
+| **400** | Invalid tier or `free` |
+| **409** | No active subscription, same tier, trial/past-due state, or locked subscription |
 | **502** | Polar API failure |
 | **503** | Subscriptions disabled |
 
@@ -612,6 +639,7 @@ Public endpoint. Polar Standard Webhooks signature headers + body verified with 
 | `status` | free / active / trialing / canceled / past_due / … |
 | `current_period_start` / `end` | Billing window |
 | `canceled_at` | Cancel timestamp when present |
+| `pending_tier` / `pending_effective_at` | Scheduled next-period plan change |
 | `last_event_at` | Ordering guard |
 | `polar_metadata` | Last event metadata (debug) |
 

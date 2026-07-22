@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
 class Tier(str, Enum):
@@ -52,14 +51,14 @@ class TierConfig:
     tier: Tier
     label: str
     # None => unlimited
-    monthly_message_limit: Optional[int]
-    monthly_token_limit: Optional[int]
+    monthly_message_limit: int | None
+    monthly_token_limit: int | None
     features: frozenset[str] = field(default_factory=frozenset)
     # Polar product id (set from env/dash). None for `free` and for any
     # paying tier whose product hasn't been wired up yet.
-    polar_product_id: Optional[str] = None
+    polar_product_id: str | None = None
     # Human-friendly price hint for the pricing UI. Cosmetic only.
-    price_hint: Optional[str] = None
+    price_hint: str | None = None
 
 
 # Map of product id -> tier, rebuilt whenever product ids are configured.
@@ -99,7 +98,9 @@ TIERS: dict[Tier, TierConfig] = {
         label="Tier 2",
         monthly_message_limit=500,
         monthly_token_limit=1_000_000,
-        features=frozenset({FEATURE_SEARCH_WEB, FEATURE_CHARTS, FEATURE_ADVANCED_ANALYTICS}),
+        features=frozenset(
+            {FEATURE_SEARCH_WEB, FEATURE_CHARTS, FEATURE_ADVANCED_ANALYTICS}
+        ),
         polar_product_id=None,
         price_hint="$15/mo",
     ),
@@ -115,13 +116,14 @@ TIERS: dict[Tier, TierConfig] = {
 }
 
 
-def configure_product_ids(mapping: dict[str, str]) -> None:
+def configure_product_ids(mapping: dict[str, str | None]) -> None:
     """Inject Polar product ids per tier (e.g. from env vars).
 
     `mapping` is {"tier1": "<product_id>", ...}. Unknown tiers are ignored.
     Rebuilds the internal product->tier index afterwards.
     """
     import copy
+
     global TIERS, _PRODUCT_INDEX
     new: dict[Tier, TierConfig] = {}
     for t, cfg in TIERS.items():
@@ -142,7 +144,7 @@ def configure_product_ids(mapping: dict[str, str]) -> None:
     _PRODUCT_INDEX = _product_index()
 
 
-def tier_for_product(product_id: Optional[str]) -> Tier:
+def tier_for_product(product_id: str | None) -> Tier:
     """Reverse-lookup a tier from a Polar product id. Defaults to free."""
     if not product_id:
         return Tier.free

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import update
@@ -45,11 +45,15 @@ def _enabled() -> bool:
     return bool(settings.CHAT_OBSERVABILITY_ENABLED)
 
 
+def _turn_recording_required() -> bool:
+    return bool(settings.CHAT_OBSERVABILITY_ENABLED or settings.SUBSCRIPTIONS_ENABLED)
+
+
 async def upsert_conversation(
     conversation_id: str,
     user_id: int,
-    title: Optional[str] = None,
-    message_count: Optional[int] = None,
+    title: str | None = None,
+    message_count: int | None = None,
 ) -> None:
     if not _enabled() or not conversation_id:
         return
@@ -76,7 +80,9 @@ async def upsert_conversation(
             await db.execute(do_update)
             await db.commit()
     except Exception:
-        logger.exception("observability: failed to upsert conversation %s", conversation_id)
+        logger.exception(
+            "observability: failed to upsert conversation %s", conversation_id
+        )
 
 
 async def start_turn(
@@ -85,11 +91,11 @@ async def start_turn(
     user_id: int,
     user_message: str,
     model: str,
-    trace_id: Optional[str] = None,
-    request_id: Optional[str] = None,
-) -> Optional[int]:
+    trace_id: str | None = None,
+    request_id: str | None = None,
+) -> int | None:
     """Create a turn row and return its id, or None if disabled/failed."""
-    if not _enabled():
+    if not _turn_recording_required():
         return None
     try:
         async with async_session() as db:
@@ -116,16 +122,16 @@ async def start_turn(
 
 async def record_llm_call(
     *,
-    turn_id: Optional[int],
+    turn_id: int | None,
     round_index: int,
     model: str,
-    prompt_tokens: Optional[int] = None,
-    completion_tokens: Optional[int] = None,
-    total_tokens: Optional[int] = None,
-    cached_tokens: Optional[int] = None,
-    cost_usd: Optional[float] = None,
-    duration_ms: Optional[int] = None,
-    finish_reason: Optional[str] = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+    cached_tokens: int | None = None,
+    cost_usd: float | None = None,
+    duration_ms: int | None = None,
+    finish_reason: str | None = None,
     had_tool_calls: bool = False,
 ) -> None:
     if not _enabled() or turn_id is None:
@@ -159,19 +165,21 @@ async def record_llm_call(
             )
             await db.commit()
     except Exception:
-        logger.exception("observability: failed to record llm call for turn %s", turn_id)
+        logger.exception(
+            "observability: failed to record llm call for turn %s", turn_id
+        )
 
 
 async def record_tool_call(
     *,
-    turn_id: Optional[int],
+    turn_id: int | None,
     round_index: int,
     tool_name: str,
-    arguments: Optional[dict] = None,
-    result: Optional[dict] = None,
+    arguments: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
     status: str = "completed",
-    duration_ms: Optional[int] = None,
-    error: Optional[str] = None,
+    duration_ms: int | None = None,
+    error: str | None = None,
 ) -> None:
     if not _enabled() or turn_id is None:
         return
@@ -197,26 +205,28 @@ async def record_tool_call(
             )
             await db.commit()
     except Exception:
-        logger.exception("observability: failed to record tool call for turn %s", turn_id)
+        logger.exception(
+            "observability: failed to record tool call for turn %s", turn_id
+        )
 
 
 async def finalize_turn(
-    turn_id: Optional[int],
+    turn_id: int | None,
     *,
     status: str,
-    assistant_reply: Optional[str] = None,
-    error: Optional[str] = None,
-    duration_ms: Optional[int] = None,
-    rounds_count: Optional[int] = None,
-    actions_count: Optional[int] = None,
+    assistant_reply: str | None = None,
+    error: str | None = None,
+    duration_ms: int | None = None,
+    rounds_count: int | None = None,
+    actions_count: int | None = None,
     pending_confirmation: bool = False,
     pending_question: bool = False,
-    total_prompt_tokens: Optional[int] = None,
-    total_completion_tokens: Optional[int] = None,
-    total_tokens: Optional[int] = None,
-    total_cost_usd: Optional[float] = None,
+    total_prompt_tokens: int | None = None,
+    total_completion_tokens: int | None = None,
+    total_tokens: int | None = None,
+    total_cost_usd: float | None = None,
 ) -> None:
-    if not _enabled() or turn_id is None:
+    if not _turn_recording_required() or turn_id is None:
         return
     values: dict[str, Any] = {
         "status": status,
@@ -245,9 +255,7 @@ async def finalize_turn(
     try:
         async with async_session() as db:
             await db.execute(
-                update(ChatObsTurn)
-                .where(ChatObsTurn.id == turn_id)
-                .values(**values)
+                update(ChatObsTurn).where(ChatObsTurn.id == turn_id).values(**values)
             )
             await db.commit()
     except Exception:
@@ -255,18 +263,22 @@ async def finalize_turn(
 
 
 async def _compute_cost_from_pricing(
-    *, model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: Optional[int]
-) -> Optional[float]:
+    *, model: str, prompt_tokens: int, completion_tokens: int, cached_tokens: int | None
+) -> float | None:
     """Fallback cost estimate from the chat_model_pricing table."""
     if not prompt_tokens and not completion_tokens:
         return None
     try:
         async with async_session() as db:
             row = (
-                await db.execute(
-                    select(ChatModelPricing).where(ChatModelPricing.model == model)
+                (
+                    await db.execute(
+                        select(ChatModelPricing).where(ChatModelPricing.model == model)
+                    )
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if row is None:
                 return None
             cached = cached_tokens or 0

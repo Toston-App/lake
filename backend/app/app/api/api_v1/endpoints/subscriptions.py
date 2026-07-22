@@ -5,7 +5,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import models
 from app.api import deps
 from app.core.config import settings
 from app.core.tiers import (
@@ -14,7 +13,9 @@ from app.core.tiers import (
     get_tier_config,
     tier_from_value,
 )
+from app.models.user import User
 from app.schemas.subscription import (
+    ChangePlanOut,
     CheckoutOut,
     CheckoutRequest,
     PortalOut,
@@ -23,7 +24,7 @@ from app.schemas.subscription import (
     TierOut,
 )
 from app.services.entitlements import check_quota
-from app.services.polar import create_checkout, create_portal_session
+from app.services.polar import change_plan, create_checkout, create_portal_session
 from app.utilities.wide_events import enrich_event
 
 router = APIRouter()
@@ -43,7 +44,7 @@ def _tier_to_out(cfg: TierConfig) -> TierOut:
 
 @router.get("/tiers", response_model=list[TierOut])
 async def list_tiers(
-    _: models.User = Depends(deps.get_current_active_user),
+    _: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List all subscription tiers and their limits/features."""
     # Refresh product ids from env so `available` reflects current config.
@@ -51,17 +52,14 @@ async def list_tiers(
         from app.services.polar import _configure_product_ids
 
         _configure_product_ids()
-    return [
-        _tier_to_out(get_tier_config(t))
-        for t in Tier
-    ]
+    return [_tier_to_out(get_tier_config(t)) for t in Tier]
 
 
 @router.get("/me", response_model=SubscriptionMeOut)
 async def get_my_subscription(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Return the caller's current tier, usage for the billing period, and
     the tier's feature/limit configuration."""
@@ -82,15 +80,17 @@ async def get_my_subscription(
 
         row = await crud_subscription.get_by_user(db, current_user.id)
         can_manage = bool(
-            current_user.polar_customer_id
-            and row
-            and row.status in ("active", "trialing")
+            current_user.polar_customer_id or (row and row.polar_customer_id)
         )
         sub = SubscriptionOut(
             tier=quota.tier.value,
             status=row.status if row else "free",
-            current_period_start=row.current_period_start if row else quota.period_start,
+            current_period_start=row.current_period_start
+            if row
+            else quota.period_start,
             current_period_end=row.current_period_end if row else None,
+            pending_tier=row.pending_tier if row else None,
+            pending_effective_at=row.pending_effective_at if row else None,
             can_manage=can_manage,
         )
 
@@ -116,7 +116,7 @@ async def create_subscription_checkout(
     request: Request,
     body: CheckoutRequest,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Create a Polar checkout session for the requested tier.
 
@@ -139,10 +139,30 @@ async def create_subscription_checkout(
     return await create_checkout(db, current_user, tier, request=request)
 
 
+@router.post("/change-plan", response_model=ChangePlanOut)
+async def change_subscription_plan(
+    request: Request,
+    body: CheckoutRequest,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    try:
+        tier = tier_from_value(body.tier)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid tier: {body.tier}")
+
+    enrich_event(
+        request,
+        user={"id": current_user.id, "email": current_user.email},
+        operation={"type": "subscription_change_plan", "tier": tier.value},
+    )
+    return await change_plan(db, current_user, tier, request=request)
+
+
 @router.post("/portal", response_model=PortalOut)
 async def create_subscription_portal(
     request: Request,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Create a Polar customer-portal session so the user can manage their
     subscription (update payment, cancel, etc.)."""

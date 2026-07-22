@@ -25,6 +25,8 @@ export type SubscriptionOut = {
   status: string
   current_period_start: string | null
   current_period_end: string | null
+  pending_tier: TierSlug | null
+  pending_effective_at: string | null
   can_manage: boolean
 }
 
@@ -41,6 +43,12 @@ export type CheckoutOut = {
 
 export type PortalOut = {
   url: string
+}
+
+export type ChangePlanOut = {
+  requested_tier: TierSlug
+  effective: 'immediate' | 'next_period'
+  effective_at: string | null
 }
 
 /** Detail payload the backend returns on a 402 quota-exceeded response. */
