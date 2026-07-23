@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # string from the environment.
     CLERK_JWT_PUBLIC_KEY: str
     CLERK_ISSUER: str
+    # Backend API secret used to retrieve Clerk user profiles when a local
+    # UUID-only user needs an email address for billing.
+    CLERK_SECRET_KEY: str | None = None
     # NoDecode tells pydantic-settings not to JSON-parse this field's raw env
     # value, so our `mode="before"` validator below sees the original string
     # and can accept either a JSON array or a comma-separated list.

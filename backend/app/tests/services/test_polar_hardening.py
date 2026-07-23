@@ -11,7 +11,10 @@ from app.crud import crud_subscription
 from app.models.subscription import UserSubscription
 from app.models.user import User
 from app.services import polar as polar_service
+from app.services.clerk import ClerkProfile
 from fastapi import HTTPException
+from httpx import Response
+from polar_sdk.models import ResourceNotFound, ResourceNotFoundData
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +30,46 @@ def _subscription(user_id: int, *, tier: str = "tier1") -> UserSubscription:
         status="active",
         current_period_start=datetime.now(timezone.utc) - timedelta(days=1),
     )
+
+
+async def test_customer_creation_fetches_missing_email_from_clerk(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
+    test_user.email = None
+    test_user.name = None
+    test_user.uuid = "user_clerk_test"
+
+    create = AsyncMock(return_value=SimpleNamespace(id="customer_test"))
+    client = SimpleNamespace(
+        customers=SimpleNamespace(
+            get_external_async=AsyncMock(
+                side_effect=ResourceNotFound(
+                    data=ResourceNotFoundData(detail="missing"),
+                    raw_response=Response(404),
+                )
+            ),
+            create_async=create,
+        )
+    )
+    get_profile = AsyncMock(
+        return_value=ClerkProfile(email="clerk@example.com", name="Clerk User")
+    )
+    monkeypatch.setattr(polar_service, "get_polar_client", lambda: client)
+    monkeypatch.setattr(polar_service, "get_clerk_profile", get_profile)
+
+    customer_id = await polar_service.ensure_customer(db_session, test_user)
+
+    assert customer_id == "customer_test"
+    get_profile.assert_awaited_once_with("user_clerk_test")
+    assert create.await_args.kwargs["request"] == {
+        "external_id": "user_clerk_test",
+        "email": "clerk@example.com",
+        "name": "Clerk User",
+        "metadata": {"toston_user_id": str(test_user.id)},
+    }
 
 
 async def test_webhook_claim_is_atomic_and_rollback_releases_it(

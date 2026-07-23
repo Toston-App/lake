@@ -26,6 +26,7 @@ from app.crud import crud_subscription
 from app.crud.crud_user import user as crud_user
 from app.models.user import User
 from app.schemas.subscription import ChangePlanOut, CheckoutOut, PortalOut
+from app.services.clerk import ClerkProfileError, get_clerk_profile
 from app.utilities.wide_events import enrich_event, mark_for_logging
 
 _polar_client: Any = None
@@ -140,14 +141,48 @@ async def ensure_customer(
         customer_id = existing.id
     except ResourceNotFound:
         # Create a new customer tied to our external id.
+        email = user.email.strip() if user.email else None
+        name = user.name.strip() if user.name else None
+        if not email and user.uuid:
+            try:
+                clerk_profile = await get_clerk_profile(user.uuid)
+            except ClerkProfileError as exc:
+                _polar_log(
+                    request,
+                    level="error",
+                    op="clerk.users.get",
+                    error=str(exc),
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to retrieve Clerk profile for Polar customer",
+                ) from exc
+            email = clerk_profile.email
+            name = name or clerk_profile.name
+
+        if not email:
+            _polar_log(
+                request,
+                level="warning",
+                op="customers.create",
+                error="missing_email",
+            )
+            raise HTTPException(
+                status_code=422,
+                detail="An email address is required to create a Polar customer",
+            )
+
+        customer_request: dict[str, Any] = {
+            "external_id": ext_id,
+            "email": email,
+            "metadata": {"toston_user_id": str(user.id)},
+        }
+        if name:
+            customer_request["name"] = name
+
         try:
             created = await polar.customers.create_async(
-                request={
-                    "external_id": ext_id,
-                    "email": user.email or "",
-                    "name": user.name or "",
-                    "metadata": {"toston_user_id": str(user.id)},
-                }
+                request=customer_request
             )
             customer_id = created.id
         except Exception as create_exc:

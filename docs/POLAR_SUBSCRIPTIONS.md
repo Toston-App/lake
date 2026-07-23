@@ -58,6 +58,7 @@ Copy the Polar block from `.env.develop` into `.env` and fill values for the env
 | `POLAR_PRODUCT_TIER2_ID` | for checkout | — | Polar product id for tier 2 |
 | `POLAR_PRODUCT_TIER3_ID` | for checkout | — | Polar product id for tier 3 |
 | `POLAR_WEBHOOK_MAX_BYTES` | no | `262144` | Maximum raw webhook body size |
+| `CLERK_SECRET_KEY` | for UUID-only Clerk users | — | Clerk Backend API secret used to retrieve the user's primary email/name before creating a Polar customer |
 | `CHAT_TURN_RESERVATION_TTL_SECONDS` | no | `900` | Maximum age of an in-progress quota reservation |
 | `SUBSCRIPTIONS_DEV_DEFAULT_TIER` | no | `tier3` | Tier when subscriptions are disabled. Forced to `free` if `POLAR_SERVER=production` |
 

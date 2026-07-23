@@ -36,6 +36,7 @@ dependencies = [
     "uvicorn>=0.35.0",
     "pandas>=2.3.0",
     "polar-sdk>=0.31.7",
+    "clerk-backend-api==6.0.1",
     "pydantic-ai-slim[openrouter]>=1.0.0",
     "yfinance>=01.0",
     "faker>=40.31.0",
