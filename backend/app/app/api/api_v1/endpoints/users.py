@@ -154,10 +154,7 @@ async def read_user_me(
         # Never let entitlement resolution break /users/me.
         pass
     return schemas.UserGetMe(
-        id=current_user.id,
-        email=current_user.email,
         country=current_user.country,
-        is_superuser=current_user.is_superuser,
         subscription_tier=tier_value,
     )
 

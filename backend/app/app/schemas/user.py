@@ -50,10 +50,7 @@ class User(UserInDBBase):
     pass
 
 class UserGetMe(BaseModel):
-    id: Optional[int] = None
-    email: Optional[EmailStr] = None
     country: Optional[str] = None
-    is_superuser: bool = False
     # Subscription tier slug ("free" | "tier1" | "tier2" | "tier3").
     # Populated by the /users/me endpoint from the (cached) entitlement.
     subscription_tier: Optional[str] = None
