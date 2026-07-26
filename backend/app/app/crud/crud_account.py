@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
@@ -15,7 +17,7 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
     ) -> Account:
         obj_in_data = jsonable_encoder(obj_in)
 
-        if obj_in_data["initial_balance"] != None:
+        if obj_in_data["initial_balance"] is not None:
             obj_in_data["current_balance"] = obj_in_data["initial_balance"]
 
         db_obj = self.model(**obj_in_data, owner_id=owner_id)
@@ -34,19 +36,28 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
         return db_obj
 
     async def get_multi_by_owner(
-        self, db: AsyncSession, *, owner_id: int, skip: int = 0, limit: int = 100
+        self,
+        db: AsyncSession,
+        *,
+        owner_id: int,
+        skip: int = 0,
+        limit: int | None = 100,
     ) -> list[Account]:
-        result = await db.execute(
+        query = (
             select(self.model)
             .filter(Account.owner_id == owner_id)
             .order_by(Account.name)
             .offset(skip)
-            .limit(limit)
         )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await db.execute(query)
         return result.scalars().all()
 
     async def get_by_id(self, db: AsyncSession, *, owner_id: int, id: int) -> Account:
-        result = await db.execute(select(self.model).filter(Account.id == id, Account.owner_id == owner_id))
+        result = await db.execute(
+            select(self.model).filter(Account.id == id, Account.owner_id == owner_id)
+        )
         return result.scalars().first()
 
     # TODO: Make and enum for columns
@@ -88,6 +99,39 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
 
         await self.update(db=db, db_obj=account, obj_in=account_in)
 
+        return account
+
+    async def recalculate_total_investments(
+        self, db: AsyncSession, *, account_id: int, commit: bool = True
+    ) -> Account:
+        """Recalculate total_investments for an account based on its holdings."""
+        from sqlalchemy import func
+
+        from app.models.holding import Holding
+
+        account_result = await db.execute(
+            select(Account)
+            .filter(Account.id == account_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        account = account_result.scalars().first()
+        if account:
+            totals = await db.execute(
+                select(
+                    func.sum(Holding.current_value_usd),
+                    func.sum(Holding.current_value_mxn),
+                ).filter(Holding.account_id == account_id)
+            )
+            total_usd, total_mxn = totals.one()
+            account.total_investments_usd = total_usd or Decimal("0")
+            account.total_investments_mxn = total_mxn or Decimal("0")
+            db.add(account)
+            if commit:
+                await db.commit()
+            else:
+                await db.flush()
+            await db.refresh(account)
         return account
 
 

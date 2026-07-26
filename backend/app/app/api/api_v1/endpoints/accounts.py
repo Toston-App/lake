@@ -71,7 +71,8 @@ async def create_account(
         operation={
             "type": "create_account",
             "account_type": account_in.type.value if account_in.type else None,
-            "has_initial_balance": account_in.initial_balance is not None and account_in.initial_balance != 0,
+            "has_initial_balance": account_in.initial_balance is not None
+            and account_in.initial_balance != 0,
         },
     )
 
@@ -90,7 +91,9 @@ async def create_account(
         transaction={
             "type": "account",
             "id": account.id if account else None,
-            "initial_balance": float(account_in.initial_balance) if account_in.initial_balance else 0,
+            "initial_balance": float(account_in.initial_balance)
+            if account_in.initial_balance
+            else 0,
         },
     )
 
@@ -134,6 +137,7 @@ async def update_account(
     initial_balance: float = Body(None),
     color: str = Body(None),
     type: AccountType = Body(None),
+    logo: str = Body(None),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -145,7 +149,9 @@ async def update_account(
         operation={"type": "update_account", "account_id": id},
     )
 
-    account = await read_account(db=db, id=id, current_user=current_user, request=request)
+    account = await read_account(
+        db=db, id=id, current_user=current_user, request=request
+    )
 
     current_account_data = jsonable_encoder(account)
     account_in = schemas.AccountUpdate(**current_account_data)
@@ -164,13 +170,21 @@ async def update_account(
         user_in.balance_total = current_user.balance_total + balance_difference
         await crud.user.update(db=db, db_obj=current_user, obj_in=user_in)
 
-        changes["initial_balance"] = {"from": float(account.initial_balance), "to": initial_balance}
+        changes["initial_balance"] = {
+            "from": float(account.initial_balance),
+            "to": initial_balance,
+        }
     if color is not None:
         account_in.color = color
         changes["color"] = True
     if type is not None:
         account_in.type = type
-        changes["type"] = {"from": account.type.value if account.type else None, "to": type.value}
+        changes["type"] = {
+            "from": account.type.value if account.type else None,
+            "to": type.value,
+        }
+    if logo is not None:
+        account_in.logo = logo
 
     account_in.updated_at = datetime.now(timezone.utc)
 
