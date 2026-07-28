@@ -428,80 +428,6 @@ body {
   }
 }
 
-.thinking-title {
-  margin: 0 0 0.35rem;
-  font-weight: 600;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #71717a;
-}
-
-.thinking-steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.thinking-step {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.2rem 0;
-}
-
-.thinking-step-icon {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #a1a1aa;
-}
-
-.thinking-step-completed .thinking-step-icon {
-  background: #16a34a;
-}
-
-.thinking-step-pending_confirmation .thinking-step-icon {
-  background: #d97706;
-}
-
-.thinking-step-failed .thinking-step-icon {
-  background: #dc2626;
-}
-
-/* Tool steps (collapsed in messages) */
-.tool-steps-details {
-  margin-bottom: 0.5rem;
-  font-size: 0.8rem;
-  color: #71717a;
-}
-
-.tool-steps-details summary {
-  cursor: pointer;
-  user-select: none;
-}
-
-.tool-steps-list {
-  list-style: none;
-  margin: 0.35rem 0 0;
-  padding: 0;
-}
-
-.tool-step {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.15rem 0;
-}
-
-.tool-step-badge {
-  font-size: 0.65rem;
-  text-transform: uppercase;
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-  background: #f4f4f5;
-}
-
 /* Tool approval */
 .tool-approval-card {
   margin: 0;
@@ -1604,5 +1530,4 @@ body {
   background: #f4f4f5;
   color: #52525b;
 }
-
 

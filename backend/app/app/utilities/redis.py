@@ -209,8 +209,9 @@ async def save_conversation(
     messages: list[dict],
     title: str,
     ttl: int,
+    model_messages: list[dict] | None = None,
 ) -> bool:
-    """Persist conversation messages and update the user's conversation index."""
+    """Persist public UI messages and private model history."""
     try:
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         payload = {
@@ -218,6 +219,7 @@ async def save_conversation(
             "user_id": user_id,
             "title": title,
             "messages": messages,
+            "model_messages": model_messages,
             "updated_at": now,
         }
         conv_key = _chat_conversation_key(conversation_id)
@@ -225,7 +227,9 @@ async def save_conversation(
         await r.expire(conv_key, ttl)
 
         index_key = _chat_user_index_key(user_id)
-        await r.hset(index_key, conversation_id, json.dumps({"title": title, "updated_at": now}))
+        await r.hset(
+            index_key, conversation_id, json.dumps({"title": title, "updated_at": now})
+        )
         await r.expire(index_key, ttl)
         return True
     except Exception as e:
@@ -344,9 +348,7 @@ async def invalidate_user_cache(user_id: int) -> bool:
         await r.delete(_entitlement_key(user_id))
         return True
     except Exception as e:
-        logging.error(
-            f"Redis error invalidating cache for user {user_id}: {str(e)}"
-        )
+        logging.error(f"Redis error invalidating cache for user {user_id}: {str(e)}")
         return False
 
 

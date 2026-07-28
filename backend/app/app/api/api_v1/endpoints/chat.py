@@ -13,6 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent import ChatDeps, build_obs_hooks, build_toolset
 from app.ai.agent import get_chat_agent as get_pydantic_agent
+from app.ai.chat_presentation import (
+    append_confirmation_to_model_history,
+    latest_user_request,
+    load_model_messages,
+    public_chat_stream,
+    public_ui_messages,
+    serialize_model_messages,
+)
 from app.ai.chat_tools import execute_tool, merge_confirm_tool_args
 from app.api import deps
 from app.core.config import settings
@@ -25,7 +33,6 @@ from app.schemas.chat import (
     ConversationDetail,
     ConversationMessage,
     ConversationSummary,
-    ToolStep,
     chat_action_detail,
 )
 from app.services.entitlements import (
@@ -93,27 +100,12 @@ def _conversation_title(message: str) -> str:
     return text[:60] + ("…" if len(text) > 60 else "")
 
 
-def _merge_messages(
-    existing: list[dict[str, Any]], new_messages: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
-    merged = list(existing)
-    for msg in new_messages:
-        entry = {
-            "role": msg["role"],
-            "content": msg.get("content") or "",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        merged.append(entry)
-    return merged
-
-
 # Vercel AI SDK UI Message Stream Protocol endpoint (Pydantic AI + VercelAIAdapter)
 #
 # This single POST /chat endpoint replaces the legacy /messages and
 # /messages/stream endpoints for frontends using `@ai-sdk/react`'s `useChat`.
-# It speaks the Vercel AI data-stream protocol (SSE chunks: text-start/delta/end,
-# tool-input/output, start-step/finish-step, finish, tool-approval-request [v6]).
-# The legacy endpoints below are kept for the not-yet-migrated frontend.
+# It speaks a public subset of the Vercel AI data-stream protocol. Raw tool and
+# reasoning events stay inside the server-side harness.
 # --------------------------------------------------------------------------- #
 
 
@@ -154,7 +146,13 @@ async def chat_vercel(
     adapter = await VercelAIAdapter.from_request(request, agent=agent, sdk_version=6)
 
     conversation_id = adapter.conversation_id or str(uuid.uuid4())
-    user_msg = _last_user_text(adapter.messages)
+    current_messages = latest_user_request(adapter.messages)
+    # ``messages`` is a cached property used by run_stream_native. Replacing the
+    # cached value makes older clients that still submit full UI history safe:
+    # server-owned history is authoritative and only the newest user turn is
+    # appended.
+    adapter.__dict__["messages"] = current_messages
+    user_msg = _last_user_text(current_messages)
     title = _conversation_title(user_msg) if user_msg else "Conversation"
 
     trace_id, request_id = _trace_ids(request)
@@ -184,6 +182,10 @@ async def chat_vercel(
             },
         )
     tier = quota.tier
+    stored_conversation = await get_conversation(conversation_id, current_user.id)
+    model_history = load_model_messages(stored_conversation)
+    if stored_conversation and stored_conversation.get("title"):
+        title = str(stored_conversation["title"])
 
     enrich_event(
         request,
@@ -230,13 +232,15 @@ async def chat_vercel(
         )
         completed = True
         try:
-            ui_msgs = VercelAIAdapter.dump_messages(all_msgs, sdk_version=6)
+            ui_msgs = public_ui_messages(all_msgs)
+            private_msgs = serialize_model_messages(all_msgs)
             await save_conversation(
                 conversation_id,
                 current_user.id,
-                [m.model_dump() for m in ui_msgs],
+                ui_msgs,
                 title,
                 settings.CHAT_CONVERSATION_TTL_SECONDS,
+                model_messages=private_msgs,
             )
             await upsert_conversation(
                 conversation_id, current_user.id, title, len(ui_msgs)
@@ -257,6 +261,7 @@ async def chat_vercel(
 
     event_stream = adapter.run_stream(
         deps=deps,
+        message_history=model_history,
         toolsets=[build_toolset(tier)],
         capabilities=[build_obs_hooks()],
         on_complete=on_complete,
@@ -264,7 +269,7 @@ async def chat_vercel(
 
     async def metered_stream() -> AsyncIterator[Any]:
         try:
-            async for event in event_stream:
+            async for event in public_chat_stream(event_stream):
                 yield event
         finally:
             if not completed:
@@ -467,15 +472,13 @@ async def confirm_chat_action(
         reply = str(result.get("error") or "The action could not be completed.")
 
     conv = await get_conversation(conversation_id, current_user.id)
-    history = conv.get("messages", []) if conv else []
-    confirm_user_msg = {
-        "role": "user",
-        "content": f"[Confirmed] {pending['tool_name']}",
-    }
-    confirm_assistant_msg = {"role": "assistant", "content": reply}
-    updated_messages = _merge_messages(
-        history, [confirm_user_msg, confirm_assistant_msg]
+    model_history = load_model_messages(conv)
+    updated_model_history = append_confirmation_to_model_history(
+        model_history,
+        tool_name=pending["tool_name"],
+        reply=reply,
     )
+    updated_messages = public_ui_messages(updated_model_history)
     title = str(conv.get("title") or "Conversation") if conv else "Conversation"
     await save_conversation(
         conversation_id,
@@ -483,6 +486,7 @@ async def confirm_chat_action(
         updated_messages,
         title,
         settings.CHAT_CONVERSATION_TTL_SECONDS,
+        model_messages=serialize_model_messages(updated_model_history),
     )
     await upsert_conversation(
         conversation_id, current_user.id, title, len(updated_messages)
@@ -498,13 +502,6 @@ async def confirm_chat_action(
         conversation_id=conversation_id,
         reply=reply,
         actions=actions,
-        tool_steps=[
-            ToolStep(
-                tool_name=pending["tool_name"],
-                status="completed",
-                label=f"Confirmed {pending['tool_name'].replace('_', ' ')}",
-            )
-        ],
         pending_confirmation=None,
         ui_message=ui_msg,
     )

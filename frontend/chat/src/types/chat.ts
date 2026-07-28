@@ -10,12 +10,6 @@ export type ChatAction = {
   detail?: Record<string, unknown>
 }
 
-export type ToolStep = {
-  tool_name: string
-  status: 'completed' | 'failed' | 'pending_confirmation'
-  label?: string
-}
-
 export type PendingConfirmation = {
   action_id: string
   tool_name: string
@@ -49,7 +43,6 @@ export type ChatMessageResponse = {
   reply: string
   actions: ChatAction[]
   render?: RenderDirective[]
-  tool_steps: ToolStep[]
   pending_confirmation?: PendingConfirmation
   pending_question?: PendingQuestion
   /** Vercel AI UI message the new frontend appends after a /confirm. */

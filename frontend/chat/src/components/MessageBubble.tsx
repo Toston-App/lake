@@ -1,33 +1,9 @@
 import type { UIMessage } from '@ai-sdk/react'
 import { MarkdownContent } from './MarkdownContent'
 import { RenderDirectives } from './render/RenderDirectives'
-import { ThinkingPanel } from './ThinkingPanel'
-import { ToolStepsList } from './ToolStepsList'
-import type { ToolStep } from '../types/chat'
-import { formatToolName } from '../utils/tools'
 
 type MessageBubbleProps = {
   message: UIMessage
-}
-
-/** Map a tool-invocation part's state to a ToolStep for ToolStepsList/ThinkingPanel. */
-function toolStepFromPart(part: {
-  toolName?: string
-  state?: string
-}): ToolStep | null {
-  if (!part.toolName) return null
-  const state = part.state ?? 'input-available'
-  const status =
-    state === 'output-error'
-      ? 'failed'
-      : state === 'output-available'
-        ? 'completed'
-        : 'pending_confirmation'
-  return {
-    tool_name: part.toolName,
-    status: status as ToolStep['status'],
-    label: formatToolName(part.toolName),
-  }
 }
 
 export function MessageBubble({ message }: MessageBubbleProps) {
@@ -46,11 +22,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     )
   }
 
-  // Assistant: partition parts into text / tool-steps / data (render + pending).
+  // Assistant: render only deliberate public text/data parts. Raw tool and
+  // reasoning parts are ignored defensively even though the backend filters them.
   const textParts: string[] = []
-  const toolSteps: ToolStep[] = []
   const renderParts: { type: string; data: unknown }[] = []
-  let streaming = false
 
   for (const part of message.parts as Array<Record<string, unknown>>) {
     switch (part.type) {
@@ -65,14 +40,6 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         break
       default: {
         if (typeof part.type === 'string' && part.type.startsWith('tool-')) {
-          const step = toolStepFromPart(
-            part as unknown as { toolName?: string; state?: string },
-          )
-          if (step) toolSteps.push(step)
-          const state = (part as { state?: string }).state
-          if (state === 'input-streaming' || state === 'input-available') {
-            streaming = true
-          }
           break
         }
         if (typeof part.type === 'string' && part.type.startsWith('data-')) {
@@ -96,29 +63,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   }
 
   const hasText = textParts.length > 0
+  if (!hasText && renderParts.length === 0) return null
 
   return (
     <div className="message message-assistant">
       <div className="message-bubble">
-        {streaming && !hasText ? (
-          <>
-            <ThinkingPanel
-              isActive
-              steps={toolSteps.length > 0 ? toolSteps : undefined}
-            />
-            {textParts.length > 0 ? (
-              <MarkdownContent content={textParts.join('')} />
-            ) : null}
-          </>
-        ) : (
-          <>
-            {toolSteps.length > 0 && <ToolStepsList steps={toolSteps} />}
-            {hasText && <MarkdownContent content={textParts.join('')} />}
-            {renderParts.length > 0 ? (
-              <RenderDirectives parts={renderParts} />
-            ) : null}
-          </>
-        )}
+        {hasText && <MarkdownContent content={textParts.join('')} />}
+        {renderParts.length > 0 ? (
+          <RenderDirectives parts={renderParts} />
+        ) : null}
       </div>
     </div>
   )

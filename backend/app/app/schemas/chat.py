@@ -1,15 +1,15 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class ChatMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
-    conversation_id: Optional[str] = None
+    conversation_id: str | None = None
 
 
-def chat_action_detail(data: Any) -> Optional[dict[str, Any]]:
+def chat_action_detail(data: Any) -> dict[str, Any] | None:
     """Normalize tool result data for ChatAction (detail must be a dict)."""
     if data is None:
         return None
@@ -20,18 +20,12 @@ def chat_action_detail(data: Any) -> Optional[dict[str, Any]]:
 
 class ChatAction(BaseModel):
     type: str
-    detail: Optional[dict[str, Any]] = None
+    detail: dict[str, Any] | None = None
 
 
 class RenderDirective(BaseModel):
     component: str
-    detail: Optional[dict[str, Any]] = None
-
-
-class ToolStep(BaseModel):
-    tool_name: str
-    status: str  # completed | failed | pending_confirmation
-    label: Optional[str] = None
+    detail: dict[str, Any] | None = None
 
 
 class PendingConfirmation(BaseModel):
@@ -57,31 +51,30 @@ class ChatMessageResponse(BaseModel):
     reply: str
     actions: list[ChatAction] = []
     render: list[RenderDirective] = []
-    tool_steps: list[ToolStep] = []
-    pending_confirmation: Optional[PendingConfirmation] = None
-    pending_question: Optional[PendingQuestion] = None
+    pending_confirmation: PendingConfirmation | None = None
+    pending_question: PendingQuestion | None = None
     # Vercel AI UI message (id/role/parts) for the new @ai-sdk/react frontend.
     # The frontend appends this to `useChat` messages via setMessages after a
     # successful /confirm. Absent for legacy clients (they use reply/actions).
-    ui_message: Optional[dict[str, Any]] = None
+    ui_message: dict[str, Any] | None = None
 
 
 class ChatConfirmRequest(BaseModel):
     action_id: str
-    tool_args: Optional[dict[str, Any]] = None
+    tool_args: dict[str, Any] | None = None
 
 
 class ConversationMessage(BaseModel):
     role: str
     content: str
-    created_at: Optional[datetime] = None
+    created_at: datetime | None = None
 
 
 class ConversationSummary(BaseModel):
     id: str
     title: str
     updated_at: datetime
-    last_message_preview: Optional[str] = None
+    last_message_preview: str | None = None
 
 
 class ConversationDetail(BaseModel):
@@ -92,5 +85,5 @@ class ConversationDetail(BaseModel):
     # by the Pydantic AI + VercelAIAdapter flow. Present only for conversations
     # saved via POST /chat; absent for legacy conversations. The new frontend
     # seeds `useChat` from this when present and ignores `messages`.
-    ui_messages: Optional[list[dict[str, Any]]] = None
+    ui_messages: list[dict[str, Any]] | None = None
     updated_at: datetime

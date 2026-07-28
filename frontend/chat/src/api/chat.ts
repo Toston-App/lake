@@ -28,7 +28,10 @@ export function chatTransport(on402?: (detail: unknown) => void) {
       return token ? { Authorization: `Bearer ${token}` } : {}
     },
     prepareSendMessagesRequest: ({ id, messages, trigger }) => ({
-      body: { id, messages, trigger },
+      // Conversation context is server-owned. Only the newest user turn crosses
+      // the wire, so private tool/reasoning history never needs to round-trip
+      // through the browser.
+      body: { id, messages: messages.slice(-1), trigger },
     }),
     fetch: async (input, init) => {
       const res = await fetch(input, init)
