@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,7 @@ class PendingConfirmation(BaseModel):
     tool_name: str
     preview: dict[str, Any]
     message: str
+    response_language: Literal["en", "es"] = "en"
 
 
 class QuestionOption(BaseModel):
@@ -44,6 +45,7 @@ class PendingQuestion(BaseModel):
     question: str
     options: list[QuestionOption]
     allow_multiple: bool = False
+    response_language: Literal["en", "es"] = "en"
 
 
 class ChatMessageResponse(BaseModel):

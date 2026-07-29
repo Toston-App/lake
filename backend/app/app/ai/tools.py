@@ -28,6 +28,18 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+ResponseLanguage = Literal["en", "es"]
+
+
+def response_language_field() -> Any:
+    return Field(
+        ...,
+        description=(
+            "Language for the user-facing approval or question UI. Use `es` "
+            "for Spanish and `en` for English or any unsupported language."
+        ),
+    )
+
 
 class AccountInput(BaseModel):
     """Model-settable account fields (excludes balances, color, type, owner)."""
@@ -144,6 +156,7 @@ class ManageAccountArgs(BaseModel):
         default=None,
         description="Account fields. Required for create and update.",
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class ManageCategoryArgs(BaseModel):
@@ -160,6 +173,7 @@ class ManageCategoryArgs(BaseModel):
         default=None,
         description="Category fields. Required for create and update.",
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class ManageSubcategoryArgs(BaseModel):
@@ -176,6 +190,7 @@ class ManageSubcategoryArgs(BaseModel):
         default=None,
         description="Subcategory fields. Required for create and update.",
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class ManagePlaceArgs(BaseModel):
@@ -192,6 +207,7 @@ class ManagePlaceArgs(BaseModel):
         default=None,
         description="Place fields. Required for create and update.",
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class CreateExpenseArgs(BaseModel):
@@ -238,6 +254,7 @@ class CreateTransferArgs(BaseModel):
         description="ISO date YYYY-MM-DD. Defaults to today.",
     )
     description: str | None = Field(default=None, description="Optional description.")
+    response_language: ResponseLanguage = response_language_field()
 
 
 class UpdateTransactionArgs(BaseModel):
@@ -255,12 +272,14 @@ class UpdateTransactionArgs(BaseModel):
             "subcategory_id, place_id, from_acc, to_acc, description."
         ),
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class DeleteTransactionArgs(BaseModel):
     """Arguments for ``delete_<expense|income|transfer>``."""
 
     id: int = Field(..., description="Transaction id to delete.")
+    response_language: ResponseLanguage = response_language_field()
 
 
 class SearchTransactionsArgs(BaseModel):
@@ -336,6 +355,7 @@ class BulkCreateArgs(BaseModel):
     expenses: list[ExpenseInput] | None = Field(
         default=None, description="Expenses to create."
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class BulkDeleteArgs(BaseModel):
@@ -347,6 +367,7 @@ class BulkDeleteArgs(BaseModel):
     expenses: list[int] | None = Field(
         default=None, description="Expense ids to delete."
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class CreateBalanceAdjustmentArgs(BaseModel):
@@ -361,6 +382,7 @@ class CreateBalanceAdjustmentArgs(BaseModel):
     description: str | None = Field(
         default=None, description="Optional reason for the adjustment."
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class ListBalanceAdjustmentsArgs(BaseModel):
@@ -409,6 +431,7 @@ class AskUserArgs(BaseModel):
     allow_multiple: bool = Field(
         default=False, description="Allow selecting more than one option."
     )
+    response_language: ResponseLanguage = response_language_field()
 
 
 class RenderDataArgs(BaseModel):

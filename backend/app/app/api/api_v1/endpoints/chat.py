@@ -3,6 +3,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -21,7 +22,12 @@ from app.ai.chat_presentation import (
     public_ui_messages,
     serialize_model_messages,
 )
-from app.ai.chat_tools import execute_tool, merge_confirm_tool_args
+from app.ai.chat_tools import (
+    PROMPT_VERSION,
+    execute_tool,
+    format_confirmation_result,
+    merge_confirm_tool_args,
+)
 from app.api import deps
 from app.core.config import settings
 from app.core.tiers import Tier
@@ -100,6 +106,20 @@ def _conversation_title(message: str) -> str:
     return text[:60] + ("…" if len(text) > 60 else "")
 
 
+def _resolve_client_context(payload: Any) -> tuple[str, str, datetime]:
+    context = payload.get("client_context") if isinstance(payload, dict) else None
+    context = context if isinstance(context, dict) else {}
+    locale = str(context.get("locale") or "en")[:32]
+    requested_zone = str(context.get("time_zone") or "UTC")[:64]
+    try:
+        zone = ZoneInfo(requested_zone)
+        time_zone_name = requested_zone
+    except (ZoneInfoNotFoundError, ValueError):
+        zone = ZoneInfo("UTC")
+        time_zone_name = "UTC"
+    return locale, time_zone_name, datetime.now(zone)
+
+
 # Vercel AI SDK UI Message Stream Protocol endpoint (Pydantic AI + VercelAIAdapter)
 #
 # This single POST /chat endpoint replaces the legacy /messages and
@@ -143,6 +163,11 @@ async def chat_vercel(
     """
     _require_chat_enabled()
     agent = get_pydantic_agent()
+    try:
+        request_payload = await request.json()
+    except Exception:
+        request_payload = {}
+    locale, time_zone_name, local_now = _resolve_client_context(request_payload)
     adapter = await VercelAIAdapter.from_request(request, agent=agent, sdk_version=6)
 
     conversation_id = adapter.conversation_id or str(uuid.uuid4())
@@ -206,6 +231,9 @@ async def chat_vercel(
         user=current_user,
         tier=tier,
         conversation_id=conversation_id,
+        local_date=local_now.date(),
+        time_zone=time_zone_name,
+        locale=locale,
         turn_id=turn_id,
     )
     started = time.perf_counter()
@@ -256,6 +284,12 @@ async def chat_vercel(
                 "pending_confirmation": is_pending,
                 "streaming": True,
                 "protocol": "vercel-ai",
+                "prompt_version": PROMPT_VERSION,
+                "locale": locale,
+                "response_language": "es"
+                if locale.lower().startswith("es")
+                else "en",
+                "time_zone": time_zone_name,
             },
         )
 
@@ -418,6 +452,8 @@ async def confirm_chat_action(
         pending["tool_args"],
         body.tool_args,
     )
+    response_language = str(pending.get("response_language") or "en")
+    tool_args.setdefault("response_language", response_language)
 
     orig_turn_id = pending.get("turn_id")
 
@@ -467,9 +503,15 @@ async def confirm_chat_action(
                 detail=chat_action_detail(result.get("data")),
             )
         )
-        reply = f"Done. {action_type.replace('_', ' ')} completed successfully."
+        reply = format_confirmation_result(
+            success=True, response_language=response_language
+        )
     else:
-        reply = str(result.get("error") or "The action could not be completed.")
+        reply = format_confirmation_result(
+            success=False,
+            response_language=response_language,
+            error=str(result.get("error")) if result.get("error") else None,
+        )
 
     conv = await get_conversation(conversation_id, current_user.id)
     model_history = load_model_messages(conv)

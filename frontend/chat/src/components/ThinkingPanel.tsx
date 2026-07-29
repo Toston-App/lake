@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { THINKING_PLACEHOLDERS } from '../utils/tools'
+import { browserChatLanguage, chatCopy } from '../utils/i18n'
 
 type ThinkingPanelProps = {
   isActive: boolean
@@ -7,21 +7,22 @@ type ThinkingPanelProps = {
 
 export function ThinkingPanel({ isActive }: ThinkingPanelProps) {
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
+  const placeholders = chatCopy(browserChatLanguage()).thinking
 
   useEffect(() => {
     if (!isActive) return
     const id = window.setInterval(() => {
-      setPlaceholderIndex((i) => (i + 1) % THINKING_PLACEHOLDERS.length)
+      setPlaceholderIndex((i) => (i + 1) % placeholders.length)
     }, 2200)
     return () => window.clearInterval(id)
-  }, [isActive])
+  }, [isActive, placeholders.length])
 
   if (!isActive) return null
 
   return (
     <div className="thinking-panel thinking-panel-placeholder">
       <span className="thinking-spinner" aria-hidden />
-      <p>{THINKING_PLACEHOLDERS[placeholderIndex]}</p>
+      <p>{placeholders[placeholderIndex]}</p>
     </div>
   )
 }

@@ -1,4 +1,7 @@
-const TOOL_LABELS: Record<string, string> = {
+import type { ChatLanguage } from './i18n'
+
+const TOOL_LABELS: Record<ChatLanguage, Record<string, string>> = {
+  en: {
   get_user_profile: 'Profile',
   list_accounts: 'List accounts',
   manage_account: 'Manage account',
@@ -26,11 +29,45 @@ const TOOL_LABELS: Record<string, string> = {
   submit_feedback: 'Submit feedback',
   search_web: 'Web search',
   ask_user: 'Clarifying question',
-  render_ui: 'Rendering UI',
+  render_data: 'Rendering data',
+  },
+  es: {
+    get_user_profile: 'Perfil',
+    list_accounts: 'Ver cuentas',
+    manage_account: 'Administrar cuenta',
+    list_categories: 'Ver categorías',
+    manage_category: 'Administrar categoría',
+    manage_subcategory: 'Administrar subcategoría',
+    list_places: 'Ver lugares',
+    manage_place: 'Administrar lugar',
+    create_expense: 'Crear gasto',
+    update_expense: 'Actualizar gasto',
+    delete_expense: 'Eliminar gasto',
+    create_income: 'Crear ingreso',
+    update_income: 'Actualizar ingreso',
+    delete_income: 'Eliminar ingreso',
+    create_transfer: 'Crear transferencia',
+    update_transfer: 'Actualizar transferencia',
+    delete_transfer: 'Eliminar transferencia',
+    search_transactions: 'Buscar transacciones',
+    get_period_summary: 'Resumen del periodo',
+    get_period_charts: 'Gráficas del periodo',
+    bulk_create_transactions: 'Crear varias transacciones',
+    bulk_delete_transactions: 'Eliminar varias transacciones',
+    create_balance_adjustment: 'Ajustar saldo',
+    list_balance_adjustments: 'Ver ajustes',
+    submit_feedback: 'Enviar comentarios',
+    search_web: 'Buscar en la web',
+    ask_user: 'Pregunta aclaratoria',
+    render_data: 'Preparar datos',
+  },
 }
 
-export function formatToolName(toolName: string): string {
-  return TOOL_LABELS[toolName] ?? toolName.replace(/_/g, ' ')
+export function formatToolName(
+  toolName: string,
+  language: ChatLanguage = 'en',
+): string {
+  return TOOL_LABELS[language][toolName] ?? toolName.replace(/_/g, ' ')
 }
 
 export function formatToolArgs(args: Record<string, unknown>): string {
@@ -45,10 +82,3 @@ export function formatToolArgs(args: Record<string, unknown>): string {
   if (parts.length > 0) return parts.join(' · ')
   return JSON.stringify(args, null, 2)
 }
-
-export const THINKING_PLACEHOLDERS = [
-  'Understanding your question…',
-  'Checking your accounts…',
-  'Running tools…',
-  'Preparing response…',
-]

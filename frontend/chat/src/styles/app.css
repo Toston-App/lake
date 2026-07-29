@@ -548,15 +548,22 @@ body {
   font-weight: 500;
 }
 
-.tx-form-field input {
+.tx-form-field input,
+.tx-form-field select {
   padding: 0.45rem 0.55rem;
   border: 1px solid #d6d3d1;
   border-radius: 6px;
   font-size: 0.875rem;
 }
 
-.tx-form-field input:disabled {
+.tx-form-field input:disabled,
+.tx-form-field select:disabled {
   opacity: 0.6;
+}
+
+.tool-approval-entity {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
 }
 
 .tx-readonly-grid {
@@ -1530,4 +1537,3 @@ body {
   background: #f4f4f5;
   color: #52525b;
 }
-

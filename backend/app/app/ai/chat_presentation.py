@@ -69,16 +69,24 @@ def is_public_chat_chunk(chunk: BaseChunk) -> bool:
 async def public_chat_stream(
     stream: AsyncIterator[BaseChunk],
 ) -> AsyncIterator[BaseChunk]:
-    """Drop tool and reasoning events before the stream reaches the client."""
+    """Drop private events and text that duplicates a blocking UI card."""
+    blocking_ui_emitted = False
     async for chunk in stream:
-        if is_public_chat_chunk(chunk):
-            yield chunk
+        chunk_type = str(getattr(chunk, "type", ""))
+        if chunk_type in {"data-pending-confirmation", "data-pending-question"}:
+            blocking_ui_emitted = True
+        if not is_public_chat_chunk(chunk):
+            continue
+        if blocking_ui_emitted and chunk_type.startswith("text-"):
+            continue
+        yield chunk
 
 
 def public_ui_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
     """Project private model history into renderable Vercel UI messages."""
     dumped = VercelAIAdapter.dump_messages(messages, sdk_version=6)
     public: list[dict[str, Any]] = []
+    blocking_ui_emitted = False
 
     for message in dumped:
         if message.role not in {"user", "assistant"}:
@@ -86,6 +94,28 @@ def public_ui_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]
 
         raw = message.model_dump(mode="json", by_alias=True, exclude_none=True)
         parts = raw.get("parts", [])
+        if message.role == "user" and any(
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and str(part.get("text", "")).startswith("[Confirmed] ")
+            for part in parts
+        ):
+            continue
+        if message.role == "user" and any(
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and part.get("text")
+            for part in parts
+        ):
+            blocking_ui_emitted = False
+
+        message_has_blocking_ui = any(
+            isinstance(part, dict)
+            and part.get("type")
+            in {"data-pending-confirmation", "data-pending-question"}
+            for part in parts
+        )
+
         visible_parts = [
             part
             for part in parts
@@ -94,7 +124,14 @@ def public_ui_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]
                 str(part.get("type", "")).startswith("data-")
                 or part.get("type") in _PUBLIC_STORED_PART_TYPES
             )
+            and not (
+                (blocking_ui_emitted or message_has_blocking_ui)
+                and message.role == "assistant"
+                and part.get("type") == "text"
+            )
         ]
+        if message_has_blocking_ui:
+            blocking_ui_emitted = True
         if not visible_parts:
             continue
         raw["parts"] = visible_parts

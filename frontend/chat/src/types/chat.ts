@@ -15,6 +15,7 @@ export type PendingConfirmation = {
   tool_name: string
   preview: Record<string, unknown>
   message: string
+  response_language?: 'en' | 'es'
 }
 
 export type QuestionOption = {
@@ -26,6 +27,7 @@ export type PendingQuestion = {
   question: string
   options: QuestionOption[]
   allow_multiple: boolean
+  response_language?: 'en' | 'es'
 }
 
 export type RenderDirective = {

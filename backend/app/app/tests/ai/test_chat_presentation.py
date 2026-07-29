@@ -65,6 +65,20 @@ async def test_public_stream_preserves_data_from_hidden_tool():
     assert [event.type for event in visible] == ["data-accounts-list"]
 
 
+@pytest.mark.asyncio
+async def test_public_stream_suppresses_text_after_blocking_card():
+    async def events() -> AsyncIterator:
+        yield DataChunk(
+            type="data-pending-confirmation",
+            data={"action_id": "action-1"},
+        )
+        yield TextStartChunk(id="duplicate-text")
+
+    visible = [event async for event in public_chat_stream(events())]
+
+    assert [event.type for event in visible] == ["data-pending-confirmation"]
+
+
 def _private_history():
     call_id = "call-1"
     return [
@@ -169,7 +183,51 @@ def test_confirmation_updates_private_and_public_histories():
     )
     public = public_ui_messages(updated)
 
-    assert public[-2]["role"] == "user"
-    assert public[-2]["parts"][0]["text"] == "[Confirmed] create_expense"
     assert public[-1]["parts"][0]["text"] == "Done. Expense created."
+    assert not any(
+        part.get("text", "").startswith("[Confirmed]")
+        for message in public
+        for part in message["parts"]
+    )
     assert "model_messages" not in public[-1]
+
+
+def test_public_history_suppresses_duplicate_text_after_question():
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="Show spending")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="ask_user",
+                    args={},
+                    tool_call_id="question-1",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="ask_user",
+                    content="Which period?",
+                    tool_call_id="question-1",
+                    metadata=[
+                        DataChunk(
+                            type="data-pending-question",
+                            data={"question": "Which period?", "options": []},
+                        )
+                    ],
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart(content="Which period would you like?")]),
+    ]
+
+    public = public_ui_messages(history)
+    texts = [
+        part["text"]
+        for message in public
+        for part in message["parts"]
+        if part["type"] == "text"
+    ]
+
+    assert texts == ["Show spending"]

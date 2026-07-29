@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { PendingQuestion } from '../types/chat'
+import { chatCopy, normalizeChatLanguage } from '../utils/i18n'
 
 type QuestionChipsProps = {
   pending: PendingQuestion
@@ -13,6 +14,7 @@ export function QuestionChips({
   disabled = false,
 }: QuestionChipsProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const copy = chatCopy(normalizeChatLanguage(pending.response_language))
 
   const toggle = (label: string) => {
     if (disabled) return
@@ -62,7 +64,7 @@ export function QuestionChips({
           onClick={submitMultiple}
           disabled={disabled || selected.size === 0}
         >
-          Continue
+          {copy.continue}
         </button>
       ) : null}
     </div>

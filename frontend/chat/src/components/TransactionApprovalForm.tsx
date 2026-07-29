@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { PendingConfirmation } from '../types/chat'
+import { chatCopy, normalizeChatLanguage } from '../utils/i18n'
 import {
   buildConfirmToolArgs,
   fieldLabel,
@@ -48,11 +49,17 @@ function fieldsForPreview(preview: TransactionPreview): readonly string[] {
   return EXPENSE_FIELDS
 }
 
-function formatDisplayValue(key: string, value: unknown): string {
+function isReferenceField(key: string): boolean {
+  return key.endsWith('_id') || key === 'from_acc' || key === 'to_acc'
+}
+
+function formatDisplayValue(
+  key: string,
+  value: unknown,
+  labels?: Record<string, string>,
+): string {
   if (value === null || value === undefined) return '—'
-  if (key.endsWith('_id') || key === 'from_acc' || key === 'to_acc') {
-    return String(value)
-  }
+  if (isReferenceField(key)) return labels?.[key] ?? '—'
   return String(value)
 }
 
@@ -75,6 +82,8 @@ export function TransactionApprovalForm({
 
   const editable = isEditablePreview(preview)
   const fieldKeys = fieldsForPreview(preview)
+  const language = normalizeChatLanguage(pending.response_language)
+  const copy = chatCopy(language)
 
   function setField(key: string, raw: string) {
     setEdited((prev) => {
@@ -85,9 +94,7 @@ export function TransactionApprovalForm({
       }
       if (
         key === 'amount' ||
-        key.endsWith('_id') ||
-        key === 'from_acc' ||
-        key === 'to_acc'
+        isReferenceField(key)
       ) {
         const num = Number(raw)
         next[key] = Number.isNaN(num) ? raw : num
@@ -109,27 +116,51 @@ export function TransactionApprovalForm({
         <div className="tx-form-grid">
           {fieldKeys.map((key) => (
             <label key={key} className="tx-form-field">
-              <span>{fieldLabel(key, preview.labels)}</span>
-              <input
-                type={
-                  key === 'date'
-                    ? 'date'
-                    : key === 'amount' ||
-                        key.endsWith('_id') ||
-                        key === 'from_acc' ||
-                        key === 'to_acc'
-                      ? 'number'
-                      : 'text'
-                }
-                value={
-                  edited[key] !== undefined && edited[key] !== null
-                    ? String(edited[key])
-                    : ''
-                }
-                onChange={(e) => setField(key, e.target.value)}
-                disabled={isConfirming}
-                step={key === 'amount' ? '0.01' : undefined}
-              />
+              <span>{fieldLabel(key, preview.labels, language)}</span>
+              {isReferenceField(key) && preview.choices?.[key] ? (
+                <select
+                  value={
+                    edited[key] !== undefined && edited[key] !== null
+                      ? String(edited[key])
+                      : ''
+                  }
+                  onChange={(e) => setField(key, e.target.value)}
+                  disabled={isConfirming}
+                >
+                  <option value="">{copy.select}</option>
+                  {preview.choices[key]
+                    .filter(
+                      (choice) =>
+                        key !== 'subcategory_id' ||
+                        choice.parent_value === undefined ||
+                        edited.category_id === undefined ||
+                        Number(edited.category_id) === choice.parent_value,
+                    )
+                    .map((choice) => (
+                      <option key={choice.value} value={choice.value}>
+                        {choice.label}
+                      </option>
+                    ))}
+                </select>
+              ) : (
+                <input
+                  type={
+                    key === 'date'
+                      ? 'date'
+                      : key === 'amount'
+                        ? 'number'
+                        : 'text'
+                  }
+                  value={
+                    edited[key] !== undefined && edited[key] !== null
+                      ? String(edited[key])
+                      : ''
+                  }
+                  onChange={(e) => setField(key, e.target.value)}
+                  disabled={isConfirming}
+                  step={key === 'amount' ? '0.01' : undefined}
+                />
+              )}
             </label>
           ))}
         </div>
@@ -137,8 +168,10 @@ export function TransactionApprovalForm({
         <dl className="tx-readonly-grid">
           {fieldKeys.map((key) => (
             <div key={key} className="tx-readonly-row">
-              <dt>{fieldLabel(key, preview.labels)}</dt>
-              <dd>{formatDisplayValue(key, preview.fields[key])}</dd>
+              <dt>{fieldLabel(key, preview.labels, language)}</dt>
+              <dd>
+                {formatDisplayValue(key, preview.fields[key], preview.labels)}
+              </dd>
             </div>
           ))}
         </dl>
@@ -152,10 +185,10 @@ export function TransactionApprovalForm({
           disabled={isConfirming}
         >
           {isConfirming
-            ? 'Saving…'
+            ? copy.saving
             : preview.operation === 'delete'
-              ? 'Confirm delete'
-              : 'Approve & save'}
+              ? copy.confirmDelete
+              : copy.approveAndSave}
         </button>
         <button
           type="button"
@@ -163,7 +196,7 @@ export function TransactionApprovalForm({
           onClick={onReject}
           disabled={isConfirming}
         >
-          Cancel
+          {copy.cancel}
         </button>
       </div>
     </div>

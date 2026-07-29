@@ -31,7 +31,16 @@ export function chatTransport(on402?: (detail: unknown) => void) {
       // Conversation context is server-owned. Only the newest user turn crosses
       // the wire, so private tool/reasoning history never needs to round-trip
       // through the browser.
-      body: { id, messages: messages.slice(-1), trigger },
+      body: {
+        id,
+        messages: messages.slice(-1),
+        trigger,
+        client_context: {
+          locale: navigator.language || 'en',
+          time_zone:
+            Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        },
+      },
     }),
     fetch: async (input, init) => {
       const res = await fetch(input, init)

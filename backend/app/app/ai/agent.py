@@ -8,7 +8,7 @@ use ``@ai-sdk/react``'s ``useChat``.
 Key mappings from the old harness:
 - OpenRouter client            -> ``OpenRouterModel`` + ``OpenRouterProvider``
 - ``execute_tool`` dispatch    -> typed tool functions on a ``FunctionToolset``
-- ``render_ui`` tool           -> each data tool emits a ``DataChunk`` (one per
+- read-only data tools         -> each emits a ``DataChunk`` (one per
   frontend component id) via ``ToolReturn(metadata=[...])``
 - ``ask_user`` tool            -> emits a ``data-pending-question`` ``DataChunk``;
   the frontend renders chips and sends the answer as the next user message
@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
@@ -111,6 +112,9 @@ class ChatDeps:
     user: models.User
     tier: Tier
     conversation_id: str
+    local_date: date = field(default_factory=date.today)
+    time_zone: str = "UTC"
+    locale: str = "en"
     turn_id: int | None = None
     # Set to True by ``_defer_for_confirmation`` when a write/destructive tool
     # produced a confirmation draft this turn. Read by the endpoint's
@@ -132,7 +136,12 @@ def build_model() -> OpenRouterModel:
 async def chat_instructions(ctx: RunContext[ChatDeps]) -> str:
     """Dynamic, server-owned instructions (never persisted to the client)."""
     bootstrap = await load_bootstrap_context(ctx.deps.db, ctx.deps.user)
-    return build_system_prompt(bootstrap, ctx.deps.tier)
+    return build_system_prompt(
+        bootstrap,
+        ctx.deps.tier,
+        local_date=ctx.deps.local_date,
+        time_zone=ctx.deps.time_zone,
+    )
 
 
 agent = Agent(
@@ -204,7 +213,10 @@ async def list_places(ctx: RunContext[ChatDeps]) -> ToolReturn:
 
 
 async def _defer_for_confirmation(
-    ctx: RunContext[ChatDeps], tool_name: str, tool_args: dict[str, Any]
+    ctx: RunContext[ChatDeps],
+    tool_name: str,
+    tool_args: dict[str, Any],
+    response_language: str,
 ) -> ToolReturn:
     """Stash a pending action in Redis and emit a ``data-pending-confirmation``
     DataChunk so the frontend can render the editable approval card.
@@ -216,7 +228,7 @@ async def _defer_for_confirmation(
     """
     db, user = ctx.deps.db, ctx.deps.user
     preview = await build_pending_preview(db, user, tool_name, tool_args)
-    message = format_confirmation_message(tool_name, preview)
+    message = format_confirmation_message(tool_name, preview, response_language)
     action_id = str(uuid.uuid4())
     await store_pending_action(
         action_id=action_id,
@@ -225,6 +237,7 @@ async def _defer_for_confirmation(
         tool_name=tool_name,
         tool_args=tool_args,
         preview=preview,
+        response_language=response_language,
         turn_id=ctx.deps.turn_id,
     )
     ctx.deps.had_pending_confirmation = True
@@ -238,6 +251,7 @@ async def _defer_for_confirmation(
                     "tool_name": tool_name,
                     "preview": preview,
                     "message": message,
+                    "response_language": response_language,
                 },
             )
         ],
@@ -246,51 +260,91 @@ async def _defer_for_confirmation(
 
 async def manage_account(
     ctx: RunContext[ChatDeps], payload: ManageAccountArgs
-) -> ToolReturn:
+) -> ToolReturn | str:
     """Create, update, or delete an account. `id` is required for update/delete.
     Create and update require `data` with the account fields.
     `data` fields for create are: name (str), initial_balance (float).
-    The user must confirm in chat before the change is saved."""
+    Creates save immediately; updates/deletes require approval."""
+    if payload.action == "create":
+        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
+        created = await account_service.create_account(
+            ctx.deps.db, ctx.deps.user, schemas.AccountCreate(**data)
+        )
+        return f"Account {created.name} created successfully."
     return await _defer_for_confirmation(
-        ctx, "manage_account", payload.model_dump(exclude_none=True)
+        ctx,
+        "manage_account",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
 async def manage_category(
     ctx: RunContext[ChatDeps], payload: ManageCategoryArgs
-) -> ToolReturn:
-    """Create, update, or delete a category. The user must confirm in chat."""
+) -> ToolReturn | str:
+    """Create a category immediately; updates/deletes require approval."""
+    if payload.action == "create":
+        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
+        created = await catalog_service.create_category(
+            ctx.deps.db, ctx.deps.user, schemas.CategoryCreate(**data)
+        )
+        return f"Category {created.name} created successfully."
     return await _defer_for_confirmation(
-        ctx, "manage_category", payload.model_dump(exclude_none=True)
+        ctx,
+        "manage_category",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
 async def manage_subcategory(
     ctx: RunContext[ChatDeps], payload: ManageSubcategoryArgs
-) -> ToolReturn:
-    """Create, update, or delete a subcategory. The user must confirm in chat."""
+) -> ToolReturn | str:
+    """Create a subcategory immediately; updates/deletes require approval."""
+    if payload.action == "create":
+        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
+        created = await catalog_service.create_subcategory(
+            ctx.deps.db, ctx.deps.user, schemas.SubcategoryCreate(**data)
+        )
+        return f"Subcategory {created.name} created successfully."
     return await _defer_for_confirmation(
-        ctx, "manage_subcategory", payload.model_dump(exclude_none=True)
+        ctx,
+        "manage_subcategory",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
 async def manage_place(
     ctx: RunContext[ChatDeps], payload: ManagePlaceArgs
-) -> ToolReturn:
-    """Create, update, or delete a place. The user must confirm in chat."""
+) -> ToolReturn | str:
+    """Create a place immediately; updates/deletes require approval."""
+    if payload.action == "create":
+        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
+        created = await catalog_service.create_place(
+            ctx.deps.db, ctx.deps.user, schemas.PlaceCreate(**data)
+        )
+        return f"Place {created.name} created successfully."
     return await _defer_for_confirmation(
-        ctx, "manage_place", payload.model_dump(exclude_none=True)
+        ctx,
+        "manage_place",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
 async def create_expense(
     ctx: RunContext[ChatDeps], payload: CreateExpenseArgs
-) -> ToolReturn:
+) -> str:
     """Create an expense. `amount` is required. If no date is provided, today's
-    date is used. User must confirm in chat before saving."""
-    return await _defer_for_confirmation(
-        ctx, "create_expense", payload.model_dump(exclude_none=True)
+    date is used. Saves immediately."""
+    data = payload.model_dump(exclude_none=True)
+    data.setdefault("date", ctx.deps.local_date.isoformat())
+    data["made_from"] = "Chat"
+    await transaction_service.create_expense(
+        ctx.deps.db, ctx.deps.user, schemas.ExpenseCreate(**data)
     )
+    return "Expense created successfully."
 
 
 async def update_expense(
@@ -298,7 +352,10 @@ async def update_expense(
 ) -> ToolReturn:
     """Update an expense by id. User must confirm changes in chat before saving."""
     return await _defer_for_confirmation(
-        ctx, "update_expense", payload.model_dump(exclude_none=True)
+        ctx,
+        "update_expense",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
@@ -307,18 +364,25 @@ async def delete_expense(
 ) -> ToolReturn:
     """Permanently delete an expense by id. Requires user confirmation in chat."""
     return await _defer_for_confirmation(
-        ctx, "delete_expense", payload.model_dump(exclude_none=True)
+        ctx,
+        "delete_expense",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
 async def create_income(
     ctx: RunContext[ChatDeps], payload: CreateIncomeArgs
-) -> ToolReturn:
+) -> str:
     """Create an income. `amount` is required. If no date is provided, today's
-    date is used. User must confirm in chat before saving."""
-    return await _defer_for_confirmation(
-        ctx, "create_income", payload.model_dump(exclude_none=True)
+    date is used. Saves immediately."""
+    data = payload.model_dump(exclude_none=True)
+    data.setdefault("date", ctx.deps.local_date.isoformat())
+    data["made_from"] = "Chat"
+    await transaction_service.create_income(
+        ctx.deps.db, ctx.deps.user, schemas.IncomeCreate(**data)
     )
+    return "Income created successfully."
 
 
 async def update_income(
@@ -326,7 +390,10 @@ async def update_income(
 ) -> ToolReturn:
     """Update an income by id. User must confirm changes in chat before saving."""
     return await _defer_for_confirmation(
-        ctx, "update_income", payload.model_dump(exclude_none=True)
+        ctx,
+        "update_income",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
@@ -335,7 +402,10 @@ async def delete_income(
 ) -> ToolReturn:
     """Permanently delete an income by id. Requires user confirmation."""
     return await _defer_for_confirmation(
-        ctx, "delete_income", payload.model_dump(exclude_none=True)
+        ctx,
+        "delete_income",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
@@ -343,8 +413,10 @@ async def create_transfer(
     ctx: RunContext[ChatDeps], payload: CreateTransferArgs
 ) -> ToolReturn:
     """Transfer money between accounts. User must confirm in chat before saving."""
+    data = payload.model_dump(exclude_none=True)
+    data.setdefault("date", ctx.deps.local_date.isoformat())
     return await _defer_for_confirmation(
-        ctx, "create_transfer", payload.model_dump(exclude_none=True)
+        ctx, "create_transfer", data, payload.response_language
     )
 
 
@@ -353,7 +425,10 @@ async def update_transfer(
 ) -> ToolReturn:
     """Update a transfer by id. User must confirm changes in chat before saving."""
     return await _defer_for_confirmation(
-        ctx, "update_transfer", payload.model_dump(exclude_none=True)
+        ctx,
+        "update_transfer",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
@@ -362,7 +437,10 @@ async def delete_transfer(
 ) -> ToolReturn:
     """Delete a transfer by id. Requires user confirmation."""
     return await _defer_for_confirmation(
-        ctx, "delete_transfer", payload.model_dump(exclude_none=True)
+        ctx,
+        "delete_transfer",
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
@@ -448,13 +526,19 @@ async def bulk_create_transactions(
     ctx: RunContext[ChatDeps], payload: BulkCreateArgs
 ) -> ToolReturn:
     """Create multiple incomes and/or expenses at once. Requires confirmation."""
+    incomes = [i.model_dump(exclude_none=True) for i in (payload.incomes or [])]
+    expenses = [e.model_dump(exclude_none=True) for e in (payload.expenses or [])]
+    for item in [*incomes, *expenses]:
+        item.setdefault("date", ctx.deps.local_date.isoformat())
     return await _defer_for_confirmation(
         ctx,
         "bulk_create_transactions",
         {
-            "incomes": [i.model_dump(exclude_none=True) for i in payload.incomes] or [],
-            "expenses": [e.model_dump(exclude_none=True) for e in payload.expenses] or [],
+            "incomes": incomes,
+            "expenses": expenses,
+            "response_language": payload.response_language,
         },
+        payload.response_language,
     )
 
 
@@ -465,7 +549,8 @@ async def bulk_delete_transactions(
     return await _defer_for_confirmation(
         ctx,
         "bulk_delete_transactions",
-        {"incomes": payload.incomes or [], "expenses": payload.expenses or []},
+        payload.model_dump(exclude_none=True),
+        payload.response_language,
     )
 
 
@@ -473,8 +558,10 @@ async def create_balance_adjustment(
     ctx: RunContext[ChatDeps], payload: CreateBalanceAdjustmentArgs
 ) -> ToolReturn:
     """Set an account balance to a new value. Requires confirmation."""
+    data = payload.model_dump(exclude_none=True)
+    data.setdefault("adjustment_date", ctx.deps.local_date.isoformat())
     return await _defer_for_confirmation(
-        ctx, "create_balance_adjustment", payload.model_dump(exclude_none=True)
+        ctx, "create_balance_adjustment", data, payload.response_language
     )
 
 
@@ -550,6 +637,7 @@ async def ask_user(
         "question": payload.question,
         "options": [o.model_dump() for o in payload.options],
         "allow_multiple": payload.allow_multiple,
+        "response_language": payload.response_language,
     }
     return ToolReturn(
         return_value=payload.question,

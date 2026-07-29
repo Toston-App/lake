@@ -287,6 +287,7 @@ async def store_pending_action(
     tool_name: str,
     tool_args: dict,
     preview: dict,
+    response_language: str = "en",
     expire_time: int = CHAT_PENDING_TTL,
     turn_id: int | None = None,
 ) -> bool:
@@ -297,6 +298,7 @@ async def store_pending_action(
             "tool_name": tool_name,
             "tool_args": tool_args,
             "preview": preview,
+            "response_language": response_language,
             "turn_id": turn_id,
         }
         key = _chat_pending_key(action_id)

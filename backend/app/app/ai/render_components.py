@@ -1,9 +1,8 @@
 """Catalog of frontend components the chat agent can ask the UI to render.
 
-The backend is the source of truth for what the client renders. The LLM picks
-components from this catalog (via the ``render_ui`` tool); each component is
-backed by the data produced by a data tool earlier in the same turn, or by
-model-supplied ``data`` for generic components.
+The backend is the source of truth for what the client renders. Data tools emit
+their matching components automatically; ``render_data`` is reserved for the
+two generic, model-populated components.
 """
 
 from __future__ import annotations
@@ -111,7 +110,7 @@ def render_catalog_prompt() -> str:
     for component in RENDER_COMPONENTS:
         line = f"- {component['id']}: {component['description']}"
         if component.get("model_data"):
-            line += " (provide `data` in render_ui)"
+            line += " (provide `data` with render_data)"
         lines.append(line)
     return "\n".join(lines)
 

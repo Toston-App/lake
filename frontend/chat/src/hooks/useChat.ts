@@ -14,15 +14,18 @@ import type {
   PendingQuestion,
 } from '../types/chat'
 import type { QuotaErrorDetail } from '../types/subscription'
+import { browserChatLanguage, chatCopy } from '../utils/i18n'
 
-/** Find the most recent `data-<type>` part on any assistant message. */
-function lastDataPart<T>(messages: UIMessage[], type: string): T | null {
+/** Return a blocking card only when no newer public message resolved it. */
+function activeBlockingDataPart<T>(messages: UIMessage[], type: string): T | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
-    if (m.role !== 'assistant') continue
     for (let j = m.parts.length - 1; j >= 0; j--) {
       const p = m.parts[j] as { type: string; data?: unknown }
-      if (p.type === type && p.data != null) return p.data as T
+      if (m.role === 'assistant' && p.type === type && p.data != null) {
+        return p.data as T
+      }
+      if (p.type === 'text') return null
     }
   }
   return null
@@ -39,14 +42,18 @@ export function useChat() {
   const [dismissedActions, setDismissedActions] = useState<Set<string>>(
     () => new Set(),
   )
+  const [answeredQuestions, setAnsweredQuestions] = useState<Set<string>>(
+    () => new Set(),
+  )
 
   const formatError = useCallback((err: unknown): string => {
+    const copy = chatCopy(browserChatLanguage())
     if (err instanceof ApiError) {
-      if (err.status === 503) return 'Chat is disabled on the server.'
+      if (err.status === 503) return copy.chatDisabled
       return err.detail
     }
     if (err instanceof Error) return err.message
-    return 'Something went wrong'
+    return copy.somethingWrong
   }, [])
 
   const maybeQuotaError = useCallback((err: unknown): boolean => {
@@ -94,7 +101,11 @@ export function useChat() {
     id: conversationId ?? undefined,
     transport,
     onError: (err) => {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
+      setError(
+        err instanceof Error
+          ? err.message
+          : chatCopy(browserChatLanguage()).somethingWrong,
+      )
     },
     onFinish: () => {
       void refreshConversations()
@@ -116,6 +127,7 @@ export function useChat() {
     setConversationId(null)
     setMessages([])
     setDismissedActions(new Set())
+    setAnsweredQuestions(new Set())
     setError(null)
   }, [setMessages])
 
@@ -123,6 +135,7 @@ export function useChat() {
     async (id: string) => {
       setError(null)
       setDismissedActions(new Set())
+      setAnsweredQuestions(new Set())
       setConversationId(id)
       try {
         const detail = await getConversation(id)
@@ -145,7 +158,7 @@ export function useChat() {
     [isLoading, sendMessage],
   )
 
-  const rawPendingConfirmation = lastDataPart<PendingConfirmation>(
+  const rawPendingConfirmation = activeBlockingDataPart<PendingConfirmation>(
     messages,
     'data-pending-confirmation',
   )
@@ -154,10 +167,14 @@ export function useChat() {
     !dismissedActions.has(rawPendingConfirmation.action_id)
       ? rawPendingConfirmation
       : null
-  const pendingQuestion = lastDataPart<PendingQuestion>(
+  const rawPendingQuestion = activeBlockingDataPart<PendingQuestion>(
     messages,
     'data-pending-question',
   )
+  const pendingQuestion =
+    rawPendingQuestion && !answeredQuestions.has(rawPendingQuestion.question)
+      ? rawPendingQuestion
+      : null
 
   const confirmPending = useCallback(
     async (toolArgs?: Record<string, unknown>) => {
@@ -206,9 +223,12 @@ export function useChat() {
     (labels: string[]) => {
       const answer = labels.filter(Boolean).join(', ')
       if (!answer) return
+      if (pendingQuestion) {
+        setAnsweredQuestions((prev) => new Set(prev).add(pendingQuestion.question))
+      }
       void sendMessageText(answer)
     },
-    [sendMessageText],
+    [pendingQuestion, sendMessageText],
   )
 
   const removeConversation = useCallback(
