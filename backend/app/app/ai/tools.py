@@ -266,6 +266,15 @@ class DeleteTransactionArgs(BaseModel):
 class SearchTransactionsArgs(BaseModel):
     """Arguments for ``search_transactions``."""
 
+    limit: int = Field(
+        default=30,
+        ge=1,
+        le=30,
+        description=(
+            "Maximum number of transactions to return. When the user requests "
+            "an exact count (for example, 'top 5'), set this to that count."
+        ),
+    )
     search: str | None = Field(default=None, description="Free-text search string.")
     amount: float | None = Field(
         default=None, description="Compare transaction amount against this value."

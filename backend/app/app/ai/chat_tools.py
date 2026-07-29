@@ -594,14 +594,14 @@ async def execute_tool(
                 categories=arg_model.categories,
                 places=arg_model.places,
                 transaction_type=types,
-                params=Params(page=1, size=SEARCH_LIMIT),
+                params=Params(page=1, size=arg_model.limit),
             )
-            items = jsonable_encoder(page.items)[:SEARCH_LIMIT]
+            items = jsonable_encoder(page.items)[: arg_model.limit]
             return _ok(
                 {
                     "items": items,
                     "total": page.total,
-                    "truncated": page.total > SEARCH_LIMIT,
+                    "truncated": page.total > arg_model.limit,
                 }
             ), "transactions_searched"
 

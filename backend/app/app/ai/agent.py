@@ -47,7 +47,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models, schemas
 from app.ai.chat_tools import (
     LIST_LIMIT,
-    SEARCH_LIMIT,
     ToolExecutionError,
     _slim_account,
     _slim_category,
@@ -397,13 +396,13 @@ async def search_transactions(
         categories=payload.categories,
         places=payload.places,
         transaction_type=types,
-        params=Params(page=1, size=SEARCH_LIMIT),
+        params=Params(page=1, size=payload.limit),
     )
-    items = jsonable_encoder(page.items)[:SEARCH_LIMIT]
+    items = jsonable_encoder(page.items)[: payload.limit]
     result = {
         "items": items,
         "total": page.total,
-        "truncated": page.total > SEARCH_LIMIT,
+        "truncated": page.total > payload.limit,
     }
     return ToolReturn(
         return_value=f"Found {page.total} transactions.",
