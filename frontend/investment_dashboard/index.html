@@ -493,7 +493,7 @@
 
             <div class="form-group">
                 <label for="tx-type">Transaction Type</label>
-                <select id="tx-type" required>
+                <select id="tx-type" required onchange="updateCashBalanceOption()">
                     <option value="buy">Buy</option>
                     <option value="sell">Sell</option>
                     <option value="dividend">Dividend</option>
@@ -529,6 +529,15 @@
             <div class="form-group">
                 <label for="tx-account">Account</label>
                 <select id="tx-account" required></select>
+            </div>
+            <div id="tx-cash-balance-option" class="form-group cash-balance-option">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="tx-affects-cash-balance" checked>
+                    <span>Update account cash balance</span>
+                </label>
+                <div id="tx-cash-balance-help" class="form-help">
+                    Subtract quantity × price + fees from this account.
+                </div>
             </div>
             <div class="form-group">
                 <label for="tx-notes">Notes (optional)</label>

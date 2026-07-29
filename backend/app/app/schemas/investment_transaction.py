@@ -17,6 +17,7 @@ class InvestmentTransactionBase(BaseModel):
     price_per_unit: Decimal | None = None
     currency: Currency | None = Currency.USD
     fees: Decimal | None = Decimal("0")
+    affects_cash_balance: bool = False
     exchange_rate_to_usd: Decimal | None = None
     exchange_rate_to_mxn: Decimal | None = None
     notes: str | None = None
@@ -100,6 +101,12 @@ class InvestmentTransactionCreate(InvestmentTransactionBase):
                 and values.get("fees", Decimal("0")) > total
             ):
                 raise ValueError("Disposal fees cannot exceed gross proceeds")
+        if values.get("affects_cash_balance") and values.get(
+            "transaction_type"
+        ) not in (TransactionType.BUY, TransactionType.SELL):
+            raise ValueError(
+                "Cash balance can only be updated for buy or sell transactions"
+            )
         return values
 
 
@@ -164,6 +171,7 @@ class TransactionWithAssetCreate(BaseModel):
     quantity: Decimal
     price_per_unit: Decimal
     fees: Decimal = Decimal("0")
+    affects_cash_balance: bool = False
     executed_at: datetime
     account_id: int
     notes: str | None = None
@@ -264,6 +272,12 @@ class TransactionWithAssetCreate(BaseModel):
                 and values.get("fees", Decimal("0")) > total
             ):
                 raise ValueError("Disposal fees cannot exceed gross proceeds")
+        if values.get("affects_cash_balance") and values.get(
+            "transaction_type"
+        ) not in (TransactionType.BUY, TransactionType.SELL):
+            raise ValueError(
+                "Cash balance can only be updated for buy or sell transactions"
+            )
         return values
 
     class Config:

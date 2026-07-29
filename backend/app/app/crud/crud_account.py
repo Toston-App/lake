@@ -60,6 +60,17 @@ class CRUDAccount(CRUDBase[Account, AccountCreate, AccountUpdate]):
         )
         return result.scalars().first()
 
+    async def get_for_update_by_id(
+        self, db: AsyncSession, *, owner_id: int, id: int
+    ) -> Account | None:
+        result = await db.execute(
+            select(self.model)
+            .filter(Account.id == id, Account.owner_id == owner_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalars().first()
+
     # TODO: Make and enum for columns
     async def update_by_id_and_field(
         self, db: AsyncSession, *, owner_id: int, id: int, column: str, amount: float

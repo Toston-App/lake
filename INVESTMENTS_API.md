@@ -987,6 +987,7 @@ interface InvestmentTransactionWithAsset {
   currency: Currency;
   total_amount: number; // quantity * price_per_unit
   fees: number;
+  affects_cash_balance: boolean;
   exchange_rate_to_usd: number | null;
   exchange_rate_to_mxn: number | null;
   notes: string | null;
@@ -1025,6 +1026,7 @@ const holdingTxns = await apiCall('/transactions?holding_id=1');
     "currency": "USD",
     "total_amount": 3625.00,
     "fees": 4.95,
+    "affects_cash_balance": true,
     "exchange_rate_to_usd": 1.0,
     "exchange_rate_to_mxn": 17.15,
     "notes": "First purchase",
@@ -1049,12 +1051,14 @@ Record a new transaction for an existing holding.
 ```typescript
 interface InvestmentTransactionCreate {
   holding_id: number;             // Required
+  account_id: number;             // Required
   transaction_type: TransactionType; // Required
   quantity: number;               // Required, must be positive
   price_per_unit: number;         // Required, must be non-negative
   executed_at: string;            // Required, ISO datetime
   currency?: Currency;            // Default: "USD"
   fees?: number;                  // Default: 0.0
+  affects_cash_balance?: boolean; // Default: false; buy/sell only
   exchange_rate_to_usd?: number;  // Auto-calculated if not provided
   exchange_rate_to_mxn?: number;  // Auto-calculated if not provided
   notes?: string;
@@ -1070,12 +1074,14 @@ const buyTxn = await apiCall('/transactions', {
   method: 'POST',
   body: JSON.stringify({
     holding_id: 1,
+    account_id: 1,
     transaction_type: 'buy',
     quantity: 10,
     price_per_unit: 175.50,
     executed_at: new Date().toISOString(),
     currency: 'USD',
     fees: 0,
+    affects_cash_balance: true,
     broker: 'Fidelity',
     notes: 'Adding to position',
   }),
@@ -1086,12 +1092,14 @@ const sellTxn = await apiCall('/transactions', {
   method: 'POST',
   body: JSON.stringify({
     holding_id: 1,
+    account_id: 1,
     transaction_type: 'sell',
     quantity: 5,
     price_per_unit: 180.00,
     executed_at: new Date().toISOString(),
     currency: 'USD',
     fees: 4.95,
+    affects_cash_balance: true,
   }),
 });
 
@@ -1133,6 +1141,7 @@ interface TransactionWithAssetCreate {
   price_per_unit: number;       // Required
   executed_at: string;          // Required, ISO datetime
   fees?: number;                // Default: 0.0
+  affects_cash_balance?: boolean; // Default: false; buy/sell only
   broker?: string;
   notes?: string;
   exchange_rate_to_usd?: number;

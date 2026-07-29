@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
 from app.api import deps
-from app.models.asset import ASSET_TYPE_TO_CLASS
+from app.models.asset import ASSET_TYPE_TO_CLASS, Currency
 from app.models.investment_transaction import TransactionType
 from app.schemas.asset import AssetCreate
 from app.schemas.holding import HoldingCreate
@@ -34,6 +34,7 @@ from app.utilities.investment_telemetry import (
     fail_investment_event,
     investment_stage,
 )
+from app.utilities.redis import invalidate_user_cache
 
 router = APIRouter()
 
@@ -43,6 +44,8 @@ def _request_fingerprint(payload: object) -> str:
         data = payload.dict(
             exclude={"currency", "exchange_rate_to_usd", "exchange_rate_to_mxn"}
         )
+        if data.get("affects_cash_balance") is False:
+            data.pop("affects_cash_balance")
     else:
         data = payload
     encoded = json.dumps(data, sort_keys=True, default=str, separators=(",", ":"))
@@ -70,6 +73,59 @@ def _convert_amount(
     if from_currency == models.Currency.USD:
         return amount * usd_mxn_rate
     return amount / usd_mxn_rate
+
+
+def _cash_balance_currency(current_user: models.User) -> Currency:
+    try:
+        return Currency(current_user.country)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Cash balance currency must be USD or MXN",
+        ) from exc
+
+
+async def _update_cash_balance_from_transaction(
+    db: AsyncSession,
+    *,
+    owner_id: int,
+    account_id: int,
+    transaction: models.InvestmentTransaction,
+    balance_currency: Currency,
+    usd_mxn_rate: Decimal,
+) -> None:
+    account = await crud.account.get_for_update_by_id(
+        db, owner_id=owner_id, id=account_id
+    )
+    user = await crud.user.get_for_update(db, user_id=owner_id)
+    if account is None or user is None:
+        raise HTTPException(status_code=404, detail="Account or user not found")
+
+    amount = transaction.total_amount
+    if transaction.transaction_type == TransactionType.BUY:
+        amount += transaction.fees
+    converted_amount = _convert_amount(
+        amount,
+        from_currency=transaction.currency,
+        to_currency=balance_currency,
+        usd_mxn_rate=usd_mxn_rate,
+    )
+    delta = (
+        -converted_amount
+        if transaction.transaction_type == TransactionType.BUY
+        else converted_amount
+    )
+
+    account_balance = Decimal(str(account.current_balance or 0)) + delta
+    user_balance = Decimal(str(user.balance_total or 0)) + delta
+    if not account_balance.is_finite() or not user_balance.is_finite():
+        raise HTTPException(status_code=422, detail="Cash balance would be invalid")
+
+    account.current_balance = float(account_balance)
+    user.balance_total = float(user_balance)
+    db.add(account)
+    db.add(user)
+    await db.flush()
 
 
 async def _recover_idempotent_transaction(
@@ -171,6 +227,7 @@ async def list_transactions(
             currency=tx.currency,
             total_amount=tx.total_amount,
             fees=tx.fees,
+            affects_cash_balance=tx.affects_cash_balance,
             exchange_rate_to_usd=tx.exchange_rate_to_usd,
             exchange_rate_to_mxn=tx.exchange_rate_to_mxn,
             notes=tx.notes,
@@ -231,6 +288,12 @@ async def create_transaction(
     if not account:
         fail_investment_event(request, reason="account_not_found")
         raise HTTPException(status_code=404, detail="Account not found")
+
+    balance_currency = (
+        _cash_balance_currency(current_user)
+        if transaction_in.affects_cash_balance
+        else None
+    )
 
     candidate_holding = await crud.holding.get_by_id_and_owner(
         db,
@@ -305,9 +368,21 @@ async def create_transaction(
         await _update_holding_from_transaction(
             db, holding, transaction, usd_mxn_rate=usd_mxn_rate, commit=False
         )
+    if balance_currency is not None:
+        with investment_stage(request, "cash_balance_update"):
+            await _update_cash_balance_from_transaction(
+                db,
+                owner_id=current_user.id,
+                account_id=account.id,
+                transaction=transaction,
+                balance_currency=balance_currency,
+                usd_mxn_rate=usd_mxn_rate,
+            )
     with investment_stage(request, "commit"):
         await db.commit()
         await db.refresh(transaction)
+    if transaction.affects_cash_balance:
+        await invalidate_user_cache(current_user.id)
     add_investment_context(
         request,
         transaction_id=transaction.id,
@@ -375,6 +450,12 @@ async def create_transaction_with_asset(
     if not account:
         fail_investment_event(request, reason="account_not_found")
         raise HTTPException(status_code=404, detail="Account not found")
+
+    balance_currency = (
+        _cash_balance_currency(current_user)
+        if transaction_in.affects_cash_balance
+        else None
+    )
 
     # Step 1: Get or create the asset
     asset_created = False
@@ -552,6 +633,7 @@ async def create_transaction_with_asset(
         price_per_unit=transaction_in.price_per_unit,
         currency=transaction_currency,
         fees=transaction_in.fees,
+        affects_cash_balance=transaction_in.affects_cash_balance,
         exchange_rate_to_usd=exchange_rate_to_usd,
         exchange_rate_to_mxn=exchange_rate_to_mxn,
         executed_at=transaction_in.executed_at,
@@ -596,9 +678,21 @@ async def create_transaction_with_asset(
         await _update_holding_from_transaction(
             db, holding, transaction, usd_mxn_rate=usd_mxn_rate, commit=False
         )
+    if balance_currency is not None:
+        with investment_stage(request, "cash_balance_update"):
+            await _update_cash_balance_from_transaction(
+                db,
+                owner_id=current_user.id,
+                account_id=account.id,
+                transaction=transaction,
+                balance_currency=balance_currency,
+                usd_mxn_rate=usd_mxn_rate,
+            )
     with investment_stage(request, "commit"):
         await db.commit()
         await db.refresh(transaction)
+    if transaction.affects_cash_balance:
+        await invalidate_user_cache(current_user.id)
     add_investment_context(
         request,
         holding_id=holding.id,
@@ -622,6 +716,7 @@ async def create_transaction_with_asset(
             currency=transaction.currency,
             total_amount=transaction.total_amount,
             fees=transaction.fees,
+            affects_cash_balance=transaction.affects_cash_balance,
             exchange_rate_to_usd=transaction.exchange_rate_to_usd,
             exchange_rate_to_mxn=transaction.exchange_rate_to_mxn,
             notes=transaction.notes,
@@ -832,6 +927,7 @@ async def get_transaction(
         currency=transaction.currency,
         total_amount=transaction.total_amount,
         fees=transaction.fees,
+        affects_cash_balance=transaction.affects_cash_balance,
         exchange_rate_to_usd=transaction.exchange_rate_to_usd,
         exchange_rate_to_mxn=transaction.exchange_rate_to_mxn,
         notes=transaction.notes,
