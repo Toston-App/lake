@@ -77,7 +77,11 @@ def _convert_amount(
 
 def _cash_balance_currency(current_user: models.User) -> Currency:
     try:
-        return Currency(current_user.country)
+        # TODO: remove country and add language and currency instead of country for both.
+        if current_user.country == "en-US":
+            return Currency.USD
+        if current_user.country == "es-MX":
+            return Currency.MXN
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=422,
