@@ -16,11 +16,14 @@ from app.ai.tools import (
     CreateExpenseArgs,
     CreateTransferArgs,
     DeleteTransactionArgs,
+    GetPeriodArgs,
     ManagePlaceArgs,
     PlaceInput,
     UpdateTransactionArgs,
 )
 from app.api.api_v1.endpoints.chat import _resolve_client_context
+from app.api.deps import DateFilterType
+from app.schemas.dashboard import Balance, ChartsResponse, SummaryResponse
 
 
 def _ctx(*, local_date: date = date(2026, 7, 28)) -> SimpleNamespace:
@@ -49,6 +52,93 @@ async def test_expense_create_saves_immediately_with_local_date(monkeypatch) -> 
     assert created.date == "2026-07-28"
     assert created.made_from == "Chat"
     store.assert_not_awaited()
+
+
+async def test_period_summary_gives_model_the_same_values_as_ui(monkeypatch) -> None:
+    summary = SummaryResponse(
+        country="Mexico",
+        balance=Balance(total=-1789.04, income=0, outcome=1789.04),
+        period_income=0,
+        period_expenses=1157.89,
+        period_net=-1157.89,
+    )
+    fetch = AsyncMock(return_value=summary)
+    monkeypatch.setattr(agent, "fetch_period_summary", fetch)
+    ctx = _ctx()
+
+    result = await agent.get_period_summary(
+        ctx,
+        GetPeriodArgs(date_filter_type="week", date="2026-07-27"),
+    )
+
+    assert isinstance(result.return_value, dict)
+    assert result.return_value == result.metadata[0].data == summary.model_dump()
+    assert result.return_value["period_expenses"] == 1157.89
+    assert result.return_value["period_net"] == -1157.89
+    assert result.return_value["balance"]["total"] == -1789.04
+    fetch.assert_awaited_once_with(
+        ctx.deps.db,
+        ctx.deps.user,
+        DateFilterType.week,
+        "2026-07-27",
+        None,
+    )
+
+
+async def test_period_charts_give_model_the_same_values_as_ui(monkeypatch) -> None:
+    charts = ChartsResponse(
+        net={
+            "series": [{"name": "Net", "data": [-100.0, 50.0]}],
+            "xAxis": ["Monday", "Tuesday"],
+            "summary": {
+                "current": -50.0,
+                "previous": -20.0,
+                "change": 30.0,
+                "changePercent": 150.0,
+                "isPositive": False,
+            },
+        },
+        income_vs_expense={
+            "series": [
+                {"name": "Expenses", "data": [100.0, 75.0]},
+                {"name": "Incomes", "data": [0.0, 125.0]},
+            ],
+            "xAxis": ["Monday", "Tuesday"],
+        },
+        categories={
+            "categories": [
+                {"name": "Food", "value": 125.0},
+                {"name": "Transport", "value": 50.0},
+            ]
+        },
+    )
+    fetch = AsyncMock(return_value=charts)
+    monkeypatch.setattr(agent, "fetch_period_charts", fetch)
+    ctx = _ctx()
+
+    result = await agent.get_period_charts(
+        ctx,
+        GetPeriodArgs(date_filter_type="week", date="2026-07-27"),
+    )
+
+    assert isinstance(result.return_value, dict)
+    assert result.return_value == result.metadata[0].data == charts.model_dump()
+    assert result.return_value["net"]["series"][0]["data"] == [-100.0, 50.0]
+    assert result.return_value["income_vs_expense"]["series"][0] == {
+        "name": "Expenses",
+        "data": [100.0, 75.0],
+    }
+    assert result.return_value["categories"]["categories"][0] == {
+        "name": "Food",
+        "value": 125.0,
+    }
+    fetch.assert_awaited_once_with(
+        ctx.deps.db,
+        ctx.deps.user,
+        DateFilterType.week,
+        "2026-07-27",
+        None,
+    )
 
 
 async def test_transfer_creates_one_localized_pending_action(monkeypatch) -> None:

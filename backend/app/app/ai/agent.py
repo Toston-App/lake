@@ -444,6 +444,19 @@ async def delete_transfer(
     )
 
 
+def _transaction_model_reference(item: dict[str, Any]) -> dict[str, Any]:
+    """Return compact private context for resolving transaction follow-ups."""
+    reference = {
+        key: item.get(key)
+        for key in ("id", "type", "amount", "date", "description")
+    }
+    for relationship in ("account", "category", "subcategory", "place"):
+        value = item.get(relationship)
+        if isinstance(value, dict) and value.get("name"):
+            reference[f"{relationship}_name"] = value["name"]
+    return reference
+
+
 async def search_transactions(
     ctx: RunContext[ChatDeps], payload: SearchTransactionsArgs
 ) -> ToolReturn:
@@ -483,7 +496,12 @@ async def search_transactions(
         "truncated": page.total > payload.limit,
     }
     return ToolReturn(
-        return_value=f"Found {page.total} transactions.",
+        return_value={
+            "summary": f"Found {page.total} transactions.",
+            "items": [_transaction_model_reference(item) for item in items],
+            "total": page.total,
+            "truncated": page.total > payload.limit,
+        },
         metadata=[DataChunk(type="data-transactions-list", data=result)],
     )
 
@@ -491,7 +509,10 @@ async def search_transactions(
 async def get_period_summary(
     ctx: RunContext[ChatDeps], payload: GetPeriodArgs
 ) -> ToolReturn:
-    """Get the financial summary for a period (balance + income/expenses/net)."""
+    """Get the financial summary for a period. Answer spending questions from
+    `period_expenses` and period-net questions from `period_net`.
+    `balance.total` is the current total balance, never the requested period's
+    net. Quote returned values exactly instead of recalculating them."""
     summary = await fetch_period_summary(
         ctx.deps.db,
         ctx.deps.user,
@@ -499,16 +520,21 @@ async def get_period_summary(
         payload.date,
         payload.account_id,
     )
+    summary_data = summary.model_dump()
     return ToolReturn(
-        return_value="Period summary fetched.",
-        metadata=[DataChunk(type="data-period-summary", data=summary.model_dump())],
+        return_value=summary_data,
+        metadata=[DataChunk(type="data-period-summary", data=summary_data)],
     )
 
 
 async def get_period_charts(
     ctx: RunContext[ChatDeps], payload: GetPeriodArgs
 ) -> ToolReturn:
-    """Get chart data for a period."""
+    """Get authoritative chart data for a period. `net.series` contains net
+    values over `net.xAxis`; `income_vs_expense.series` contains the named
+    income and expense values; and `categories.categories` contains spending
+    totals by category. Base insights only on returned labels and values, and
+    do not infer missing points or recalculate the chart data."""
     charts = await fetch_period_charts(
         ctx.deps.db,
         ctx.deps.user,
@@ -516,9 +542,10 @@ async def get_period_charts(
         payload.date,
         payload.account_id,
     )
+    charts_data = charts.model_dump()
     return ToolReturn(
-        return_value="Charts fetched.",
-        metadata=[DataChunk(type="data-charts", data=charts.model_dump())],
+        return_value=charts_data,
+        metadata=[DataChunk(type="data-charts", data=charts_data)],
     )
 
 
