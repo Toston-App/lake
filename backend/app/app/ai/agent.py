@@ -487,20 +487,33 @@ async def search_transactions(
         categories=payload.categories,
         places=payload.places,
         transaction_type=types,
-        params=Params(page=1, size=payload.limit),
+        params=Params(page=payload.page, size=payload.limit),
     )
     items = jsonable_encoder(page.items)[: payload.limit]
+    has_more = payload.page * payload.limit < page.total
+    next_page = payload.page + 1 if has_more else None
     result = {
         "items": items,
         "total": page.total,
-        "truncated": page.total > payload.limit,
+        "page": payload.page,
+        "limit": payload.limit,
+        "has_more": has_more,
+        "next_page": next_page,
+        "truncated": page.total > len(items),
     }
     return ToolReturn(
         return_value={
-            "summary": f"Found {page.total} transactions.",
+            "summary": (
+                f"Found {page.total} transactions; returning page "
+                f"{payload.page} with {len(items)} items."
+            ),
             "items": [_transaction_model_reference(item) for item in items],
             "total": page.total,
-            "truncated": page.total > payload.limit,
+            "page": payload.page,
+            "limit": payload.limit,
+            "has_more": has_more,
+            "next_page": next_page,
+            "truncated": page.total > len(items),
         },
         metadata=[DataChunk(type="data-transactions-list", data=result)],
     )

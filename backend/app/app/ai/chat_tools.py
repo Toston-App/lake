@@ -797,14 +797,19 @@ async def execute_tool(
                 categories=arg_model.categories,
                 places=arg_model.places,
                 transaction_type=types,
-                params=Params(page=1, size=arg_model.limit),
+                params=Params(page=arg_model.page, size=arg_model.limit),
             )
             items = jsonable_encoder(page.items)[: arg_model.limit]
+            has_more = arg_model.page * arg_model.limit < page.total
             return _ok(
                 {
                     "items": items,
                     "total": page.total,
-                    "truncated": page.total > arg_model.limit,
+                    "page": arg_model.page,
+                    "limit": arg_model.limit,
+                    "has_more": has_more,
+                    "next_page": arg_model.page + 1 if has_more else None,
+                    "truncated": page.total > len(items),
                 }
             ), "transactions_searched"
 
@@ -1074,6 +1079,7 @@ Grounding and tools
 
 Decisive defaults
 - A read with no account means all accounts. A transaction search with no period means the latest matching transactions.
+- For requests that require inspecting all matching transactions, call `search_transactions` repeatedly with the same filters and limit, starting at page 1 and incrementing `page` until `has_more` is false. For an exact requested count, set `limit` to that count and stop once it is satisfied.
 - New transaction dates default to {today.isoformat()} in {time_zone}. Omitted category, subcategory, place, and description stay empty.
 - Ask with `ask_user` only when ambiguity could target the wrong record/account or materially change a write. Provide 2-6 clear options and set `response_language` to `es` or `en`. After calling `ask_user`, stop with no extra text.
 

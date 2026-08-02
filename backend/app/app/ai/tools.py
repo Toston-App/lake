@@ -285,13 +285,22 @@ class DeleteTransactionArgs(BaseModel):
 class SearchTransactionsArgs(BaseModel):
     """Arguments for ``search_transactions``."""
 
+    page: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Page number to return. Keep the same filters and limit and increment "
+            "this value while `has_more` is true when all matches are needed."
+        ),
+    )
     limit: int = Field(
         default=30,
         ge=1,
         le=30,
         description=(
             "Maximum number of transactions to return. When the user requests "
-            "an exact count (for example, 'top 5'), set this to that count."
+            "an exact count (for example, 'top 5'), set this to that count. Use "
+            "30 together with successive pages when all matches are needed."
         ),
     )
     search: str | None = Field(default=None, description="Free-text search string.")

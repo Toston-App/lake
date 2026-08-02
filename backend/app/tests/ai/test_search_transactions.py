@@ -8,7 +8,10 @@ from pydantic import ValidationError
 
 
 def test_search_transactions_limit_defaults_to_search_cap() -> None:
-    assert SearchTransactionsArgs().limit == chat_tools.SEARCH_LIMIT
+    args = SearchTransactionsArgs()
+
+    assert args.limit == chat_tools.SEARCH_LIMIT
+    assert args.page == 1
 
 
 def test_search_transactions_limit_is_bounded() -> None:
@@ -17,6 +20,9 @@ def test_search_transactions_limit_is_bounded() -> None:
 
     with pytest.raises(ValidationError):
         SearchTransactionsArgs(limit=chat_tools.SEARCH_LIMIT + 1)
+
+    with pytest.raises(ValidationError):
+        SearchTransactionsArgs(page=0)
 
 
 async def test_search_transactions_returns_only_requested_limit(monkeypatch) -> None:
@@ -27,7 +33,7 @@ async def test_search_transactions_returns_only_requested_limit(monkeypatch) -> 
 
     result, action_type = await chat_tools.execute_tool(
         "search_transactions",
-        {"limit": 5},
+        {"limit": 5, "page": 2},
         db=SimpleNamespace(),
         user=SimpleNamespace(id=1),
     )
@@ -36,9 +42,14 @@ async def test_search_transactions_returns_only_requested_limit(monkeypatch) -> 
     assert result["data"] == {
         "items": [0, 1, 2, 3, 4],
         "total": 10,
+        "page": 2,
+        "limit": 5,
+        "has_more": False,
+        "next_page": None,
         "truncated": True,
     }
     assert search.await_args.kwargs["params"].size == 5
+    assert search.await_args.kwargs["params"].page == 2
 
 
 async def test_agent_search_exposes_compact_transaction_references_to_model(
@@ -93,15 +104,21 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
         deps=SimpleNamespace(db=SimpleNamespace(), user=SimpleNamespace(id=1))
     )
 
-    result = await agent.search_transactions(ctx, SearchTransactionsArgs(limit=5))
+    result = await agent.search_transactions(
+        ctx, SearchTransactionsArgs(limit=5, page=2)
+    )
 
     assert result.metadata[0].data == {
         "items": items,
         "total": 10,
+        "page": 2,
+        "limit": 5,
+        "has_more": False,
+        "next_page": None,
         "truncated": True,
     }
     assert result.return_value == {
-        "summary": "Found 10 transactions.",
+        "summary": "Found 10 transactions; returning page 2 with 3 items.",
         "items": [
             {
                 "id": 12456,
@@ -131,6 +148,10 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
             },
         ],
         "total": 10,
+        "page": 2,
+        "limit": 5,
+        "has_more": False,
+        "next_page": None,
         "truncated": True,
     }
     model_items = result.return_value["items"]
@@ -144,6 +165,7 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
     assert all("total" not in item for item in model_items)
     assert all("subcategories" not in item for item in model_items)
     assert search.await_args.kwargs["params"].size == 5
+    assert search.await_args.kwargs["params"].page == 2
 
 
 async def test_agent_search_exposes_empty_model_reference_list(monkeypatch) -> None:
@@ -156,13 +178,21 @@ async def test_agent_search_exposes_empty_model_reference_list(monkeypatch) -> N
     result = await agent.search_transactions(ctx, SearchTransactionsArgs())
 
     assert result.return_value == {
-        "summary": "Found 0 transactions.",
+        "summary": "Found 0 transactions; returning page 1 with 0 items.",
         "items": [],
         "total": 0,
+        "page": 1,
+        "limit": chat_tools.SEARCH_LIMIT,
+        "has_more": False,
+        "next_page": None,
         "truncated": False,
     }
     assert result.metadata[0].data == {
         "items": [],
         "total": 0,
+        "page": 1,
+        "limit": chat_tools.SEARCH_LIMIT,
+        "has_more": False,
+        "next_page": None,
         "truncated": False,
     }
