@@ -48,7 +48,7 @@ class DataInDBBase(DataBase):
     owner_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties to return to client
@@ -56,7 +56,7 @@ class Data(DataInDBBase):
     date: Optional[date] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties properties stored in DB

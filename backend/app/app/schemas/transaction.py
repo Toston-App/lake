@@ -41,7 +41,7 @@ class ExpenseTransaction(BaseModel):
     place_id: Optional[int]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class IncomeTransaction(BaseModel):
@@ -57,7 +57,7 @@ class IncomeTransaction(BaseModel):
     place_id: Optional[int]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class TransferTransaction(BaseModel):
@@ -72,7 +72,7 @@ class TransferTransaction(BaseModel):
     to_acc: Optional[int]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 Transaction = Union[ExpenseTransaction, IncomeTransaction, TransferTransaction]

@@ -51,7 +51,7 @@ class AccountInDBBase(AccountBase):
     total_investments_mxn: Decimal = Decimal("0")
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties to return to client
