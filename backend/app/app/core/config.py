@@ -191,7 +191,7 @@ class Settings(BaseSettings):
 
     # OpenRouter Settings (for WhatsApp AI parsing)
     OPENROUTER_API_KEY: str
-    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
+    OPENROUTER_MODEL: str = "openai/gpt-5.6-luna"
     OPENROUTER_FALLBACK_MODELS: str | None = (
         None  # Comma-separated list of fallback models
     )
@@ -202,7 +202,7 @@ class Settings(BaseSettings):
     CHAT_ENABLED: bool = True
     CHAT_MAX_TOOL_ROUNDS: int = 8
     CHAT_CONVERSATION_TTL_SECONDS: int = 60 * 60 * 24 * 7
-    CHAT_MODEL: str | None = "openai/gpt-5.4-mini"
+    CHAT_MODEL: str | None = "openai/gpt-5.6-luna"
     TAVILY_API_KEY: str | None = None
     CHAT_WEB_SEARCH_MAX_RESULTS: int = 5
     # Chat observability: persist turns/llm-calls/tool-calls to Postgres.
