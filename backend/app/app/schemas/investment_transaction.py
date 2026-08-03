@@ -128,7 +128,7 @@ class InvestmentTransactionInDBBase(InvestmentTransactionBase):
     executed_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties to return to client
@@ -294,7 +294,7 @@ class TransactionWithAssetResponse(BaseModel):
     holding_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Update forward references

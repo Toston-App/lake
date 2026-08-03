@@ -47,7 +47,7 @@ class TransferInDBBase(TransferBase):
     owner_id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties to return to client
@@ -55,7 +55,7 @@ class Transfer(TransferInDBBase):
     date: Optional[date]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties properties stored in DB
