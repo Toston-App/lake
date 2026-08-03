@@ -76,17 +76,21 @@ def _convert_amount(
 
 
 def _cash_balance_currency(current_user: models.User) -> Currency:
-    try:
-        # TODO: remove country and add language and currency instead of country for both.
-        if current_user.country == "en-US":
-            return Currency.USD
-        if current_user.country == "es-MX":
-            return Currency.MXN
-    except (TypeError, ValueError) as exc:
+    # TODO: replace country with separate locale and currency fields. Until then,
+    # accept both the legacy currency values and the newer locale values.
+    currency_by_country = {
+        "USD": Currency.USD,
+        "en-US": Currency.USD,
+        "MXN": Currency.MXN,
+        "es-MX": Currency.MXN,
+    }
+    currency = currency_by_country.get(current_user.country or "")
+    if currency is None:
         raise HTTPException(
             status_code=422,
             detail="Cash balance currency must be USD or MXN",
-        ) from exc
+        )
+    return currency
 
 
 async def _update_cash_balance_from_transaction(

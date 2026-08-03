@@ -4,12 +4,12 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models.asset import AssetType, Currency, Market
 from app.models.holding import Holding
 from app.services.asset_resolver import AssetResolverService, ResolvedAsset
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from tests.utils import (
     create_test_account,
     create_test_asset,
@@ -133,6 +133,8 @@ async def test_buy_and_sell_optionally_update_cash_balance(
     [
         ("USD", Currency.MXN, 100, 79),
         ("MXN", Currency.USD, 2000, -1690),
+        ("en-US", Currency.MXN, 100, 79),
+        ("es-MX", Currency.USD, 2000, -1690),
     ],
 )
 async def test_cash_balance_uses_user_currency(
