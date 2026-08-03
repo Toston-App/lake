@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -92,6 +93,9 @@ class InvestmentTransaction(Base):
     currency: Currency = Column(Enum(Currency), nullable=False, default=Currency.USD)
     total_amount: Decimal = Column(Numeric(38, 8), nullable=False)
     fees: Decimal = Column(Numeric(38, 8), nullable=False, default=Decimal("0"))
+    affects_cash_balance: bool = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Exchange rate at time of transaction (for multi-currency tracking)
     exchange_rate_to_usd: Decimal = Column(Numeric(20, 12), nullable=True)

@@ -6,11 +6,13 @@ WORKDIR /app/
 
 # Install uv
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
-COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
 
-# Place executables in the environment at the front of the path
+# Keep the virtual environment outside /app because development Compose mounts
+# the source tree over /app.
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#using-the-environment
-ENV PATH="/app/.venv/bin:$PATH"
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Compile bytecode
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#compiling-bytecode
@@ -33,13 +35,9 @@ COPY ./scripts /app/scripts
 COPY ./pyproject.toml ./uv.lock ./app/alembic.ini /app/
 COPY ./app /app
 
-# this shouldn't be necessary, that's what `Install dependencies` do but shit don't work
-RUN uv pip compile /app/pyproject.toml > requirements.txt && \
-    uv pip install --system --no-cache -r requirements.txt
-
 # Sync the project
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync
+    uv sync --frozen
 
-CMD ["/app/.venv/bin/fastapi", "run", "--workers", "4", "app/main.py", "--proxy-headers", "--port", "80"]
+CMD ["/opt/venv/bin/fastapi", "run", "--workers", "4", "app/main.py", "--proxy-headers", "--port", "80"]

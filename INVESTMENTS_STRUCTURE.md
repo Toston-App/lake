@@ -180,8 +180,14 @@ Supported transaction types:
 | `transfer_in` | Increases quantity and invested cost |
 | `transfer_out` | Decreases quantity and proportionally removes invested cost |
 
-`total_amount` is calculated as `quantity × price_per_unit`. Fees are stored separately
-and are currently not added to `total_amount` or cost basis.
+For buys, `total_amount` is the gross `quantity × price_per_unit`, and acquisition fees
+are included in cost basis. For sells, `total_amount` is net proceeds after fees.
+
+Buy and sell requests may set `affects_cash_balance=true`. When enabled, a buy subtracts
+gross cost plus fees and a sell adds net proceeds to the selected account's cash balance.
+The amount is converted from the asset currency into the user's USD/MXN balance currency,
+and the account and aggregate user cash balances are updated atomically. The flag defaults
+to false for API compatibility and is persisted as part of the immutable transaction.
 
 Transactions are immutable through the API. The delete route verifies ownership and
 then returns `409 Conflict`. Corrections should be represented by a new compensating

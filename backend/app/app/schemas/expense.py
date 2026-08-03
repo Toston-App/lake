@@ -57,7 +57,7 @@ class ExpenseInDBBase(ExpenseBase):
     import_id: Optional[int] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties to return to client
@@ -65,7 +65,7 @@ class Expense(ExpenseInDBBase):
     date: Optional[date]
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 # Properties properties stored in DB
