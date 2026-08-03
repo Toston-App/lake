@@ -272,6 +272,10 @@ def enable_investments(monkeypatch: pytest.MonkeyPatch, test_user: User) -> None
             f"{module}.enforce_investment_rate_limit",
             AsyncMock(return_value=None),
         )
+    monkeypatch.setattr(
+        "app.api.api_v1.endpoints.investment_transactions.invalidate_user_cache",
+        AsyncMock(return_value=True),
+    )
 
 
 @pytest.fixture
