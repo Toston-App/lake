@@ -44,10 +44,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         }
         if (typeof part.type === 'string' && part.type.startsWith('data-')) {
           // Pending-confirmation / pending-question are rendered in the dock
-          // (App.tsx), not inline; skip them here.
+          // (App.tsx), while tool status is rendered by ThinkingPanel.
           if (
             part.type === 'data-pending-confirmation' ||
-            part.type === 'data-pending-question'
+            part.type === 'data-pending-question' ||
+            part.type === 'data-tool-status'
           ) {
             break
           }

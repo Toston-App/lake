@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
 import { browserChatLanguage, chatCopy } from '../utils/i18n'
+import { formatToolName } from '../utils/tools'
 
 type ThinkingPanelProps = {
   isActive: boolean
+  toolName?: string | null
 }
 
-export function ThinkingPanel({ isActive }: ThinkingPanelProps) {
+export function ThinkingPanel({ isActive, toolName }: ThinkingPanelProps) {
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
-  const placeholders = chatCopy(browserChatLanguage()).thinking
+  const language = browserChatLanguage()
+  const placeholders = chatCopy(language).thinking
 
   useEffect(() => {
     if (!isActive) return
@@ -19,10 +22,17 @@ export function ThinkingPanel({ isActive }: ThinkingPanelProps) {
 
   if (!isActive) return null
 
+  const statusText = toolName
+    ? `${formatToolName(toolName, language)}…`
+    : placeholders[placeholderIndex]
+
   return (
-    <div className="thinking-panel thinking-panel-placeholder">
+    <div
+      className="thinking-panel thinking-panel-placeholder"
+      aria-live="polite"
+    >
       <span className="thinking-spinner" aria-hidden />
-      <p>{placeholders[placeholderIndex]}</p>
+      <p>{statusText}</p>
     </div>
   )
 }
