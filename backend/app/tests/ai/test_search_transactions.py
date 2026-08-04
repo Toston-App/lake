@@ -118,8 +118,11 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
         ),
     )
     assert visible_result.return_value == result.return_value
+    public_items = [
+        chat_tools._serialize_transaction_search_item(item) for item in items
+    ]
     assert visible_result.metadata[0].data == {
-        "items": items,
+        "items": public_items,
         "total": 10,
         "page": 2,
         "limit": 5,
@@ -177,6 +180,81 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
     assert search.await_args.kwargs["params"].size == 5
     assert search.await_args.kwargs["params"].page == 2
     assert search.await_count == 2
+
+
+async def test_agent_search_serializes_cyclic_income_relationships(monkeypatch) -> None:
+    category = SimpleNamespace(
+        id=3,
+        name="Income",
+        is_income=True,
+        subcategories=[],
+    )
+    subcategory = SimpleNamespace(
+        id=4,
+        name="Salary",
+        category_id=3,
+        category=category,
+    )
+    category.subcategories.append(subcategory)
+    income = SimpleNamespace(
+        id=9,
+        type="income",
+        amount=100.0,
+        date="2026-08-01",
+        description="Salary",
+        account_id=1,
+        category_id=None,
+        subcategory_id=4,
+        place_id=None,
+        account=SimpleNamespace(id=1, name="Checking"),
+        subcategory=subcategory,
+        place=None,
+    )
+    search = AsyncMock(return_value=SimpleNamespace(items=[income], total=1))
+    monkeypatch.setattr(agent.transaction_service, "search_transactions", search)
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(db=SimpleNamespace(), user=SimpleNamespace(id=1))
+    )
+
+    result = await agent.search_transactions(
+        ctx,
+        SearchTransactionsArgs(
+            transaction_type=["income"],
+            presentation="user_visible",
+        ),
+    )
+
+    assert result.return_value["items"] == [
+        {
+            "id": 9,
+            "type": "income",
+            "amount": 100.0,
+            "date": "2026-08-01",
+            "description": "Salary",
+            "account_name": "Checking",
+            "category_name": "Income",
+            "subcategory_name": "Salary",
+        }
+    ]
+    assert result.metadata[0].data["items"] == [
+        {
+            "id": 9,
+            "type": "income",
+            "amount": 100.0,
+            "date": "2026-08-01",
+            "description": "Salary",
+            "account_id": 1,
+            "category_id": None,
+            "subcategory_id": 4,
+            "place_id": None,
+            "account": {"id": 1, "name": "Checking"},
+            "account_name": "Checking",
+            "category": {"id": 3, "name": "Income", "is_income": True},
+            "category_name": "Income",
+            "subcategory": {"id": 4, "name": "Salary", "category_id": 3},
+            "subcategory_name": "Salary",
+        }
+    ]
 
 
 async def test_agent_search_exposes_empty_model_reference_list(monkeypatch) -> None:

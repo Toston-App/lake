@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 from fastapi_pagination import Params
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
@@ -619,6 +621,75 @@ def _slim_place(p: models.Place) -> dict:
     return {"id": p.id, "name": p.name, "is_online": p.is_online}
 
 
+_MISSING = object()
+
+
+def _transaction_attr(item: Any, key: str) -> Any:
+    if isinstance(item, Mapping):
+        return item.get(key, _MISSING)
+    try:
+        return getattr(item, key)
+    except (AttributeError, InvalidRequestError):
+        return _MISSING
+
+
+def _transaction_relationship(value: Any) -> dict[str, Any] | None:
+    if value is _MISSING or value is None:
+        return None
+    result: dict[str, Any] = {}
+    for key in ("id", "name", "category_id", "is_income", "is_online"):
+        field_value = _transaction_attr(value, key)
+        if field_value is not _MISSING:
+            result[key] = field_value
+    return result or None
+
+
+def _serialize_transaction_search_item(item: Any) -> Any:
+    """Serialize one search row without walking SQLAlchemy back-references."""
+    if not isinstance(item, Mapping) and not hasattr(item, "id"):
+        return jsonable_encoder(item)
+
+    result: dict[str, Any] = {}
+    for key in (
+        "id",
+        "type",
+        "amount",
+        "date",
+        "description",
+        "account_id",
+        "category_id",
+        "subcategory_id",
+        "place_id",
+        "from_acc",
+        "to_acc",
+        "made_from",
+    ):
+        value = _transaction_attr(item, key)
+        if value is not _MISSING:
+            result[key] = value
+
+    relationships = {
+        "account": _transaction_attr(item, "account"),
+        "category": _transaction_attr(item, "category"),
+        "subcategory": _transaction_attr(item, "subcategory"),
+        "place": _transaction_attr(item, "place"),
+        "account_from": _transaction_attr(item, "account_from"),
+        "account_to": _transaction_attr(item, "account_to"),
+    }
+    if relationships["category"] is _MISSING or relationships["category"] is None:
+        subcategory = relationships["subcategory"]
+        relationships["category"] = _transaction_attr(subcategory, "category")
+
+    for key, relationship in relationships.items():
+        summary = _transaction_relationship(relationship)
+        if summary is not None:
+            result[key] = summary
+            if summary.get("name"):
+                result[f"{key}_name"] = summary["name"]
+
+    return jsonable_encoder(result)
+
+
 async def load_bootstrap_context(db: AsyncSession, user: models.User) -> dict:
     accounts = await crud.account.get_multi_by_owner(
         db=db, owner_id=user.id, skip=0, limit=LIST_LIMIT
@@ -799,7 +870,10 @@ async def execute_tool(
                 transaction_type=types,
                 params=Params(page=arg_model.page, size=arg_model.limit),
             )
-            items = jsonable_encoder(page.items)[: arg_model.limit]
+            items = [
+                _serialize_transaction_search_item(item)
+                for item in page.items[: arg_model.limit]
+            ]
             has_more = arg_model.page * arg_model.limit < page.total
             return _ok(
                 {

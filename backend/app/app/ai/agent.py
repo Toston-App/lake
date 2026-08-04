@@ -49,6 +49,7 @@ from app import models, schemas
 from app.ai.chat_tools import (
     LIST_LIMIT,
     ToolExecutionError,
+    _serialize_transaction_search_item,
     _slim_account,
     _slim_category,
     _slim_place,
@@ -511,7 +512,10 @@ async def search_transactions(
         transaction_type=types,
         params=Params(page=payload.page, size=payload.limit),
     )
-    items = jsonable_encoder(page.items)[: payload.limit]
+    items = [
+        _serialize_transaction_search_item(item)
+        for item in page.items[: payload.limit]
+    ]
     has_more = payload.page * payload.limit < page.total
     next_page = payload.page + 1 if has_more else None
     result = {
