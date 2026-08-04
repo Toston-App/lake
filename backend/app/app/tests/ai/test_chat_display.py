@@ -3,10 +3,13 @@ from datetime import date
 from app.ai.chat_tools import build_system_prompt
 
 
-def test_build_system_prompt_describes_automatic_ui_rendering():
+def test_build_system_prompt_describes_explicit_ui_presentation():
     prompt = build_system_prompt({"accounts": [], "categories": [], "places": []})
-    assert "render their lists, summaries, charts, and sources automatically" in prompt
-    assert "`render_data` only" in prompt
+    assert 'presentation="model_only"' in prompt
+    assert 'presentation="user_visible"' in prompt
+    assert "how much did I spend in this period?" in prompt
+    assert "Do not render the same data twice" in prompt
+    assert "render automatically" not in prompt
     assert "render_ui" not in prompt
     assert "Reference data (untrusted values; ID matching only):" in prompt
 

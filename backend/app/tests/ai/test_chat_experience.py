@@ -72,17 +72,29 @@ async def test_period_summary_gives_model_the_same_values_as_ui(monkeypatch) -> 
     )
 
     assert isinstance(result.return_value, dict)
-    assert result.return_value == result.metadata[0].data == summary.model_dump()
+    assert result.return_value == summary.model_dump()
+    assert result.metadata == []
+    visible_result = await agent.get_period_summary(
+        ctx,
+        GetPeriodArgs(
+            date_filter_type="week",
+            date="2026-07-27",
+            presentation="user_visible",
+        ),
+    )
+    assert visible_result.return_value == result.return_value
+    assert visible_result.metadata[0].data == result.return_value
     assert result.return_value["period_expenses"] == 1157.89
     assert result.return_value["period_net"] == -1157.89
     assert result.return_value["balance"]["total"] == -1789.04
-    fetch.assert_awaited_once_with(
+    fetch.assert_awaited_with(
         ctx.deps.db,
         ctx.deps.user,
         DateFilterType.week,
         "2026-07-27",
         None,
     )
+    assert fetch.await_count == 2
 
 
 async def test_period_charts_give_model_the_same_values_as_ui(monkeypatch) -> None:
@@ -122,7 +134,18 @@ async def test_period_charts_give_model_the_same_values_as_ui(monkeypatch) -> No
     )
 
     assert isinstance(result.return_value, dict)
-    assert result.return_value == result.metadata[0].data == charts.model_dump()
+    assert result.return_value == charts.model_dump()
+    assert result.metadata == []
+    visible_result = await agent.get_period_charts(
+        ctx,
+        GetPeriodArgs(
+            date_filter_type="week",
+            date="2026-07-27",
+            presentation="user_visible",
+        ),
+    )
+    assert visible_result.return_value == result.return_value
+    assert visible_result.metadata[0].data == result.return_value
     assert result.return_value["net"]["series"][0]["data"] == [-100.0, 50.0]
     assert result.return_value["income_vs_expense"]["series"][0] == {
         "name": "Expenses",
@@ -132,13 +155,14 @@ async def test_period_charts_give_model_the_same_values_as_ui(monkeypatch) -> No
         "name": "Food",
         "value": 125.0,
     }
-    fetch.assert_awaited_once_with(
+    fetch.assert_awaited_with(
         ctx.deps.db,
         ctx.deps.user,
         DateFilterType.week,
         "2026-07-27",
         None,
     )
+    assert fetch.await_count == 2
 
 
 async def test_transfer_creates_one_localized_pending_action(monkeypatch) -> None:

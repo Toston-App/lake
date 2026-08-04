@@ -29,6 +29,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 ResponseLanguage = Literal["en", "es"]
+ReadPresentation = Literal["model_only", "user_visible"]
 
 
 def response_language_field() -> Any:
@@ -39,6 +40,26 @@ def response_language_field() -> Any:
             "for Spanish and `en` for English or any unsupported language."
         ),
     )
+
+
+def read_presentation_field() -> Any:
+    return Field(
+        default="model_only",
+        description=(
+            "Use `model_only` for intermediate lookup, filtering, calculation, "
+            "ID resolution, or data supporting a concise text answer. Use "
+            "`user_visible` when the user explicitly asks to see a list, summary, "
+            "chart, or sources, or when the visual materially improves the answer. "
+            "A scalar question such as 'how much did I spend?' should normally use "
+            "`model_only`."
+        ),
+    )
+
+
+class ReadPresentationArgs(BaseModel):
+    """Shared presentation intent for read-only data tools."""
+
+    presentation: ReadPresentation = read_presentation_field()
 
 
 class AccountInput(BaseModel):
@@ -282,7 +303,7 @@ class DeleteTransactionArgs(BaseModel):
     response_language: ResponseLanguage = response_language_field()
 
 
-class SearchTransactionsArgs(BaseModel):
+class SearchTransactionsArgs(ReadPresentationArgs):
     """Arguments for ``search_transactions``."""
 
     page: int = Field(
@@ -334,7 +355,7 @@ class SearchTransactionsArgs(BaseModel):
     )
 
 
-class GetPeriodArgs(BaseModel):
+class GetPeriodArgs(ReadPresentationArgs):
     """Arguments for ``get_period_summary`` / ``get_period_charts``."""
 
     date_filter_type: Literal["date", "week", "month", "quarter", "year", "range"] = (
@@ -394,7 +415,7 @@ class CreateBalanceAdjustmentArgs(BaseModel):
     response_language: ResponseLanguage = response_language_field()
 
 
-class ListBalanceAdjustmentsArgs(BaseModel):
+class ListBalanceAdjustmentsArgs(ReadPresentationArgs):
     """Arguments for ``list_balance_adjustments``."""
 
     account_id: int | None = Field(
@@ -411,7 +432,7 @@ class SubmitFeedbackArgs(BaseModel):
     )
 
 
-class SearchWebArgs(BaseModel):
+class SearchWebArgs(ReadPresentationArgs):
     """Arguments for ``search_web``."""
 
     query: str = Field(..., description="Search query for external finance info.")

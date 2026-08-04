@@ -54,7 +54,7 @@ def test_public_chunk_policy_keeps_renderable_events():
 
 
 @pytest.mark.asyncio
-async def test_public_stream_preserves_data_from_hidden_tool():
+async def test_public_stream_exposes_only_tool_name_and_renderable_data():
     async def events() -> AsyncIterator:
         yield ToolInputStartChunk(toolCallId="call-1", toolName="list_accounts")
         yield ToolOutputAvailableChunk(toolCallId="call-1", output="Found 1 account.")
@@ -62,7 +62,28 @@ async def test_public_stream_preserves_data_from_hidden_tool():
 
     visible = [event async for event in public_chat_stream(events())]
 
-    assert [event.type for event in visible] == ["data-accounts-list"]
+    assert [event.type for event in visible] == [
+        "data-tool-status",
+        "data-accounts-list",
+    ]
+    assert visible[0].data == {"tool_name": "list_accounts"}
+
+
+@pytest.mark.asyncio
+async def test_public_stream_exposes_tool_name_but_hides_args_and_result():
+    async def events() -> AsyncIterator:
+        yield ToolInputStartChunk(toolCallId="call-1", toolName="search_transactions")
+        yield ToolOutputAvailableChunk(
+            toolCallId="call-1",
+            output={"items": [{"id": 1}], "total": 1},
+        )
+        yield TextStartChunk(id="text-1")
+
+    visible = [event async for event in public_chat_stream(events())]
+
+    assert [event.type for event in visible] == ["data-tool-status", "text-start"]
+    assert visible[0].data == {"tool_name": "search_transactions"}
+    assert "items" not in str(visible[0].data)
 
 
 @pytest.mark.asyncio
@@ -112,6 +133,33 @@ def _private_history():
     ]
 
 
+def _model_only_history():
+    call_id = "call-model-only"
+    return [
+        ModelRequest(parts=[UserPromptPart(content="How much did I spend?")]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="search_transactions",
+                    args={"presentation": "model_only"},
+                    tool_call_id=call_id,
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="search_transactions",
+                    content={"items": [{"id": 1, "amount": 25}], "total": 1},
+                    tool_call_id=call_id,
+                    metadata=[],
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart(content="You spent 25.")]),
+    ]
+
+
 def test_public_history_strips_private_parts_but_keeps_tool_metadata():
     public = public_ui_messages(_private_history())
     all_parts = [part for message in public for part in message["parts"]]
@@ -140,6 +188,21 @@ def test_private_history_round_trips_with_tool_context():
         for part in message["parts"]
     ]
     assert "data-accounts-list" in reloaded_public_types
+
+
+def test_model_only_read_stays_private_after_history_reload():
+    serialized = serialize_model_messages(_model_only_history())
+    loaded = load_model_messages({"model_messages": serialized})
+    public = public_ui_messages(loaded)
+    parts = [part for message in public for part in message["parts"]]
+
+    assert [part["type"] for part in parts] == ["text", "text"]
+    assert [part["text"] for part in parts] == [
+        "How much did I spend?",
+        "You spent 25.",
+    ]
+    assert "search_transactions" not in str(public)
+    assert '"id": 1' not in str(public)
 
 
 def test_legacy_public_history_is_upgraded():

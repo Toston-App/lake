@@ -69,10 +69,18 @@ def is_public_chat_chunk(chunk: BaseChunk) -> bool:
 async def public_chat_stream(
     stream: AsyncIterator[BaseChunk],
 ) -> AsyncIterator[BaseChunk]:
-    """Drop private events and text that duplicates a blocking UI card."""
+    """Project safe progress events and drop the remaining private protocol."""
     blocking_ui_emitted = False
     async for chunk in stream:
         chunk_type = str(getattr(chunk, "type", ""))
+        if chunk_type == "tool-input-start":
+            tool_name = getattr(chunk, "tool_name", None)
+            if isinstance(tool_name, str) and tool_name:
+                yield DataChunk(
+                    type="data-tool-status",
+                    data={"tool_name": tool_name},
+                )
+            continue
         if chunk_type in {"data-pending-confirmation", "data-pending-question"}:
             blocking_ui_emitted = True
         if not is_public_chat_chunk(chunk):

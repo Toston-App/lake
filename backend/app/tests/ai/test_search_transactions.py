@@ -108,7 +108,17 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
         ctx, SearchTransactionsArgs(limit=5, page=2)
     )
 
-    assert result.metadata[0].data == {
+    assert result.metadata == []
+    visible_result = await agent.search_transactions(
+        ctx,
+        SearchTransactionsArgs(
+            limit=5,
+            page=2,
+            presentation="user_visible",
+        ),
+    )
+    assert visible_result.return_value == result.return_value
+    assert visible_result.metadata[0].data == {
         "items": items,
         "total": 10,
         "page": 2,
@@ -166,6 +176,7 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
     assert all("subcategories" not in item for item in model_items)
     assert search.await_args.kwargs["params"].size == 5
     assert search.await_args.kwargs["params"].page == 2
+    assert search.await_count == 2
 
 
 async def test_agent_search_exposes_empty_model_reference_list(monkeypatch) -> None:
@@ -187,12 +198,4 @@ async def test_agent_search_exposes_empty_model_reference_list(monkeypatch) -> N
         "next_page": None,
         "truncated": False,
     }
-    assert result.metadata[0].data == {
-        "items": [],
-        "total": 0,
-        "page": 1,
-        "limit": chat_tools.SEARCH_LIMIT,
-        "has_more": False,
-        "next_page": None,
-        "truncated": False,
-    }
+    assert result.metadata == []

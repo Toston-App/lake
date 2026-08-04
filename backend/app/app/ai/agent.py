@@ -8,8 +8,8 @@ use ``@ai-sdk/react``'s ``useChat``.
 Key mappings from the old harness:
 - OpenRouter client            -> ``OpenRouterModel`` + ``OpenRouterProvider``
 - ``execute_tool`` dispatch    -> typed tool functions on a ``FunctionToolset``
-- read-only data tools         -> each emits a ``DataChunk`` (one per
-  frontend component id) via ``ToolReturn(metadata=[...])``
+- read-only data tools         -> always return private model context and emit a
+  ``DataChunk`` only for explicit ``user_visible`` presentation
 - ``ask_user`` tool            -> emits a ``data-pending-question`` ``DataChunk``;
   the frontend renders chips and sends the answer as the next user message
 - ``/confirm`` + Redis pending -> write/destructive tools do NOT execute during
@@ -72,6 +72,8 @@ from app.ai.tools import (
     ManageCategoryArgs,
     ManagePlaceArgs,
     ManageSubcategoryArgs,
+    ReadPresentation,
+    ReadPresentationArgs,
     RenderDataArgs,
     SearchTransactionsArgs,
     SearchWebArgs,
@@ -160,14 +162,25 @@ def get_chat_agent() -> Agent[ChatDeps, str]:
 # --------------------------------------------------------------------------- #
 # Tool functions
 # --------------------------------------------------------------------------- #
-# Read-only "data" tools return a ToolReturn carrying a DataChunk whose `type`
-# matches a frontend render component (e.g. "data-accounts-list"). The
-# `return_value` is a short summary the model sees so it can reply briefly
-# without repeating the rendered data.
+# Read-only data tools always return useful private model context. They attach a
+# DataChunk matching a frontend component only when the model explicitly asks
+# for user-visible presentation.
 #
 # Write / destructive tools return a plain string. Approval is gated dynamically
 # by ``ApprovalRequiredToolset`` (see ``build_toolset``) which replicates the old
 # ``requires_confirmation`` logic.
+
+
+def _read_tool_return(
+    return_value: Any,
+    presentation: ReadPresentation,
+    *ui_chunks: Any,
+) -> ToolReturn:
+    """Keep read data private unless the model deliberately requests UI."""
+    return ToolReturn(
+        return_value=return_value,
+        metadata=list(ui_chunks) if presentation == "user_visible" else [],
+    )
 
 
 async def get_user_profile(ctx: RunContext[ChatDeps]) -> str:
@@ -176,39 +189,48 @@ async def get_user_profile(ctx: RunContext[ChatDeps]) -> str:
     return f"User: {user.name}, country {user.country}."
 
 
-async def list_accounts(ctx: RunContext[ChatDeps]) -> ToolReturn:
+async def list_accounts(
+    ctx: RunContext[ChatDeps], payload: ReadPresentationArgs
+) -> ToolReturn:
     """List all accounts for the user with their balances."""
     accounts = await account_service.list_accounts(
         ctx.deps.db, ctx.deps.user, skip=0, limit=LIST_LIMIT
     )
     items = [_slim_account(a) for a in accounts]
-    return ToolReturn(
-        return_value=f"Found {len(items)} accounts.",
-        metadata=[DataChunk(type="data-accounts-list", data={"items": items})],
+    return _read_tool_return(
+        {"items": items, "total": len(items)},
+        payload.presentation,
+        DataChunk(type="data-accounts-list", data={"items": items}),
     )
 
 
-async def list_categories(ctx: RunContext[ChatDeps]) -> ToolReturn:
+async def list_categories(
+    ctx: RunContext[ChatDeps], payload: ReadPresentationArgs
+) -> ToolReturn:
     """List categories with nested subcategories."""
     categories = await catalog_service.list_categories(
         ctx.deps.db, ctx.deps.user, skip=0, limit=LIST_LIMIT
     )
     items = [_slim_category(c) for c in categories]
-    return ToolReturn(
-        return_value=f"Found {len(items)} categories.",
-        metadata=[DataChunk(type="data-categories-list", data={"items": items})],
+    return _read_tool_return(
+        {"items": items, "total": len(items)},
+        payload.presentation,
+        DataChunk(type="data-categories-list", data={"items": items}),
     )
 
 
-async def list_places(ctx: RunContext[ChatDeps]) -> ToolReturn:
+async def list_places(
+    ctx: RunContext[ChatDeps], payload: ReadPresentationArgs
+) -> ToolReturn:
     """List places (merchants/locations)."""
     places = await catalog_service.list_places(
         ctx.deps.db, ctx.deps.user, skip=0, limit=LIST_LIMIT
     )
     items = [_slim_place(p) for p in places]
-    return ToolReturn(
-        return_value=f"Found {len(items)} places.",
-        metadata=[DataChunk(type="data-places-list", data={"items": items})],
+    return _read_tool_return(
+        {"items": items, "total": len(items)},
+        payload.presentation,
+        DataChunk(type="data-places-list", data={"items": items}),
     )
 
 
@@ -501,8 +523,8 @@ async def search_transactions(
         "next_page": next_page,
         "truncated": page.total > len(items),
     }
-    return ToolReturn(
-        return_value={
+    return _read_tool_return(
+        {
             "summary": (
                 f"Found {page.total} transactions; returning page "
                 f"{payload.page} with {len(items)} items."
@@ -515,7 +537,8 @@ async def search_transactions(
             "next_page": next_page,
             "truncated": page.total > len(items),
         },
-        metadata=[DataChunk(type="data-transactions-list", data=result)],
+        payload.presentation,
+        DataChunk(type="data-transactions-list", data=result),
     )
 
 
@@ -534,9 +557,10 @@ async def get_period_summary(
         payload.account_id,
     )
     summary_data = summary.model_dump()
-    return ToolReturn(
-        return_value=summary_data,
-        metadata=[DataChunk(type="data-period-summary", data=summary_data)],
+    return _read_tool_return(
+        summary_data,
+        payload.presentation,
+        DataChunk(type="data-period-summary", data=summary_data),
     )
 
 
@@ -556,9 +580,10 @@ async def get_period_charts(
         payload.account_id,
     )
     charts_data = charts.model_dump()
-    return ToolReturn(
-        return_value=charts_data,
-        metadata=[DataChunk(type="data-charts", data=charts_data)],
+    return _read_tool_return(
+        charts_data,
+        payload.presentation,
+        DataChunk(type="data-charts", data=charts_data),
     )
 
 
@@ -618,9 +643,10 @@ async def list_balance_adjustments(
             ctx.deps.db, ctx.deps.user
         )
     result = {"items": jsonable_encoder(items)}
-    return ToolReturn(
-        return_value=f"Found {len(result['items'])} balance adjustments.",
-        metadata=[DataChunk(type="data-balance-adjustments-list", data=result)],
+    return _read_tool_return(
+        result,
+        payload.presentation,
+        DataChunk(type="data-balance-adjustments-list", data=result),
     )
 
 
@@ -646,13 +672,14 @@ async def search_web(
         payload.query, topic=payload.topic, max_results=payload.max_results
     )
     results = data.get("results", []) if isinstance(data, dict) else []
+    public_data = {
+        "items": results,
+        "answer": data.get("answer") if isinstance(data, dict) else None,
+    }
     chunks: list[Any] = [
         DataChunk(
             type="data-web-sources",
-            data={
-                "items": results,
-                "answer": data.get("answer") if isinstance(data, dict) else None,
-            },
+            data=public_data,
         )
     ]
     for item in results:
@@ -661,9 +688,10 @@ async def search_web(
             chunks.append(
                 SourceUrlChunk(sourceId=url, url=url, title=item.get("title"))
             )
-    return ToolReturn(
-        return_value=f"Web search returned {len(results)} results.",
-        metadata=chunks,
+    return _read_tool_return(
+        {**public_data, "total": len(results)},
+        payload.presentation,
+        *chunks,
     )
 
 
