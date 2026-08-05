@@ -227,8 +227,21 @@ async def save_conversation(
         await r.expire(conv_key, ttl)
 
         index_key = _chat_user_index_key(user_id)
+        preview = (
+            _message_preview(messages[-1])[:120]
+            if messages
+            else None
+        )
         await r.hset(
-            index_key, conversation_id, json.dumps({"title": title, "updated_at": now})
+            index_key,
+            conversation_id,
+            json.dumps(
+                {
+                    "title": title,
+                    "updated_at": now,
+                    "last_message_preview": preview,
+                }
+            ),
         )
         await r.expire(index_key, ttl)
         return True
@@ -247,17 +260,12 @@ async def list_user_conversations(user_id: int) -> list[dict]:
         result = []
         for conv_id, meta_raw in entries.items():
             meta = json.loads(meta_raw)
-            conv = await get_conversation(conv_id, user_id)
-            preview = None
-            if conv and conv.get("messages"):
-                last = conv["messages"][-1]
-                preview = _message_preview(last)[:120]
             result.append(
                 {
                     "id": conv_id,
                     "title": meta.get("title") or "Conversation",
                     "updated_at": meta.get("updated_at"),
-                    "last_message_preview": preview,
+                    "last_message_preview": meta.get("last_message_preview"),
                 }
             )
         result.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
