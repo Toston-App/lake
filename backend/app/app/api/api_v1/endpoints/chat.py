@@ -76,11 +76,6 @@ def _trace_ids(request: Request) -> tuple[str | None, str | None]:
 router = APIRouter()
 
 
-def _require_chat_enabled() -> None:
-    if not settings.CHAT_ENABLED:
-        raise HTTPException(status_code=503, detail="Chat is disabled")
-
-
 async def _enforce_quota(
     db: AsyncSession, user: User
 ) -> tuple[bool, Tier, dict[str, Any]]:
@@ -155,7 +150,7 @@ def _last_assistant_text(messages: list[Any]) -> str:
 async def chat_vercel(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.require_chat_access),
 ) -> Response:
     """Vercel AI data-stream chat endpoint (sdk_version=6).
 
@@ -163,7 +158,6 @@ async def chat_vercel(
     normal JSON error. Once streaming begins, the VercelAIAdapter owns the SSE
     response and emits the protocol chunks that `useChat` consumes.
     """
-    _require_chat_enabled()
     agent = get_pydantic_agent()
     try:
         request_payload = await request.json()
@@ -344,9 +338,8 @@ async def chat_vercel(
 
 @router.get("/conversations", response_model=list[ConversationSummary])
 async def list_conversations(
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.require_chat_access),
 ) -> Any:
-    _require_chat_enabled()
     rows = await list_user_conversations(current_user.id)
     return [
         ConversationSummary(
@@ -364,9 +357,8 @@ async def list_conversations(
 @router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation_detail(
     conversation_id: str,
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.require_chat_access),
 ) -> Any:
-    _require_chat_enabled()
     conv = await get_conversation(conversation_id, current_user.id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -429,9 +421,8 @@ def _ui_message_text(ui_message: dict[str, Any]) -> str:
 @router.delete("/conversations/{conversation_id}")
 async def remove_conversation(
     conversation_id: str,
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.require_chat_access),
 ) -> dict[str, bool]:
-    _require_chat_enabled()
     ok = await delete_conversation(conversation_id, current_user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -447,9 +438,8 @@ async def confirm_chat_action(
     conversation_id: str,
     body: ChatConfirmRequest,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.require_chat_access),
 ) -> Any:
-    _require_chat_enabled()
     await _enforce_quota(db, current_user)
 
     pending = await get_pending_action(body.action_id, current_user.id)

@@ -200,6 +200,8 @@ class Settings(BaseSettings):
 
     # Chat agent
     CHAT_ENABLED: bool = True
+    # Comma-separated user UUID allowlist. Empty means no user can access chat.
+    CHAT_ALLOWED_USER_UUIDS: str = ""
     CHAT_MAX_TOOL_ROUNDS: int = 8
     CHAT_CONVERSATION_TTL_SECONDS: int = 60 * 60 * 24 * 7
     CHAT_MODEL: str | None = "openai/gpt-5.6-luna"
@@ -209,6 +211,14 @@ class Settings(BaseSettings):
     CHAT_OBSERVABILITY_ENABLED: bool = True
     # In-progress billing reservations older than this stop consuming quota.
     CHAT_TURN_RESERVATION_TTL_SECONDS: int = 900
+
+    @property
+    def chat_allowed_user_uuids(self) -> set[str]:
+        return {
+            raw_uuid.strip()
+            for raw_uuid in self.CHAT_ALLOWED_USER_UUIDS.split(",")
+            if raw_uuid.strip()
+        }
 
     # Feedback
     TELEGRAM_BOT_TOKEN: str
