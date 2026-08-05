@@ -10,8 +10,9 @@ Key mappings from the old harness:
 - ``execute_tool`` dispatch    -> typed tool functions on a ``FunctionToolset``
 - read-only data tools         -> always return private model context and emit a
   ``DataChunk`` only for explicit ``user_visible`` presentation
-- ``ask_user`` tool            -> emits a ``data-pending-question`` ``DataChunk``;
-  the frontend renders chips and sends the answer as the next user message
+- ``ask_user`` tool            -> defers immediately; the transport emits a
+  ``data-pending-question`` from its validated input, and the frontend sends
+  the answer as the deferred result on the next turn
 - ``/confirm`` + Redis pending -> write/destructive tools do NOT execute during
   the agent run; they emit a ``data-pending-confirmation`` ``DataChunk``
   (built from ``build_pending_preview`` + stashed in Redis via
@@ -34,6 +35,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi_pagination import Params
 from pydantic_ai import (
     Agent,
+    CallDeferred,
     FunctionToolset,
     RunContext,
     ToolDefinition,
@@ -123,6 +125,11 @@ class ChatDeps:
     # produced a confirmation draft this turn. Read by the endpoint's
     # ``on_complete`` to flag the observability turn as ``pending_confirmation``.
     had_pending_confirmation: bool = False
+    # Populated by ``ask_user`` before it defers the call. The endpoint uses
+    # this to persist the public question card alongside the private deferred
+    # tool call.
+    pending_question: dict[str, Any] | None = None
+    pending_question_id: str | None = None
 
 
 def build_model() -> OpenRouterModel:
@@ -700,9 +707,9 @@ async def search_web(
 
 
 async def ask_user(
-    ctx: RunContext[ChatDeps],  # noqa: ARG001
+    ctx: RunContext[ChatDeps],
     payload: AskUserArgs,
-) -> ToolReturn:
+) -> None:
     """Ask the user a clarifying question with clickable options when the request
     is ambiguous. The turn ends until the user answers."""
     result = {
@@ -711,10 +718,12 @@ async def ask_user(
         "allow_multiple": payload.allow_multiple,
         "response_language": payload.response_language,
     }
-    return ToolReturn(
-        return_value=payload.question,
-        metadata=[DataChunk(type="data-pending-question", data=result)],
-    )
+    ctx.deps.pending_question = result
+    ctx.deps.pending_question_id = ctx.tool_call_id
+    # A user-facing question is an external tool call: the frontend supplies
+    # its result on the next turn. Deferring here ends this run instead of
+    # asking the model for another step (where it could repeat the question).
+    raise CallDeferred(metadata={"pending_question": result})
 
 
 async def render_data(

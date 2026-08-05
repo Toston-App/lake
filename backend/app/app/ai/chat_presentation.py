@@ -13,12 +13,14 @@ from dataclasses import replace
 from typing import Any
 
 from pydantic import TypeAdapter, ValidationError
+from pydantic_ai import DeferredToolResults
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -71,6 +73,7 @@ async def public_chat_stream(
 ) -> AsyncIterator[BaseChunk]:
     """Project safe progress events and drop the remaining private protocol."""
     blocking_ui_emitted = False
+    emitted_blocking_ui: set[tuple[str, str]] = set()
     async for chunk in stream:
         chunk_type = str(getattr(chunk, "type", ""))
         if chunk_type == "tool-input-start":
@@ -81,7 +84,37 @@ async def public_chat_stream(
                     data={"tool_name": tool_name},
                 )
             continue
+        if chunk_type == "tool-input-available":
+            tool_name = getattr(chunk, "tool_name", None)
+            tool_input = getattr(chunk, "input", None)
+            if tool_name == "ask_user" and isinstance(tool_input, dict):
+                question = tool_input.get("question")
+                options = tool_input.get("options")
+                if isinstance(question, str) and isinstance(options, list):
+                    question_chunk = DataChunk(
+                        type="data-pending-question",
+                        data={
+                            "question": question,
+                            "options": options,
+                            "allow_multiple": bool(
+                                tool_input.get("allow_multiple", False)
+                            ),
+                            "response_language": tool_input.get(
+                                "response_language", "en"
+                            ),
+                        },
+                    )
+                    emitted_blocking_ui.add(
+                        (question_chunk.type, repr(question_chunk.data))
+                    )
+                    yield question_chunk
+                    blocking_ui_emitted = True
+            continue
         if chunk_type in {"data-pending-confirmation", "data-pending-question"}:
+            key = (chunk_type, repr(getattr(chunk, "data", None)))
+            if key in emitted_blocking_ui:
+                continue
+            emitted_blocking_ui.add(key)
             blocking_ui_emitted = True
         if not is_public_chat_chunk(chunk):
             continue
@@ -164,6 +197,30 @@ def latest_user_request(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
         ):
             return [message]
     return []
+
+
+def deferred_question_results(
+    messages: Sequence[ModelMessage], answer: str
+) -> DeferredToolResults | None:
+    """Resolve the newest unanswered ``ask_user`` call with the user's reply."""
+    answered_call_ids = {
+        part.tool_call_id
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    }
+    for message in reversed(messages):
+        if not isinstance(message, ModelResponse):
+            continue
+        for part in reversed(message.parts):
+            if (
+                isinstance(part, ToolCallPart)
+                and part.tool_name == "ask_user"
+                and part.tool_call_id not in answered_call_ids
+            ):
+                return DeferredToolResults(calls={part.tool_call_id: answer})
+    return None
 
 
 def load_model_messages(conversation: dict[str, Any] | None) -> list[ModelMessage]:

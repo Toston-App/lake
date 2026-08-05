@@ -7,6 +7,7 @@ from app.ai.chat_presentation import (
     latest_user_request,
     load_model_messages,
     public_chat_stream,
+    deferred_question_results,
     public_ui_messages,
     serialize_model_messages,
 )
@@ -25,6 +26,7 @@ from pydantic_ai.ui.vercel_ai.response_types import (
     SourceUrlChunk,
     TextStartChunk,
     ToolInputStartChunk,
+    ToolInputAvailableChunk,
     ToolOutputAvailableChunk,
 )
 
@@ -98,6 +100,62 @@ async def test_public_stream_suppresses_text_after_blocking_card():
     visible = [event async for event in public_chat_stream(events())]
 
     assert [event.type for event in visible] == ["data-pending-confirmation"]
+
+
+@pytest.mark.asyncio
+async def test_public_stream_turns_ask_user_input_into_question_card():
+    async def events() -> AsyncIterator:
+        yield ToolInputStartChunk(toolCallId="question-1", toolName="ask_user")
+        yield ToolInputAvailableChunk(
+            toolCallId="question-1",
+            toolName="ask_user",
+            input={
+                "question": "Which account?",
+                "options": [{"id": "bank", "label": "Bank"}],
+                "allow_multiple": False,
+                "response_language": "en",
+            },
+        )
+
+    visible = [event async for event in public_chat_stream(events())]
+
+    assert [event.type for event in visible] == [
+        "data-tool-status",
+        "data-pending-question",
+    ]
+    assert visible[1].data["question"] == "Which account?"
+
+
+@pytest.mark.asyncio
+async def test_public_stream_deduplicates_identical_blocking_cards():
+    question = {"question": "Which account?", "options": []}
+
+    async def events() -> AsyncIterator:
+        yield DataChunk(type="data-pending-question", data=question)
+        yield DataChunk(type="data-pending-question", data=question)
+
+    visible = [event async for event in public_chat_stream(events())]
+
+    assert [event.type for event in visible] == ["data-pending-question"]
+
+
+def test_deferred_question_results_resolves_latest_unanswered_call():
+    history = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="ask_user",
+                    args={"question": "Which account?"},
+                    tool_call_id="question-1",
+                )
+            ]
+        )
+    ]
+
+    results = deferred_question_results(history, "BBVA")
+
+    assert results is not None
+    assert results.calls == {"question-1": "BBVA"}
 
 
 def _private_history():

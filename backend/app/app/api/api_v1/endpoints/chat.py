@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
+from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.run import AgentRunResult
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
@@ -16,6 +17,7 @@ from app.ai.agent import ChatDeps, build_obs_hooks, build_toolset
 from app.ai.agent import get_chat_agent as get_pydantic_agent
 from app.ai.chat_presentation import (
     append_confirmation_to_model_history,
+    deferred_question_results,
     latest_user_request,
     load_model_messages,
     public_chat_stream,
@@ -209,6 +211,7 @@ async def chat_vercel(
     tier = quota.tier
     stored_conversation = await get_conversation(conversation_id, current_user.id)
     model_history = load_model_messages(stored_conversation)
+    deferred_results = deferred_question_results(model_history, user_msg)
     if stored_conversation and stored_conversation.get("title"):
         title = str(stored_conversation["title"])
 
@@ -244,10 +247,17 @@ async def chat_vercel(
         nonlocal completed
         duration_ms = int((time.perf_counter() - started) * 1000)
         is_pending = deps.had_pending_confirmation
+        has_pending_question = deps.pending_question is not None
         usage = result.usage
         all_msgs = result.all_messages()
         assistant_reply = _last_assistant_text(all_msgs)
-        status = "pending_confirmation" if is_pending else "ok"
+        status = (
+            "pending_confirmation"
+            if is_pending
+            else "pending_question"
+            if has_pending_question
+            else "ok"
+        )
         await finalize_turn(
             turn_id,
             status=status,
@@ -261,6 +271,19 @@ async def chat_vercel(
         completed = True
         try:
             ui_msgs = public_ui_messages(all_msgs)
+            if deps.pending_question:
+                ui_msgs.append(
+                    {
+                        "id": deps.pending_question_id or str(uuid.uuid4()),
+                        "role": "assistant",
+                        "parts": [
+                            {
+                                "type": "data-pending-question",
+                                "data": deps.pending_question,
+                            }
+                        ],
+                    }
+                )
             private_msgs = serialize_model_messages(all_msgs)
             await save_conversation(
                 conversation_id,
@@ -294,8 +317,10 @@ async def chat_vercel(
         )
 
     event_stream = adapter.run_stream(
+        output_type=[str, DeferredToolRequests],
         deps=deps,
         message_history=model_history,
+        deferred_tool_results=deferred_results,
         toolsets=[build_toolset(tier)],
         capabilities=[build_obs_hooks()],
         on_complete=on_complete,
