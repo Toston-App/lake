@@ -1,7 +1,10 @@
+import asyncio
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from datetime import datetime, timezone
+from functools import wraps
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -54,12 +57,17 @@ from app.utilities.observability import (
     upsert_conversation,
 )
 from app.utilities.redis import (
+    CHAT_CONVERSATION_LOCK_TTL,
+    acquire_conversation_lock,
     delete_conversation,
     delete_pending_action,
     get_conversation,
     get_pending_action,
     list_user_conversations,
+    refresh_conversation_lock,
+    release_conversation_lock,
     save_conversation,
+    validate_conversation_id,
 )
 from app.utilities.wide_events import enrich_event, timed
 
@@ -74,6 +82,74 @@ def _trace_ids(request: Request) -> tuple[str | None, str | None]:
 
 
 router = APIRouter()
+
+
+def _require_valid_conversation_id(conversation_id: str) -> str:
+    try:
+        return validate_conversation_id(conversation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def _acquire_chat_lock(user_id: int, conversation_id: str) -> str:
+    try:
+        token = await acquire_conversation_lock(user_id, conversation_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail={"reason": "conversation_lock_unavailable"}
+        ) from exc
+    if token is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "conversation_busy"},
+        )
+    return token
+
+
+def _serialized_conversation_endpoint(
+    endpoint: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Serialize a non-streaming endpoint and always release its lock."""
+
+    @wraps(endpoint)
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        conversation_id = _require_valid_conversation_id(kwargs["conversation_id"])
+        kwargs["conversation_id"] = conversation_id
+        user = kwargs["current_user"]
+        lock_token = await _acquire_chat_lock(user.id, conversation_id)
+        try:
+            return await endpoint(*args, **kwargs)
+        finally:
+            with suppress(Exception):
+                await release_conversation_lock(
+                    user.id, conversation_id, lock_token
+                )
+
+    return wrapped
+
+
+def _release_stream_lock_on_setup_error(
+    endpoint: Callable[..., Any],
+) -> Callable[..., Any]:
+    """Release a streaming lock when setup fails before iteration owns it."""
+
+    @wraps(endpoint)
+    async def wrapped(*args: Any, **kwargs: Any) -> Any:
+        request = kwargs["request"]
+        try:
+            return await endpoint(*args, **kwargs)
+        except BaseException:
+            lock = getattr(request.state, "chat_stream_lock", None)
+            if lock:
+                user_id, conversation_id, token = lock
+                with suppress(Exception):
+                    await release_conversation_lock(
+                        user_id, conversation_id, token
+                    )
+                request.state.chat_stream_lock = None
+            raise
+
+    return wrapped
 
 
 async def _enforce_quota(
@@ -147,6 +223,7 @@ def _last_assistant_text(messages: list[Any]) -> str:
 
 
 @router.post("")
+@_release_stream_lock_on_setup_error
 async def chat_vercel(
     request: Request,
     db: AsyncSession = Depends(deps.async_get_db),
@@ -166,7 +243,9 @@ async def chat_vercel(
     locale, time_zone_name, local_now = _resolve_client_context(request_payload)
     adapter = await VercelAIAdapter.from_request(request, agent=agent, sdk_version=6)
 
-    conversation_id = adapter.conversation_id or str(uuid.uuid4())
+    conversation_id = _require_valid_conversation_id(
+        adapter.conversation_id or str(uuid.uuid4())
+    )
     current_messages = latest_user_request(adapter.messages)
     # ``messages`` is a cached property used by run_stream_native. Replacing the
     # cached value makes older clients that still submit full UI history safe:
@@ -177,6 +256,12 @@ async def chat_vercel(
     title = _conversation_title(user_msg) if user_msg else "Conversation"
 
     trace_id, request_id = _trace_ids(request)
+    lock_token = await _acquire_chat_lock(current_user.id, conversation_id)
+    request.state.chat_stream_lock = (
+        current_user.id,
+        conversation_id,
+        lock_token,
+    )
     try:
         quota, turn_id = await reserve_chat_turn(
             db,
@@ -262,37 +347,54 @@ async def chat_vercel(
             total_completion_tokens=usage.output_tokens,
             total_tokens=usage.input_tokens + usage.output_tokens,
         )
+        ui_msgs = public_ui_messages(all_msgs)
+        if deps.pending_question:
+            ui_msgs.append(
+                {
+                    "id": deps.pending_question_id or str(uuid.uuid4()),
+                    "role": "assistant",
+                    "parts": [
+                        {
+                            "type": "data-pending-question",
+                            "data": deps.pending_question,
+                        }
+                    ],
+                }
+            )
+        private_msgs = serialize_model_messages(all_msgs)
+        if not await refresh_conversation_lock(
+            current_user.id,
+            conversation_id,
+            lock_token,
+        ):
+            raise RuntimeError("conversation_lock_lost")
+        saved = await save_conversation(
+            conversation_id,
+            current_user.id,
+            ui_msgs,
+            title,
+            settings.CHAT_CONVERSATION_TTL_SECONDS,
+            model_messages=private_msgs,
+        )
+        if not saved:
+            await finalize_turn(
+                turn_id,
+                status="error",
+                error="conversation_persistence_failed",
+                duration_ms=duration_ms,
+            )
+            enrich_event(
+                request,
+                persistence={
+                    "conversation_saved": False,
+                    "pending_confirmation": is_pending,
+                },
+            )
+            raise RuntimeError("conversation_persistence_failed")
+        await upsert_conversation(
+            conversation_id, current_user.id, title, len(ui_msgs)
+        )
         completed = True
-        try:
-            ui_msgs = public_ui_messages(all_msgs)
-            if deps.pending_question:
-                ui_msgs.append(
-                    {
-                        "id": deps.pending_question_id or str(uuid.uuid4()),
-                        "role": "assistant",
-                        "parts": [
-                            {
-                                "type": "data-pending-question",
-                                "data": deps.pending_question,
-                            }
-                        ],
-                    }
-                )
-            private_msgs = serialize_model_messages(all_msgs)
-            await save_conversation(
-                conversation_id,
-                current_user.id,
-                ui_msgs,
-                title,
-                settings.CHAT_CONVERSATION_TTL_SECONDS,
-                model_messages=private_msgs,
-            )
-            await upsert_conversation(
-                conversation_id, current_user.id, title, len(ui_msgs)
-            )
-        except Exception:
-            # Persistence is best-effort; never break the stream on a Redis hiccup.
-            pass
         enrich_event(
             request,
             ai={
@@ -321,10 +423,33 @@ async def chat_vercel(
     )
 
     async def metered_stream() -> AsyncIterator[Any]:
+        async def keep_lock_alive() -> None:
+            while True:
+                await asyncio.sleep(CHAT_CONVERSATION_LOCK_TTL / 3)
+                try:
+                    refreshed = await refresh_conversation_lock(
+                        current_user.id,
+                        conversation_id,
+                        lock_token,
+                    )
+                except Exception:
+                    return
+                if not refreshed:
+                    return
+
+        renewal_task = asyncio.create_task(keep_lock_alive())
         try:
             async for event in public_chat_stream(event_stream):
                 yield event
         finally:
+            renewal_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await renewal_task
+            with suppress(Exception):
+                await release_conversation_lock(
+                    current_user.id, conversation_id, lock_token
+                )
+            request.state.chat_stream_lock = None
             if not completed:
                 await finalize_turn(
                     turn_id,
@@ -359,6 +484,7 @@ async def get_conversation_detail(
     conversation_id: str,
     current_user: User = Depends(deps.require_chat_access),
 ) -> Any:
+    conversation_id = _require_valid_conversation_id(conversation_id)
     conv = await get_conversation(conversation_id, current_user.id)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -419,10 +545,12 @@ def _ui_message_text(ui_message: dict[str, Any]) -> str:
 
 
 @router.delete("/conversations/{conversation_id}")
+@_serialized_conversation_endpoint
 async def remove_conversation(
     conversation_id: str,
     current_user: User = Depends(deps.require_chat_access),
 ) -> dict[str, bool]:
+    conversation_id = _require_valid_conversation_id(conversation_id)
     ok = await delete_conversation(conversation_id, current_user.id)
     if not ok:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -433,6 +561,7 @@ async def remove_conversation(
     "/conversations/{conversation_id}/confirm",
     response_model=ChatMessageResponse,
 )
+@_serialized_conversation_endpoint
 async def confirm_chat_action(
     request: Request,
     conversation_id: str,
@@ -440,6 +569,7 @@ async def confirm_chat_action(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: User = Depends(deps.require_chat_access),
 ) -> Any:
+    conversation_id = _require_valid_conversation_id(conversation_id)
     await _enforce_quota(db, current_user)
 
     pending = await get_pending_action(body.action_id, current_user.id)
@@ -537,7 +667,7 @@ async def confirm_chat_action(
     )
     updated_messages = public_ui_messages(updated_model_history)
     title = str(conv.get("title") or "Conversation") if conv else "Conversation"
-    await save_conversation(
+    saved = await save_conversation(
         conversation_id,
         current_user.id,
         updated_messages,
@@ -545,6 +675,20 @@ async def confirm_chat_action(
         settings.CHAT_CONVERSATION_TTL_SECONDS,
         model_messages=serialize_model_messages(updated_model_history),
     )
+    if not saved:
+        enrich_event(
+            request,
+            persistence={
+                "conversation_saved": False,
+                "confirmed_mutation_may_be_committed": success,
+            },
+        )
+        # Plan 006 will make confirmed mutations replay-safe. Until then, make
+        # the persistence failure explicit and do not claim safe retryability.
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "conversation_persistence_failed"},
+        )
     await upsert_conversation(
         conversation_id, current_user.id, title, len(updated_messages)
     )

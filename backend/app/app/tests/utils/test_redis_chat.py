@@ -2,7 +2,6 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.utilities import redis
 
 
@@ -16,11 +15,9 @@ async def test_save_conversation_stores_preview_in_user_index():
         }
     ]
 
-    with (
-        patch.object(redis.r, "set", new_callable=AsyncMock),
-        patch.object(redis.r, "expire", new_callable=AsyncMock),
-        patch.object(redis.r, "hset", new_callable=AsyncMock) as hset,
-    ):
+    with patch.object(
+        redis.r, "eval", new_callable=AsyncMock, return_value=1
+    ) as eval_command:
         saved = await redis.save_conversation(
             "conversation-1",
             42,
@@ -30,7 +27,7 @@ async def test_save_conversation_stores_preview_in_user_index():
         )
 
     assert saved is True
-    index_meta = json.loads(hset.await_args.args[2])
+    index_meta = json.loads(eval_command.await_args.kwargs["args"][3])
     assert index_meta["last_message_preview"] == "Latest response"
 
 
