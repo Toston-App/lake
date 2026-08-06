@@ -44,6 +44,15 @@ SUBSCRIPTION_EVENTS = frozenset(
         "subscription.past_due",
     }
 )
+_EVENT_PRIORITIES = {
+    "subscription.created": 10,
+    "subscription.updated": 20,
+    "subscription.active": 30,
+    "subscription.uncanceled": 40,
+    "subscription.past_due": 50,
+    "subscription.canceled": 60,
+    "subscription.revoked": 70,
+}
 CUSTOMER_EVENTS = frozenset({"customer.created", "customer.updated"})
 
 
@@ -181,9 +190,7 @@ async def ensure_customer(
             customer_request["name"] = name
 
         try:
-            created = await polar.customers.create_async(
-                request=customer_request
-            )
+            created = await polar.customers.create_async(request=customer_request)
             customer_id = created.id
         except Exception as create_exc:
             _polar_log(
@@ -402,7 +409,7 @@ async def create_portal_session(
 
 async def handle_polar_event(
     db: AsyncSession, event: Any, request: Request | None = None
-) -> None:
+) -> int | None:
     """Dispatch a verified Polar webhook event to the right upsert path.
 
     `event` is the pydantic model returned by `polar_sdk.webhooks.validate_event`.
@@ -414,7 +421,7 @@ async def handle_polar_event(
     _configure_product_ids()
 
     if event_type in SUBSCRIPTION_EVENTS:
-        await _handle_subscription_event(
+        return await _handle_subscription_event(
             db,
             event_type,
             data,
@@ -426,6 +433,7 @@ async def handle_polar_event(
     else:
         # Acknowledge but ignore (checkout.*, order.*, benefit_grant.*, etc.)
         _polar_log(request, level="info", op="ignore_event", event_type=event_type)
+    return None
 
 
 def _coerce_dt(value: Any) -> Any | None:
@@ -573,9 +581,9 @@ async def _handle_subscription_event(
     *,
     event_at: datetime,
     request: Request | None = None,
-) -> None:
+) -> int | None:
     if data is None:
-        return
+        return None
     polar_customer_id: str | None = getattr(data, "customer_id", None)
     if not polar_customer_id:
         _polar_log(
@@ -585,7 +593,7 @@ async def _handle_subscription_event(
             event_type=event_type,
             reason="missing_customer_id",
         )
-        return
+        return None
 
     user = await _resolve_user_from_polar_customer(
         db, polar_customer_id, request=request
@@ -599,7 +607,7 @@ async def _handle_subscription_event(
             polar_customer_id=polar_customer_id,
             reason="unresolved_customer",
         )
-        return
+        return None
 
     product_id: str | None = getattr(data, "product_id", None)
     # Map the event type to a status string we persist.
@@ -654,10 +662,14 @@ async def _handle_subscription_event(
         current_period_start=_coerce_dt(getattr(data, "current_period_start", None)),
         current_period_end=_coerce_dt(getattr(data, "current_period_end", None)),
         canceled_at=_coerce_dt(getattr(data, "canceled_at", None)),
+        cancel_at_period_end=bool(getattr(data, "cancel_at_period_end", False)),
+        ends_at=_coerce_dt(getattr(data, "ends_at", None)),
+        ended_at=_coerce_dt(getattr(data, "ended_at", None)),
         pending_tier=pending_tier,
         pending_effective_at=pending_effective_at,
         metadata={"event_type": event_type},
         event_at=event_at,
+        event_priority=_subscription_event_priority(event_type, status, data),
     )
     if row is None:
         _polar_log(
@@ -668,14 +680,13 @@ async def _handle_subscription_event(
             user_id=user.id,
             reason="stale_event",
         )
-        return
-    # Drop the cached entitlement so the next chat turn reflects the change.
-    from app.utilities.redis import invalidate_entitlement
-
-    await invalidate_entitlement(user.id)
+        return user.id
+    return user.id
 
 
 def _subscription_status_for_event(event_type: str, data: Any) -> str:
+    if event_type == "subscription.revoked":
+        return "revoked"
     # Prefer the explicit status on the subscription object when present.
     status_attr = getattr(data, "status", None)
     if status_attr is not None:
@@ -692,6 +703,23 @@ def _subscription_status_for_event(event_type: str, data: Any) -> str:
         "subscription.uncanceled": "active",
     }
     return mapping.get(event_type, "active")
+
+
+def _subscription_event_priority(event_type: str, status: str, data: Any) -> int:
+    """Order equal-timestamp snapshots by their access-loss severity."""
+    if (
+        event_type == "subscription.revoked"
+        or status in {"revoked", "unpaid"}
+        or getattr(data, "ended_at", None) is not None
+    ):
+        return 70
+    if event_type == "subscription.canceled" or bool(
+        getattr(data, "cancel_at_period_end", False)
+    ):
+        return 60
+    if status == "past_due":
+        return 50
+    return _EVENT_PRIORITIES.get(event_type, 0)
 
 
 async def _handle_customer_event(db: AsyncSession, data: Any) -> None:

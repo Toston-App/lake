@@ -32,6 +32,137 @@ def _subscription(user_id: int, *, tier: str = "tier1") -> UserSubscription:
     )
 
 
+@pytest.mark.parametrize(
+    ("event_type", "status", "data", "expected"),
+    [
+        ("subscription.updated", "active", SimpleNamespace(), 20),
+        ("subscription.updated", "past_due", SimpleNamespace(), 50),
+        ("subscription.updated", "unpaid", SimpleNamespace(), 70),
+        (
+            "subscription.updated",
+            "active",
+            SimpleNamespace(cancel_at_period_end=True),
+            60,
+        ),
+    ],
+)
+def test_equal_timestamp_priority_uses_payload_lifecycle_severity(
+    event_type: str, status: str, data: SimpleNamespace, expected: int
+) -> None:
+    assert (
+        polar_service._subscription_event_priority(event_type, status, data) == expected
+    )
+
+
+async def test_webhook_persists_scheduled_cancellation_lifecycle(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    test_user.polar_customer_id = "customer_test"
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(days=10)
+    event = SimpleNamespace(
+        TYPE="subscription.canceled",
+        timestamp=now,
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_1",
+            status="active",
+            current_period_start=now - timedelta(days=20),
+            current_period_end=ends_at,
+            cancel_at_period_end=True,
+            canceled_at=now,
+            ends_at=ends_at,
+            ended_at=None,
+            pending_update=None,
+        ),
+    )
+    await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.status == "active"
+    assert row.cancel_at_period_end is True
+    assert row.ends_at == ends_at
+    assert row.ended_at is None
+
+
+async def test_revoked_event_is_persisted_as_immediate_loss(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    test_user.polar_customer_id = "customer_test"
+    now = datetime.now(timezone.utc)
+    event = SimpleNamespace(
+        TYPE="subscription.revoked",
+        timestamp=now,
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_1",
+            status="canceled",
+            current_period_start=now - timedelta(days=1),
+            current_period_end=now + timedelta(days=29),
+            cancel_at_period_end=False,
+            canceled_at=now,
+            ends_at=now,
+            ended_at=now,
+            pending_update=None,
+        ),
+    )
+    await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.status == "revoked"
+    assert row.ended_at == now
+
+
+async def test_stale_webhook_still_repairs_entitlement_cache(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    test_user.polar_customer_id = "customer_test"
+    current = datetime.now(timezone.utc)
+    row = _subscription(test_user.id)
+    row.last_event_at = current
+    db_session.add(row)
+    await db_session.commit()
+    event = SimpleNamespace(
+        TYPE="subscription.active",
+        timestamp=current - timedelta(seconds=1),
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_1",
+            status="active",
+            current_period_start=current - timedelta(days=1),
+            current_period_end=current + timedelta(days=29),
+            cancel_at_period_end=False,
+            canceled_at=None,
+            ends_at=None,
+            ended_at=None,
+            pending_update=None,
+        ),
+    )
+
+    affected_user_id = await polar_service.handle_polar_event(db_session, event)
+
+    assert affected_user_id == test_user.id
+
+
 async def test_customer_creation_fetches_missing_email_from_clerk(
     db_session: AsyncSession,
     test_user: User,
@@ -81,7 +212,7 @@ async def test_webhook_claim_is_atomic_and_rollback_releases_it(
     assert await crud_subscription.claim_webhook(db_session, "delivery_test")
 
 
-async def test_older_and_equal_webhook_snapshots_cannot_overwrite_newer_state(
+async def test_older_webhook_snapshots_cannot_overwrite_newer_state(
     db_session: AsyncSession, test_user: User
 ) -> None:
     configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
@@ -105,7 +236,7 @@ async def test_older_and_equal_webhook_snapshots_cannot_overwrite_newer_state(
     assert newer is not None
     assert newer.tier == "tier2"
 
-    for stale_at in (newer_at, newer_at - timedelta(seconds=1)):
+    for stale_at in (newer_at - timedelta(seconds=1),):
         stale = await crud_subscription.upsert_from_webhook(
             db_session,
             user_id=test_user.id,
@@ -124,6 +255,60 @@ async def test_older_and_equal_webhook_snapshots_cannot_overwrite_newer_state(
     assert row is not None
     assert row.tier == "tier2"
     assert row.status == "active"
+
+
+async def test_equal_timestamp_distinct_events_use_fail_closed_priority(
+    db_session: AsyncSession, test_user: User
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    event_at = datetime.now(timezone.utc)
+    active = await crud_subscription.upsert_from_webhook(
+        db_session,
+        user_id=test_user.id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        product_id="product_1",
+        status="active",
+        current_period_start=event_at,
+        current_period_end=event_at + timedelta(days=30),
+        canceled_at=None,
+        event_at=event_at,
+        event_priority=30,
+    )
+    assert active is not None
+    revoked = await crud_subscription.upsert_from_webhook(
+        db_session,
+        user_id=test_user.id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        product_id="product_1",
+        status="revoked",
+        current_period_start=event_at,
+        current_period_end=event_at + timedelta(days=30),
+        canceled_at=event_at,
+        ended_at=event_at,
+        event_at=event_at,
+        event_priority=70,
+    )
+    assert revoked is not None
+
+    replay_active = await crud_subscription.upsert_from_webhook(
+        db_session,
+        user_id=test_user.id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        product_id="product_1",
+        status="active",
+        current_period_start=event_at,
+        current_period_end=event_at + timedelta(days=30),
+        canceled_at=None,
+        event_at=event_at,
+        event_priority=30,
+    )
+    assert replay_active is None
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.status == "revoked"
 
 
 async def test_concurrent_first_webhooks_serialize_without_unique_violation() -> None:

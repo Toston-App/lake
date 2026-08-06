@@ -17,6 +17,7 @@ from app.api import deps
 from app.core.config import settings
 from app.crud import crud_subscription
 from app.services.polar import handle_polar_event
+from app.utilities.redis import invalidate_entitlement
 from app.utilities.wide_events import enrich_event, mark_for_logging
 
 router = APIRouter()
@@ -105,19 +106,27 @@ async def polar_webhook(
     event_type = getattr(event, "TYPE", None) or getattr(event, "type", None)
 
     try:
-        if webhook_id and not await crud_subscription.claim_webhook(
-            db,
-            webhook_id,
-            event_type=str(event_type) if event_type else None,
-        ):
-            await db.commit()
-            enrich_event(request, webhook={"outcome": "duplicate"})
-            return Response(status_code=202)
-        await handle_polar_event(db, event, request=request)
+        duplicate = bool(
+            webhook_id
+            and not await crud_subscription.claim_webhook(
+                db,
+                webhook_id,
+                event_type=str(event_type) if event_type else None,
+            )
+        )
+        affected_user_id = await handle_polar_event(db, event, request=request)
         await db.commit()
+        if affected_user_id is not None and not await invalidate_entitlement(
+            affected_user_id
+        ):
+            raise RuntimeError("entitlement cache invalidation failed")
+        if duplicate:
+            enrich_event(request, webhook={"outcome": "duplicate_repaired"})
+            return Response(status_code=202)
     except Exception as exc:
         await db.rollback()
-        # 5xx so Polar retries; do not mark webhook_id as processed.
+        # A pre-commit failure rolls the claim back. If cache repair fails after
+        # commit, the claim remains and duplicate replay takes the repair path.
         enrich_event(
             request,
             webhook={

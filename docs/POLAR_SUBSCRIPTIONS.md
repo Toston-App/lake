@@ -103,9 +103,9 @@ Do this once per environment (sandbox org for local/staging, production org for 
    | `subscription.created` | New subscription row |
    | `subscription.updated` | Status / period changes |
    | `subscription.active` | Active paid state |
-   | `subscription.canceled` | Cancel path |
+   | `subscription.canceled` | Scheduled cancellation; access continues to `ends_at` |
    | `subscription.uncanceled` | Restore after cancel |
-   | `subscription.revoked` | Hard revoke → treated like canceled |
+   | `subscription.revoked` | Hard revoke → immediate access loss |
    | `subscription.past_due` | Payment failure state |
    | `customer.created` | Bind `polar_customer_id` via `external_id` |
    | `customer.updated` | Same bind path |
@@ -128,6 +128,7 @@ Subscription tables ship as Alembic revisions:
 | `b2c4d6e8f0a1` | Unique customer binding, `last_event_at`, `polar_webhook_event` idempotency ledger |
 | `c3d9e7f1a2b4` | Billing usage and chat observability foundations |
 | `d5e7f9a1b3c4` | Pending plan-change fields and quota lookup index |
+| `e6f8a1c2d4b5` | Polar cancellation/end fields and same-timestamp event priority |
 
 After pull:
 
@@ -269,6 +270,7 @@ Layer 1 — delivery dedupe (same HTTP delivery)
 Layer 2 — state ordering (different deliveries, out of order)
   event time → user_subscription.last_event_at
   older than last applied → skip upsert (no overwrite)
+  equal timestamp → deterministic fail-closed lifecycle priority
 ```
 
 ##### Layer 1: delivery idempotence (`webhook-id`)
@@ -304,7 +306,7 @@ Subscription writes go through `upsert_from_webhook` (`crud_subscription.py`):
 
 1. Derive `event_at` from the webhook's top-level `timestamp`, with payload/header fallbacks.
 2. Claim `webhook-id` and apply the state change in one database transaction.
-3. Use `INSERT … ON CONFLICT (user_id) DO UPDATE … WHERE excluded.last_event_at > last_event_at`; older or equal snapshots cannot overwrite current state.
+3. Use `INSERT … ON CONFLICT (user_id) DO UPDATE` with `last_event_at` and a deterministic lifecycle priority. Older snapshots cannot overwrite current state; for equal timestamps, access-losing events win over access-granting events.
 
 So:
 
@@ -313,7 +315,7 @@ So:
 | Same logical sub state applied twice with **different** delivery ids and equal timestamps | Second write is skipped |
 | Older event arrives after a newer one was applied | Skipped (`subscription_event_skipped` / `stale_event`) |
 | Handler failure | The transaction rolls back both the event claim and state change, then Polar retries |
-| Two events with the **same** `event_at` | First committed snapshot wins; the second is skipped |
+| Distinct events with the **same** `event_at` | Deterministic fail-closed priority wins (`revoked` outranks `active`) |
 
 ##### Other “safe to retry” paths
 
@@ -322,7 +324,7 @@ So:
 | `ensure_customer` | Lookup by `external_id` first; create only if missing; bind is refused if customer already owned by another user |
 | `set_polar_customer_id` | No-op-ish when same user; **ValueError** if another user owns the id |
 | `ensure_free_row` | `ON CONFLICT DO NOTHING` on `user_id` |
-| Entitlement cache | Webhook success **invalidates** Redis; replaying a successful path may delete the cache again (fine — next read reloads DB) |
+| Entitlement cache | Redis invalidation runs after the DB commit. Failure returns 500; duplicate/stale replay reruns cache repair without regressing DB state |
 | Checkout / portal create | **Not** fully idempotent: each call can create a **new** Polar checkout/session URL. Safe to call again, but you get a new session, not the same id |
 
 ##### What is *not* guaranteed
@@ -343,8 +345,10 @@ So:
 
 | Stored `status` | Effective tier used by chat |
 |-----------------|-----------------------------|
-| `active`, `trialing` | Row’s `tier` (from product mapping) |
-| anything else (`free`, `canceled`, `past_due`, `incomplete`, …) | **`free`** |
+| `active`, `trialing` without an elapsed end or incomplete scheduled-cancel data | Row’s `tier` (from product mapping) |
+| Scheduled cancellation (`cancel_at_period_end`, future `ends_at`) | Row’s tier until, but not including, `ends_at` |
+| `revoked`, `unpaid`, elapsed `ends_at`/`ended_at` | **`free`** immediately |
+| `past_due`, `incomplete`, unknown status, canceled without an end | **`free`** (fail closed) |
 
 The row may keep historical `tier` for display/debug; entitlements only grant paid features for active/trialing.
 
@@ -368,7 +372,21 @@ Limits from the tier config:
 - `messages_used >= monthly_message_limit` → deny (`message_limit_reached`)
 - `tokens_used >= monthly_token_limit` → deny (`token_limit_reached`)
 
-Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Successful subscription webhooks invalidate Redis so the next turn sees the new tier without waiting for TTL.
+Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Successful subscription webhooks invalidate Redis after the database commit so the next turn sees the new tier without waiting for TTL. An invalidation failure returns HTTP 500; Polar's duplicate retry replays the idempotent handler and repairs the cache.
+
+### Reconciliation
+
+The reconciliation command compares local rows and entitlement cache entries with authenticated Polar API responses. It prints only counts and identifiers, never customer payloads, and is a dry run unless `--repair` is supplied.
+
+```bash
+# report drift only
+python -m app.reconcile_polar_subscriptions
+
+# explicitly update local lifecycle state and cache
+python -m app.reconcile_polar_subscriptions --repair
+```
+
+Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repair. Unknown products are never mapped automatically.
 
 ### Chat client surface
 
@@ -443,8 +461,8 @@ The customer’s Polar `external_id` must match `User.uuid` or `str(User.id)`.
 
 | Polar event | Stored status (typical) | Effective tier |
 |-------------|-------------------------|----------------|
-| `subscription.canceled` | `canceled` (or payload status) | free |
-| `subscription.revoked` | `canceled` if status missing | free |
+| `subscription.canceled` | Usually `active` + `cancel_at_period_end=true` | paid until `ends_at` |
+| `subscription.revoked` | `revoked` | free immediately |
 | `subscription.past_due` | `past_due` | free |
 | `subscription.uncanceled` / `active` | `active` | paid tier from product |
 

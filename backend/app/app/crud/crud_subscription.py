@@ -23,7 +23,9 @@ _SUBSCRIPTION_LOCK_NAMESPACE = 0x53554253  # "SUBS"
 
 async def get_by_user(db: AsyncSession, user_id: int) -> UserSubscription | None:
     result = await db.execute(
-        select(UserSubscription).where(UserSubscription.user_id == user_id)
+        select(UserSubscription)
+        .where(UserSubscription.user_id == user_id)
+        .execution_options(populate_existing=True)
     )
     return cast(UserSubscription | None, result.scalars().first())
 
@@ -69,10 +71,14 @@ async def upsert_from_webhook(
     current_period_start: datetime | None,
     current_period_end: datetime | None,
     canceled_at: datetime | None,
+    cancel_at_period_end: bool = False,
+    ends_at: datetime | None = None,
+    ended_at: datetime | None = None,
     pending_tier: str | None = None,
     pending_effective_at: datetime | None = None,
     metadata: dict[str, Any] | None = None,
     event_at: datetime | None = None,
+    event_priority: int = 0,
 ) -> UserSubscription | None:
     """Insert or update a subscription row from a Polar webhook payload.
 
@@ -101,9 +107,13 @@ async def upsert_from_webhook(
         current_period_start=current_period_start,
         current_period_end=current_period_end,
         canceled_at=canceled_at,
+        cancel_at_period_end=cancel_at_period_end,
+        ends_at=ends_at,
+        ended_at=ended_at,
         pending_tier=pending_tier,
         pending_effective_at=pending_effective_at,
         last_event_at=event_at,
+        last_event_priority=event_priority,
         polar_metadata=metadata,
     )
     stmt = stmt.on_conflict_do_update(
@@ -116,15 +126,26 @@ async def upsert_from_webhook(
             "current_period_start": current_period_start,
             "current_period_end": current_period_end,
             "canceled_at": canceled_at,
+            "cancel_at_period_end": cancel_at_period_end,
+            "ends_at": ends_at,
+            "ended_at": ended_at,
             "pending_tier": pending_tier,
             "pending_effective_at": pending_effective_at,
             "last_event_at": event_at,
+            "last_event_priority": event_priority,
             "polar_metadata": metadata,
             "updated_at": datetime.now(timezone.utc),
         },
         where=or_(
             UserSubscription.last_event_at.is_(None),
             stmt.excluded.last_event_at > UserSubscription.last_event_at,
+            (
+                (stmt.excluded.last_event_at == UserSubscription.last_event_at)
+                & (
+                    stmt.excluded.last_event_priority
+                    > UserSubscription.last_event_priority
+                )
+            ),
         ),
     ).returning(UserSubscription.id)
     result = await db.execute(stmt)

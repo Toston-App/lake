@@ -33,6 +33,9 @@ class SubscriptionOut(BaseModel):
     status: str
     current_period_start: datetime | None = None
     current_period_end: datetime | None = None
+    cancel_at_period_end: bool = False
+    ends_at: datetime | None = None
+    ended_at: datetime | None = None
     pending_tier: str | None = None
     pending_effective_at: datetime | None = None
     # True when the user can open the Polar customer portal (has a bound customer).

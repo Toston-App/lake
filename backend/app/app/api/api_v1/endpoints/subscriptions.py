@@ -89,6 +89,9 @@ async def get_my_subscription(
             if row
             else quota.period_start,
             current_period_end=row.current_period_end if row else None,
+            cancel_at_period_end=bool(row and row.cancel_at_period_end),
+            ends_at=row.ends_at if row else None,
+            ended_at=row.ended_at if row else None,
             pending_tier=row.pending_tier if row else None,
             pending_effective_at=row.pending_effective_at if row else None,
             can_manage=can_manage,

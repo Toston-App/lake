@@ -10,7 +10,7 @@ Resolution order:
    (so local dev works without Polar).
 2. Otherwise read the Redis entitlement cache (`chat:ent:{user_id}`).
 3. On miss, load the `UserSubscription` row; the effective tier is the
-   row's `tier` only while `status` is active/trialing, else `free`.
+   row's lifecycle fields grant access, else `free`.
    Cache for 1h (TTL in `utilities/redis.py`).
 
 The usage window starts at the subscription's `current_period_start` for
@@ -43,6 +43,7 @@ from app.utilities.redis import (
 
 # Statuses that grant the subscribed tier; anything else falls back to free.
 _ACTIVE_STATUSES = frozenset({"active", "trialing"})
+_IMMEDIATE_LOSS_STATUSES = frozenset({"revoked", "unpaid"})
 _QUOTA_LOCK_NAMESPACE = (
     0x504F4C52  # "POLR"; avoids colliding with other advisory locks.
 )
@@ -72,12 +73,115 @@ def _external_id(user: User) -> str:
     return user.uuid or str(user.id)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def has_paid_entitlement(
+    *,
+    status: str,
+    cancel_at_period_end: bool,
+    ends_at: datetime | None,
+    ended_at: datetime | None,
+    now: datetime,
+) -> bool:
+    """Return whether a Polar lifecycle snapshot grants paid access.
+
+    Naive provider timestamps are interpreted as UTC. The boundary is
+    exclusive: access is gone at the exact ending instant.
+    """
+    now_utc = _as_utc(now)
+    ends_at_utc = _as_utc(ends_at)
+    ended_at_utc = _as_utc(ended_at)
+    if now_utc is None:  # pragma: no cover - the public contract requires now
+        return False
+    if status in _IMMEDIATE_LOSS_STATUSES:
+        return False
+    if ended_at_utc is not None and ended_at_utc <= now_utc:
+        return False
+    if ends_at_utc is not None and ends_at_utc <= now_utc:
+        return False
+    if cancel_at_period_end:
+        return bool(
+            status in _ACTIVE_STATUSES | {"canceled"} and ends_at_utc is not None
+        )
+    if status in _ACTIVE_STATUSES:
+        return True
+    return False
+
+
+def entitlement_payload(
+    row: UserSubscription | None, *, now: datetime | None = None
+) -> dict[str, str | bool | int | None]:
+    tier, _ = _effective_tier_from_row(row, now=now)
+    return {
+        "lifecycle_version": 1,
+        "tier": tier.value,
+        "status": row.status if row else "free",
+        "current_period_start": (
+            row.current_period_start.isoformat()
+            if row and row.current_period_start
+            else None
+        ),
+        "current_period_end": (
+            row.current_period_end.isoformat()
+            if row and row.current_period_end
+            else None
+        ),
+        "cancel_at_period_end": bool(row and row.cancel_at_period_end),
+        "ends_at": row.ends_at.isoformat() if row and row.ends_at else None,
+        "ended_at": row.ended_at.isoformat() if row and row.ended_at else None,
+    }
+
+
+def _parse_cached_dt(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def effective_tier_from_payload(
+    payload: dict[str, object], *, now: datetime
+) -> Tier | None:
+    """Re-evaluate cached lifecycle state; ``None`` means reload from DB."""
+    if payload.get("lifecycle_version") != 1:
+        return None
+    status = payload.get("status")
+    if not isinstance(status, str):
+        return Tier.free
+    if not has_paid_entitlement(
+        status=status,
+        cancel_at_period_end=payload.get("cancel_at_period_end") is True,
+        ends_at=_parse_cached_dt(payload.get("ends_at")),
+        ended_at=_parse_cached_dt(payload.get("ended_at")),
+        now=now,
+    ):
+        return Tier.free
+    try:
+        return tier_from_value(str(payload.get("tier", "free")))
+    except ValueError:
+        return Tier.free
+
+
 def _effective_tier_from_row(
-    row: UserSubscription | None,
+    row: UserSubscription | None, *, now: datetime | None = None
 ) -> tuple[Tier, UserSubscription | None]:
     if row is None:
         return Tier.free, None
-    if row.status in _ACTIVE_STATUSES:
+    if has_paid_entitlement(
+        status=row.status,
+        cancel_at_period_end=bool(row.cancel_at_period_end),
+        ends_at=row.ends_at,
+        ended_at=row.ended_at,
+        now=now or datetime.now(timezone.utc),
+    ):
         try:
             tier = tier_from_value(row.tier)
         except ValueError:
@@ -98,33 +202,15 @@ async def get_user_tier(
 
     cached = await get_entitlement(user_id)
     if cached:
-        try:
-            tier = tier_from_value(cached.get("tier", "free"))
-        except ValueError:
-            tier = Tier.free
-        # Reconstruct a lightweight row-like dict; callers that need the row
-        # (period dates) should use `_load_and_cache` instead.
-        return tier, None
+        tier = effective_tier_from_payload(cached, now=datetime.now(timezone.utc))
+        if tier is not None:
+            # Callers needing period dates use `_load_row_for_period` instead.
+            return tier, None
+        await invalidate_entitlement(user_id)
 
     row = await crud_subscription.get_by_user(db, user_id)
     tier, _ = _effective_tier_from_row(row)
-    await set_entitlement(
-        user_id,
-        {
-            "tier": tier.value,
-            "status": row.status if row else "free",
-            "current_period_start": (
-                row.current_period_start.isoformat()
-                if row and row.current_period_start
-                else None
-            ),
-            "current_period_end": (
-                row.current_period_end.isoformat()
-                if row and row.current_period_end
-                else None
-            ),
-        },
-    )
+    await set_entitlement(user_id, entitlement_payload(row))
     return tier, row
 
 
@@ -180,7 +266,13 @@ async def check_quota(db: AsyncSession, user: User) -> QuotaResult:
 
     if (
         row is not None
-        and row.status in _ACTIVE_STATUSES
+        and has_paid_entitlement(
+            status=row.status,
+            cancel_at_period_end=bool(row.cancel_at_period_end),
+            ends_at=row.ends_at,
+            ended_at=row.ended_at,
+            now=datetime.now(timezone.utc),
+        )
         and row.current_period_start is not None
     ):
         period_start = row.current_period_start

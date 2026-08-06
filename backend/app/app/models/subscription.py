@@ -8,6 +8,7 @@ chat usage and tool availability.
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -42,12 +43,17 @@ class UserSubscription(Base):
     current_period_start = Column(DateTime(timezone=True), nullable=True)
     current_period_end = Column(DateTime(timezone=True), nullable=True)
     canceled_at = Column(DateTime(timezone=True), nullable=True)
+    cancel_at_period_end: bool = Column(Boolean, nullable=False, default=False)
+    ends_at = Column(DateTime(timezone=True), nullable=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
     # A scheduled Polar plan change. The current tier remains effective until
     # this timestamp and the corresponding webhook changes product_id.
     pending_tier: str | None = Column(String, nullable=True)
     pending_effective_at = Column(DateTime(timezone=True), nullable=True)
     # Timestamp of the newest Polar event applied to this row (ordering guard).
     last_event_at = Column(DateTime(timezone=True), nullable=True)
+    # Deterministic, fail-closed ordering for distinct events sharing a timestamp.
+    last_event_priority: int = Column(Integer, nullable=False, default=0)
     # Raw Polar payload (last webhook event) for debugging/auditing.
     polar_metadata = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
