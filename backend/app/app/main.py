@@ -138,6 +138,7 @@ security = HTTPBasic()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "*",
         "https://www.cleverbill.ing",
         "https://cleverbill.ing",
         "https://api.cleverbill.ing",
