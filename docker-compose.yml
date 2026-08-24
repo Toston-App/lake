@@ -38,6 +38,8 @@ services:
 
   pgadmin:
     image: dpage/pgadmin4:latest
+    ports:
+    - "${TAILSCALE_IP}:5050:80"
     depends_on:
       - db
     env_file:
