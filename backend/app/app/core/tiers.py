@@ -87,14 +87,14 @@ TIERS: dict[Tier, TierConfig] = {
         tier=Tier.tier1,
         label="Basic",
         monthly_message_limit=100,
-        monthly_token_limit=1_000_000,
+        monthly_token_limit=600_000,
         features=frozenset({FEATURE_CHARTS}),
         polar_product_id=None,  # set via configure_product_ids from env
         price_hint="$4.99/mo",
     ),
     Tier.tier2: TierConfig(
         tier=Tier.tier2,
-        label="Pro",
+        label="Premium",
         monthly_message_limit=None,
         monthly_token_limit=None,
         features=frozenset(ALL_FEATURES),
