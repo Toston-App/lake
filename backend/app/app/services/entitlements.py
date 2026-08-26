@@ -198,7 +198,7 @@ async def get_user_tier(
         try:
             return tier_from_value(settings.SUBSCRIPTIONS_DEV_DEFAULT_TIER), None
         except ValueError:
-            return Tier.tier3, None
+            return Tier.tier2, None
 
     cached = await get_entitlement(user_id)
     if cached:
@@ -222,7 +222,7 @@ async def _load_row_for_period(
         try:
             return tier_from_value(settings.SUBSCRIPTIONS_DEV_DEFAULT_TIER), None
         except ValueError:
-            return Tier.tier3, None
+            return Tier.tier2, None
     row = await crud_subscription.get_by_user(db, user_id)
     return _effective_tier_from_row(row)
 

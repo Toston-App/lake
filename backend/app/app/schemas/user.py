@@ -51,7 +51,7 @@ class User(UserInDBBase):
 
 class UserGetMe(BaseModel):
     country: Optional[str] = None
-    # Subscription tier slug ("free" | "tier1" | "tier2" | "tier3").
+    # Subscription tier slug ("free" | "tier1" | "tier2").
     # Populated by the /users/me endpoint from the (cached) entitlement.
     subscription_tier: Optional[str] = None
 

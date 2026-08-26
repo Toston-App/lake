@@ -312,7 +312,7 @@ async def test_equal_timestamp_distinct_events_use_fail_closed_priority(
 
 
 async def test_concurrent_first_webhooks_serialize_without_unique_violation() -> None:
-    configure_product_ids({"tier1": "product_1", "tier3": "product_3"})
+    configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
     email = f"polar-race-{uuid4()}@example.com"
     customer_id = f"customer-{uuid4()}"
 
@@ -344,13 +344,13 @@ async def test_concurrent_first_webhooks_serialize_without_unique_violation() ->
     try:
         await asyncio.gather(
             apply("product_1", older_at),
-            apply("product_3", newer_at),
+            apply("product_2", newer_at),
         )
         async with TestSessionLocal() as verify:
             row = await crud_subscription.get_by_user(verify, user_id)
             assert row is not None
             assert row.polar_customer_id == customer_id
-            assert row.tier == "tier3"
+            assert row.tier == "tier2"
             assert row.last_event_at == newer_at
     finally:
         async with TestSessionLocal() as cleanup:
@@ -425,7 +425,6 @@ async def test_change_plan_uses_directional_proration(
     monkeypatch.setattr(polar_service, "_product_ids_configured", False)
     monkeypatch.setattr(settings, "POLAR_PRODUCT_TIER1_ID", "product_1")
     monkeypatch.setattr(settings, "POLAR_PRODUCT_TIER2_ID", "product_2")
-    monkeypatch.setattr(settings, "POLAR_PRODUCT_TIER3_ID", "product_3")
     test_user.polar_customer_id = "customer_test"
     db_session.add(_subscription(test_user.id, tier=current.value))
     await db_session.commit()

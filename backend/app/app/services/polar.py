@@ -95,7 +95,6 @@ def _configure_product_ids() -> None:
         {
             "tier1": settings.POLAR_PRODUCT_TIER1_ID,
             "tier2": settings.POLAR_PRODUCT_TIER2_ID,
-            "tier3": settings.POLAR_PRODUCT_TIER3_ID,
         }
     )
     _product_ids_configured = True
@@ -329,7 +328,7 @@ async def change_plan(
             detail="Current subscription product is unresolved; contact support",
         )
 
-    rank = {Tier.free: 0, Tier.tier1: 1, Tier.tier2: 2, Tier.tier3: 3}
+    rank = {Tier.free: 0, Tier.tier1: 1, Tier.tier2: 2}
     is_upgrade = rank[tier] > rank[current_tier]
     effective = "immediate" if is_upgrade else "next_period"
 

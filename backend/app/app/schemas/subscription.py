@@ -52,7 +52,7 @@ class SubscriptionMeOut(BaseModel):
 
 
 class CheckoutRequest(BaseModel):
-    tier: str  # tier1 | tier2 | tier3
+    tier: str  # tier1 | tier2
 
 
 class CheckoutOut(BaseModel):

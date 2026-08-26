@@ -36,7 +36,7 @@ class UserSubscription(Base):
     # too for checkout creation; kept here for self-contained webhook writes.
     polar_customer_id: str | None = Column(String, index=True, nullable=True)
     polar_subscription_id: str | None = Column(String, index=True, nullable=True)
-    # Tier enum value ("free" | "tier1" | "tier2" | "tier3").
+    # Tier enum value ("free" | "tier1" | "tier2").
     tier: str = Column(String, nullable=False, default="free", index=True)
     # free | active | canceled | past_due | incomplete | ...
     status: str = Column(String, nullable=False, default="free", index=True)

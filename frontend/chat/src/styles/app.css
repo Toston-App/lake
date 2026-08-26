@@ -1312,7 +1312,6 @@ body {
 .usage-tier-badge[data-tier="free"] { background: #e4e4e7; color: #52525b; }
 .usage-tier-badge[data-tier="tier1"] { background: #dbeafe; color: #1d4ed8; }
 .usage-tier-badge[data-tier="tier2"] { background: #ede9fe; color: #6d28d9; }
-.usage-tier-badge[data-tier="tier3"] { background: #fef3c7; color: #b45309; }
 
 .usage-text { white-space: nowrap; }
 

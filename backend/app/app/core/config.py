@@ -259,18 +259,18 @@ class Settings(BaseSettings):
     # checkout. Falls back to SERVER_HOST when not set.
     POLAR_SUCCESS_URL_BASE: AnyHttpUrl | None = None
     # Polar product ids per paying tier. Optional in sandbox; production
-    # startup requires three non-empty, unique ids.
+    # startup requires two non-empty, unique ids.
     POLAR_PRODUCT_TIER1_ID: str | None = None
     POLAR_PRODUCT_TIER2_ID: str | None = None
-    POLAR_PRODUCT_TIER3_ID: str | None = None
     POLAR_WEBHOOK_MAX_BYTES: int = 262_144
     # Master switch. None/unset = auto-enable when POLAR_ACCESS_TOKEN is set.
     # Explicit false always disables (even if a token is present). Explicit true
     # (or auto-enable) requires access token + webhook secret + org id.
     SUBSCRIPTIONS_ENABLED: bool | None = None
     # Used only when SUBSCRIPTIONS_ENABLED is False. Sandbox/dev default is
-    # tier3 for full chat locally; production always forces free (see validator).
-    SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier3"
+    # tier2 (unlimited) for full chat locally; production always forces free
+    # (see validator).
+    SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier2"
 
     @field_validator("POLAR_SERVER")
     def _polar_server_value(cls, v: str) -> str:
@@ -282,8 +282,8 @@ class Settings(BaseSettings):
     @field_validator("SUBSCRIPTIONS_DEV_DEFAULT_TIER")
     def _dev_default_tier_value(cls, v: str, info: dict[str, Any]) -> str:
         v = (v or "").strip().lower()
-        if v not in ("free", "tier1", "tier2", "tier3"):
-            v = "tier3"
+        if v not in ("free", "tier1", "tier2"):
+            v = "tier2"
         # Fail closed in production: never grant a paid tier when Polar is off.
         if info.data.get("POLAR_SERVER") == "production":
             return "free"
@@ -332,8 +332,11 @@ class Settings(BaseSettings):
         product_ids = [
             (self.POLAR_PRODUCT_TIER1_ID or "").strip(),
             (self.POLAR_PRODUCT_TIER2_ID or "").strip(),
-            (self.POLAR_PRODUCT_TIER3_ID or "").strip(),
         ]
+        if not all(product_ids):
+            raise ValueError(
+                "Production subscriptions require all POLAR_PRODUCT_TIER*_ID values"
+            )
         if not all(product_ids):
             raise ValueError(
                 "Production subscriptions require all POLAR_PRODUCT_TIER*_ID values"

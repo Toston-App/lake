@@ -1,4 +1,4 @@
-export type TierSlug = 'free' | 'tier1' | 'tier2' | 'tier3'
+export type TierSlug = 'free' | 'tier1' | 'tier2'
 
 export type TierOut = {
   tier: TierSlug

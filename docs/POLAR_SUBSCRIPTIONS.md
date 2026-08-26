@@ -21,7 +21,7 @@ For chat API behavior (including HTTP **402** when over quota), see [CHAT_API.md
 | Success redirect | `{POLAR_SUCCESS_URL_BASE or SERVER_HOST}/account?checkout=success` |
 | Servers | `sandbox` → Polar sandbox API; `production` → live API |
 
-When subscriptions are **disabled**, every user gets `SUBSCRIPTIONS_DEV_DEFAULT_TIER` (default `tier3` for local full-chat). When `POLAR_SERVER=production`, that default is forced to **`free`** so a misconfigured production deploy never grants a paid tier without Polar.
+When subscriptions are **disabled**, every user gets `SUBSCRIPTIONS_DEV_DEFAULT_TIER` (default `tier2` for local full-chat). When `POLAR_SERVER=production`, that default is forced to **`free`** so a misconfigured production deploy never grants a paid tier without Polar.
 
 ### Code map
 
@@ -56,13 +56,12 @@ Copy the Polar block from `.env.develop` into `.env` and fill values for the env
 | `POLAR_SUCCESS_URL_BASE` | no | falls back to `SERVER_HOST` | Public base URL used to build checkout `success_url` |
 | `POLAR_PRODUCT_TIER1_ID` | for checkout | — | Polar product id for tier 1 |
 | `POLAR_PRODUCT_TIER2_ID` | for checkout | — | Polar product id for tier 2 |
-| `POLAR_PRODUCT_TIER3_ID` | for checkout | — | Polar product id for tier 3 |
 | `POLAR_WEBHOOK_MAX_BYTES` | no | `262144` | Maximum raw webhook body size |
 | `CLERK_SECRET_KEY` | for UUID-only Clerk users | — | Clerk Backend API secret used to retrieve the user's primary email/name before creating a Polar customer |
 | `CHAT_TURN_RESERVATION_TTL_SECONDS` | no | `900` | Maximum age of an in-progress quota reservation |
-| `SUBSCRIPTIONS_DEV_DEFAULT_TIER` | no | `tier3` | Tier when subscriptions are disabled. Forced to `free` if `POLAR_SERVER=production` |
+| `SUBSCRIPTIONS_DEV_DEFAULT_TIER` | no | `tier2` | Tier when subscriptions are disabled. Forced to `free` if `POLAR_SERVER=production` |
 
-Product ids are optional for sandbox app boot, but all three are required and must be unique in production. Unknown webhook product ids are logged and ignored without changing the user's current entitlement.
+Product ids are optional for sandbox app boot, but both are required and must be unique in production. Unknown webhook product ids are logged and ignored without changing the user's current entitlement.
 
 ### Enable rules
 
@@ -81,7 +80,7 @@ If enabled and any of `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, or `POLAR_OR
 Do this once per environment (sandbox org for local/staging, production org for live).
 
 1. **Create an organization** in [Polar](https://polar.sh) (use **sandbox** for non-production).
-2. **Create three recurring products** — one per paying tier (`tier1`, `tier2`, `tier3`). Prices are cosmetic in our UI (`price_hint` in code); Polar is the system of record for charging.
+2. **Create two recurring products** — one per paying tier (`tier1`, `tier2`). Prices are cosmetic in our UI (`price_hint` in code); Polar is the system of record for charging.
 3. **Create an organization access token** → set `POLAR_ACCESS_TOKEN`.
 4. **Copy the organization id** → set `POLAR_ORGANIZATION_ID`.
 5. **Create a webhook endpoint** pointing at:
@@ -113,7 +112,7 @@ Do this once per environment (sandbox org for local/staging, production org for 
    Other event types (checkout, order, benefit grant, …) are **acknowledged and ignored** so Polar does not retry forever.
 
 7. **Copy the webhook secret** → set `POLAR_WEBHOOK_SECRET`.
-8. **Paste product ids** into `POLAR_PRODUCT_TIER1_ID` / `TIER2` / `TIER3`.
+8. **Paste product ids** into `POLAR_PRODUCT_TIER1_ID` / `TIER2`.
 9. Set `POLAR_SERVER` to `sandbox` or `production` to match the org you used.
 10. Set `POLAR_SUCCESS_URL_BASE` to the **public origin users hit for the chat app** if it differs from `SERVER_HOST` (checkout returns to `{base}/account?checkout=success`).
 11. Disable **multiple subscriptions per customer** in Polar. Application plan changes update the one existing subscription. Portal plan changes may remain disabled because the application enforces upgrade/downgrade proration itself.
@@ -143,7 +142,7 @@ $ alembic upgrade head
 
 ```bash
 SUBSCRIPTIONS_ENABLED=false
-SUBSCRIPTIONS_DEV_DEFAULT_TIER=tier3   # full features locally
+SUBSCRIPTIONS_DEV_DEFAULT_TIER=tier2   # full features locally
 POLAR_SERVER=sandbox
 ```
 
@@ -159,7 +158,6 @@ POLAR_WEBHOOK_SECRET=...
 POLAR_ORGANIZATION_ID=...
 POLAR_PRODUCT_TIER1_ID=...
 POLAR_PRODUCT_TIER2_ID=...
-POLAR_PRODUCT_TIER3_ID=...
 POLAR_SUCCESS_URL_BASE=https://<your-tunnel-or-staging-host>
 ```
 
@@ -187,9 +185,8 @@ Defined in `backend/app/app/core/tiers.py` (numbers are tunable starting default
 | Tier | Message limit / mo | Token limit / mo | Features (examples) |
 |------|--------------------|------------------|---------------------|
 | `free` | 10 | 20_000 | none |
-| `tier1` | 100 | 200_000 | `search_web` |
-| `tier2` | 500 | 1_000_000 | + `charts`, `advanced_analytics` |
-| `tier3` | unlimited | unlimited | all (`bulk_operations`, `priority_support`, …) |
+| `tier1` (Basic, $5/mo) | 100 | 200_000 | `search_web` |
+| `tier2` (Unlimited, $14.99/mo) | unlimited | unlimited | all (`search_web`, `charts`, `advanced_analytics`, `bulk_operations`, `priority_support`, …) |
 
 - `polar_product_id` is injected from env via `configure_product_ids`.
 - Checkout uses product id → Polar.
@@ -422,7 +419,7 @@ Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repai
 
 ```bash
 SUBSCRIPTIONS_ENABLED=false
-SUBSCRIPTIONS_DEV_DEFAULT_TIER=tier3
+SUBSCRIPTIONS_DEV_DEFAULT_TIER=tier2
 ```
 
 Checkout/portal return **503**. No webhook needed.
@@ -546,7 +543,7 @@ List tier configs for the pricing UI.
 
 | Field | Notes |
 |-------|--------|
-| `tier` | `free` \| `tier1` \| `tier2` \| `tier3` |
+| `tier` | `free` \| `tier1` \| `tier2` |
 | `label` | Display name |
 | `monthly_message_limit` | `null` = unlimited |
 | `monthly_token_limit` | `null` = unlimited |

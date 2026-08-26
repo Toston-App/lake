@@ -25,7 +25,6 @@ class Tier(str, Enum):
     free = "free"
     tier1 = "tier1"
     tier2 = "tier2"
-    tier3 = "tier3"
 
 
 # Feature keys consumed by the chat agent / system prompt.
@@ -86,32 +85,21 @@ TIERS: dict[Tier, TierConfig] = {
     ),
     Tier.tier1: TierConfig(
         tier=Tier.tier1,
-        label="Tier 1",
+        label="Basic",
         monthly_message_limit=100,
-        monthly_token_limit=200_000,
-        features=frozenset({FEATURE_SEARCH_WEB}),
+        monthly_token_limit=1_000_000,
+        features=frozenset({FEATURE_CHARTS}),
         polar_product_id=None,  # set via configure_product_ids from env
-        price_hint="$5/mo",
+        price_hint="$4.99/mo",
     ),
     Tier.tier2: TierConfig(
         tier=Tier.tier2,
-        label="Tier 2",
-        monthly_message_limit=500,
-        monthly_token_limit=1_000_000,
-        features=frozenset(
-            {FEATURE_SEARCH_WEB, FEATURE_CHARTS, FEATURE_ADVANCED_ANALYTICS}
-        ),
-        polar_product_id=None,
-        price_hint="$15/mo",
-    ),
-    Tier.tier3: TierConfig(
-        tier=Tier.tier3,
-        label="Tier 3",
+        label="Pro",
         monthly_message_limit=None,
         monthly_token_limit=None,
         features=frozenset(ALL_FEATURES),
         polar_product_id=None,
-        price_hint="$30/mo",
+        price_hint="$14.99/mo",
     ),
 }
 

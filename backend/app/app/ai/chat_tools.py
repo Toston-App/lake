@@ -1094,7 +1094,7 @@ async def _execute_no_arg_tool(
 
 def build_system_prompt(
     bootstrap: dict,
-    tier: Tier = Tier.tier3,
+    tier: Tier = Tier.tier2,
     *,
     local_date: date | None = None,
     time_zone: str = "UTC",
