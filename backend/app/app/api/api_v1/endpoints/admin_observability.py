@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models
 from app.api import deps
 from app.schemas.observability import (
+    EconomicsSummary,
+    EconomicsUsersResponse,
     ModelStat,
     ObservabilitySummary,
     TimeseriesPoint,
@@ -90,6 +92,44 @@ async def observability_turns(
         limit=limit,
     )
     return {"items": items, "count": len(items)}
+
+
+@router.get("/economics", response_model=EconomicsSummary)
+async def observability_economics(
+    db: AsyncSession = Depends(deps.async_get_db),
+    start: Optional[datetime] = Query(None),
+    end: Optional[datetime] = Query(None),
+    current_user: models.User = Depends(deps.get_current_active_superuser),
+) -> Any:
+    return await crud.observability.get_economics_summary(db, start=start, end=end)
+
+
+@router.get("/users", response_model=EconomicsUsersResponse)
+async def observability_economics_users(
+    db: AsyncSession = Depends(deps.async_get_db),
+    start: Optional[datetime] = Query(None),
+    end: Optional[datetime] = Query(None),
+    tier: Optional[str] = Query(None),
+    outcome: Literal["winning", "losing", "all"] = Query("all"),
+    search: Optional[str] = Query(None),
+    sort: Literal["profit", "cost", "revenue", "tokens", "turns"] = Query("profit"),
+    order: Literal["asc", "desc"] = Query("asc"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    current_user: models.User = Depends(deps.get_current_active_superuser),
+) -> Any:
+    return await crud.observability.get_economics_users(
+        db,
+        start=start,
+        end=end,
+        tier=tier,
+        outcome=outcome,
+        search=search,
+        sort=sort,
+        order=order,
+        skip=skip,
+        limit=limit,
+    )
 
 
 @router.get("/turns/{turn_id}", response_model=TurnDetail)

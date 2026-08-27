@@ -24,7 +24,6 @@ def assert_user_me_response(body: dict[str, object], user: User) -> None:
         "id": user.id,
         "email": user.email,
         "country": user.country,
-        "is_superuser": user.is_superuser,
         "subscription_tier": settings.SUBSCRIPTIONS_DEV_DEFAULT_TIER,
     }
 

@@ -58,6 +58,8 @@ class TierConfig:
     polar_product_id: str | None = None
     # Human-friendly price hint for the pricing UI. Cosmetic only.
     price_hint: str | None = None
+    # Catalog list price used by the admin P&L dashboard. Not Polar invoices.
+    monthly_price_usd: float = 0.0
 
 
 # Map of product id -> tier, rebuilt whenever product ids are configured.
@@ -82,6 +84,7 @@ TIERS: dict[Tier, TierConfig] = {
         features=frozenset(),
         polar_product_id=None,
         price_hint="$0",
+        monthly_price_usd=0.0,
     ),
     Tier.tier1: TierConfig(
         tier=Tier.tier1,
@@ -91,6 +94,7 @@ TIERS: dict[Tier, TierConfig] = {
         features=frozenset({FEATURE_CHARTS}),
         polar_product_id=None,  # set via configure_product_ids from env
         price_hint="$4.99/mo",
+        monthly_price_usd=4.99,
     ),
     Tier.tier2: TierConfig(
         tier=Tier.tier2,
@@ -100,6 +104,7 @@ TIERS: dict[Tier, TierConfig] = {
         features=frozenset(ALL_FEATURES),
         polar_product_id=None,
         price_hint="$14.99/mo",
+        monthly_price_usd=14.99,
     ),
 }
 
@@ -125,6 +130,7 @@ def configure_product_ids(mapping: dict[str, str | None]) -> None:
                 features=cfg.features,
                 polar_product_id=pid,
                 price_hint=cfg.price_hint,
+                monthly_price_usd=cfg.monthly_price_usd,
             )
         else:
             new[t] = copy.copy(cfg)

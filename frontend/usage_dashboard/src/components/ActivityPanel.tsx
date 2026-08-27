@@ -8,9 +8,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import {
-  ApiError,
-} from '../../api/client'
+import { ApiError } from '../api/client'
 import {
   fetchCostTimeseries,
   fetchModelStats,
@@ -18,22 +16,18 @@ import {
   fetchToolStats,
   fetchTurnDetail,
   fetchTurns,
-} from '../../api/observability'
+} from '../api/observability'
 import type {
   LLMCallDetail,
   ModelStat,
+  ObservabilityRangeKey,
   ObservabilitySummary,
-  TimeRangeKey,
   TimeseriesPoint,
   ToolCallDetail,
   ToolStat,
   TurnDetail,
   TurnRow,
-} from '../../types/observability'
-
-type Props = {
-  onBack: () => void
-}
+} from '../types/observability'
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -91,8 +85,8 @@ function statusClass(status: string): string {
   return 'status-badge status-pending'
 }
 
-export function ObservabilityDashboard({ onBack }: Props) {
-  const [range, setRange] = useState<TimeRangeKey>('7d')
+export function ActivityPanel() {
+  const [range, setRange] = useState<ObservabilityRangeKey>('7d')
   const [summary, setSummary] = useState<ObservabilitySummary | null>(null)
   const [timeseries, setTimeseries] = useState<TimeseriesPoint[]>([])
   const [tools, setTools] = useState<ToolStat[]>([])
@@ -110,7 +104,7 @@ export function ObservabilityDashboard({ onBack }: Props) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const loadOverview = useCallback(async (r: TimeRangeKey) => {
+  const loadOverview = useCallback(async (r: ObservabilityRangeKey) => {
     setLoading(true)
     setError(null)
     try {
@@ -132,7 +126,7 @@ export function ObservabilityDashboard({ onBack }: Props) {
   }, [])
 
   const loadTurns = useCallback(
-    async (r: TimeRangeKey, st: string, srch: string) => {
+    async (r: ObservabilityRangeKey, st: string, srch: string) => {
       try {
         const res = await fetchTurns({
           range: r,
@@ -187,27 +181,21 @@ export function ObservabilityDashboard({ onBack }: Props) {
   }
 
   return (
-    <div className="app admin-view">
-      <header className="chat-header">
-        <h1>Observability</h1>
-        <div className="admin-header-actions">
-          <div className="range-toggle">
-            {(['7d', '30d', 'all'] as TimeRangeKey[]).map((r) => (
-              <button
-                key={r}
-                type="button"
-                className={range === r ? 'range-btn active' : 'range-btn'}
-                onClick={() => setRange(r)}
-              >
-                {r === 'all' ? 'All time' : r}
-              </button>
-            ))}
-          </div>
-          <button type="button" className="logout-btn" onClick={onBack}>
-            Back to chat
-          </button>
+    <>
+      <div className="panel-toolbar">
+        <div className="range-toggle">
+          {(['7d', '30d', 'all'] as ObservabilityRangeKey[]).map((r) => (
+            <button
+              key={r}
+              type="button"
+              className={range === r ? 'range-btn active' : 'range-btn'}
+              onClick={() => setRange(r)}
+            >
+              {r === 'all' ? 'All time' : r}
+            </button>
+          ))}
         </div>
-      </header>
+      </div>
 
       <main className="admin-main">
         {error && <p className="error-banner">{error}</p>}
@@ -431,7 +419,7 @@ export function ObservabilityDashboard({ onBack }: Props) {
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }
 

@@ -1,8 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchMe } from './api/observability'
-import { ApiError } from './api/client'
 import { AccountView } from './components/AccountView'
-import { ObservabilityDashboard } from './components/admin/ObservabilityDashboard'
 import { ConversationSidebar } from './components/ConversationSidebar'
 import { LoginForm } from './components/LoginForm'
 import { MessageInput } from './components/MessageInput'
@@ -15,41 +12,24 @@ import { useAuth } from './hooks/useAuth'
 import { useChat } from './hooks/useChat'
 import { useSubscription } from './hooks/useSubscription'
 
-type View = 'chat' | 'admin' | 'account'
+type View = 'chat' | 'account'
 
 function App() {
   const { isAuthenticated, loginError, isLoggingIn, login, logout } = useAuth()
   const chat = useChat()
   const subscription = useSubscription(isAuthenticated)
   const { loadConversations } = chat
-  const [isSuperuser, setIsSuperuser] = useState(false)
   const [view, setView] = useState<View>('chat')
 
   useEffect(() => {
-    let cancelled = false
     const task = window.setTimeout(() => {
       if (isAuthenticated) {
         void loadConversations()
-        fetchMe()
-          .then((me) => {
-            if (!cancelled) setIsSuperuser(me.is_superuser)
-          })
-          .catch((err) => {
-            // 403/401 just means no access; report only server failures.
-            if (err instanceof ApiError && err.status >= 500) {
-              console.error('Failed to load user profile', err)
-            }
-          })
       } else {
-        setIsSuperuser(false)
         setView('chat')
       }
     }, 0)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(task)
-    }
+    return () => window.clearTimeout(task)
   }, [isAuthenticated, loadConversations])
 
   if (!isAuthenticated) {
@@ -62,10 +42,6 @@ function App() {
         />
       </div>
     )
-  }
-
-  if (view === 'admin' && isSuperuser) {
-    return <ObservabilityDashboard onBack={() => setView('chat')} />
   }
 
   if (view === 'account') {
@@ -92,15 +68,6 @@ function App() {
         <h1>Toston Chat</h1>
         <div className="chat-header-actions">
           <UsageIndicator data={subscription.data} onUpgrade={openAccount} />
-          {isSuperuser && (
-            <button
-              type="button"
-              className="logout-btn"
-              onClick={() => setView('admin')}
-            >
-              Observability
-            </button>
-          )}
           <button
             type="button"
             className="logout-btn"

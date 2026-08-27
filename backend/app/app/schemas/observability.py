@@ -107,3 +107,47 @@ class TurnDetail(TurnRow):
 class TurnsListResponse(BaseModel):
     items: list[TurnRow]
     count: int
+
+
+class EconomicsUserRow(BaseModel):
+    user_id: int
+    email: str | None = None
+    name: str | None = None
+    tier: str
+    tier_label: str
+    status: str
+    is_paid: bool
+    turns: int
+    tokens: int
+    messages_limit: int | None = None
+    tokens_limit: int | None = None
+    ai_cost_usd: float
+    monthly_price_usd: float
+    estimated_revenue_usd: float
+    profit_usd: float
+
+
+class EconomicsUsersResponse(BaseModel):
+    items: list[EconomicsUserRow]
+    count: int
+
+
+class EconomicsTierBreakdown(BaseModel):
+    tier: str
+    label: str
+    users: int
+    ai_cost_usd: float
+    estimated_revenue_usd: float
+    profit_usd: float
+
+
+class EconomicsSummary(BaseModel):
+    window_days: int
+    users: int
+    paying_users: int
+    losing_users: int
+    winning_users: int
+    ai_cost_usd: float
+    estimated_revenue_usd: float
+    profit_usd: float
+    by_tier: list[EconomicsTierBreakdown]

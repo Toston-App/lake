@@ -1,36 +1,30 @@
 import { apiFetch } from './client'
 import type {
   ModelStat,
+  ObservabilityRangeKey,
   ObservabilitySummary,
-  TimeRangeKey,
   TimeseriesPoint,
   ToolStat,
   TurnDetail,
   TurnsListResponse,
-  UserMe,
 } from '../types/observability'
 
 const ADMIN_PREFIX = '/api/v1/admin/observability'
-const USERS_PREFIX = '/api/v1/users'
 
-function rangeToParams(range: TimeRangeKey): string {
+function rangeToParams(range: ObservabilityRangeKey): string {
   if (range === 'all') return ''
   const days = range === '7d' ? 7 : 30
   const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
   return `start=${encodeURIComponent(start)}`
 }
 
-function withRange(range: TimeRangeKey): string {
+function withRange(range: ObservabilityRangeKey): string {
   const r = rangeToParams(range)
   return r ? `?${r}` : ''
 }
 
-export function fetchMe(): Promise<UserMe> {
-  return apiFetch<UserMe>(`${USERS_PREFIX}/me`)
-}
-
 export function fetchSummary(
-  range: TimeRangeKey,
+  range: ObservabilityRangeKey,
 ): Promise<ObservabilitySummary> {
   return apiFetch<ObservabilitySummary>(
     `${ADMIN_PREFIX}/summary${withRange(range)}`,
@@ -38,7 +32,7 @@ export function fetchSummary(
 }
 
 export function fetchCostTimeseries(
-  range: TimeRangeKey,
+  range: ObservabilityRangeKey,
   bucket: 'hour' | 'day' | 'week' | 'month' = 'day',
 ): Promise<TimeseriesPoint[]> {
   const r = rangeToParams(range)
@@ -46,16 +40,16 @@ export function fetchCostTimeseries(
   return apiFetch<TimeseriesPoint[]>(`${ADMIN_PREFIX}/cost-timeseries?${q}`)
 }
 
-export function fetchToolStats(range: TimeRangeKey): Promise<ToolStat[]> {
+export function fetchToolStats(range: ObservabilityRangeKey): Promise<ToolStat[]> {
   return apiFetch<ToolStat[]>(`${ADMIN_PREFIX}/tools${withRange(range)}`)
 }
 
-export function fetchModelStats(range: TimeRangeKey): Promise<ModelStat[]> {
+export function fetchModelStats(range: ObservabilityRangeKey): Promise<ModelStat[]> {
   return apiFetch<ModelStat[]>(`${ADMIN_PREFIX}/models${withRange(range)}`)
 }
 
 export type TurnsFilter = {
-  range: TimeRangeKey
+  range: ObservabilityRangeKey
   status?: string
   search?: string
   model?: string

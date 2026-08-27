@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal, Optional
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.tiers import Tier, get_tier_config, tier_from_value
 from app.models.chat_observability import (
     ChatObsLLMCall,
     ChatObsToolCall,
     ChatObsTurn,
 )
+from app.models.subscription import UserSubscription
 from app.models.user import User
+from app.services.entitlements import has_paid_entitlement
 
 
 async def get_summary(
@@ -344,3 +347,215 @@ def _to_float(v: Any) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _window_days(start: datetime | None, end: datetime | None) -> int:
+    now = datetime.now(timezone.utc)
+    end_dt = end or now
+    start_dt = start or (end_dt - timedelta(days=30))
+    seconds = (end_dt - start_dt).total_seconds()
+    return max(1, int(seconds // 86400))
+
+
+def _money(v: float) -> float:
+    return round(v, 6)
+
+
+def _build_economics_row(
+    *,
+    user_id: int,
+    email: str | None,
+    name: str | None,
+    subscription: UserSubscription | None,
+    turns: int,
+    tokens: int,
+    ai_cost_usd: float,
+    window_days: int,
+    now: datetime,
+) -> dict[str, Any] | None:
+    status = subscription.status if subscription is not None else "free"
+    is_paid = False
+    effective = Tier.free
+    if subscription is not None and has_paid_entitlement(
+        status=subscription.status,
+        cancel_at_period_end=bool(subscription.cancel_at_period_end),
+        ends_at=subscription.ends_at,
+        ended_at=subscription.ended_at,
+        now=now,
+    ):
+        try:
+            effective = tier_from_value(subscription.tier)
+        except ValueError:
+            effective = Tier.free
+        else:
+            is_paid = effective != Tier.free
+
+    if turns <= 0 and not is_paid:
+        return None
+
+    cfg = get_tier_config(effective)
+    monthly = cfg.monthly_price_usd if is_paid else 0.0
+    revenue = monthly * (window_days / 30.0) if is_paid else 0.0
+    cost = ai_cost_usd or 0.0
+    return {
+        "user_id": user_id,
+        "email": email,
+        "name": name,
+        "tier": effective.value,
+        "tier_label": cfg.label,
+        "status": status,
+        "is_paid": is_paid,
+        "turns": turns,
+        "tokens": tokens,
+        "messages_limit": cfg.monthly_message_limit,
+        "tokens_limit": cfg.monthly_token_limit,
+        "ai_cost_usd": _money(cost),
+        "monthly_price_usd": _money(monthly),
+        "estimated_revenue_usd": _money(revenue),
+        "profit_usd": _money(revenue - cost),
+    }
+
+
+async def _load_economics_rows(
+    db: AsyncSession,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    search: str | None = None,
+) -> tuple[int, list[dict[str, Any]]]:
+    window_days = _window_days(start, end)
+    usage_stmt = select(
+        ChatObsTurn.user_id.label("user_id"),
+        func.count(ChatObsTurn.id).label("turns"),
+        func.coalesce(func.sum(ChatObsTurn.total_tokens), 0).label("tokens"),
+        func.coalesce(func.sum(ChatObsTurn.total_cost_usd), 0).label("ai_cost_usd"),
+    ).group_by(ChatObsTurn.user_id)
+    usage_stmt = _apply_time_window(usage_stmt, ChatObsTurn.started_at, start, end)
+    usage_sub = usage_stmt.subquery()
+
+    stmt = (
+        select(
+            User,
+            UserSubscription,
+            func.coalesce(usage_sub.c.turns, 0).label("turns"),
+            func.coalesce(usage_sub.c.tokens, 0).label("tokens"),
+            func.coalesce(usage_sub.c.ai_cost_usd, 0).label("ai_cost_usd"),
+        )
+        .select_from(User)
+        .outerjoin(UserSubscription, UserSubscription.user_id == User.id)
+        .outerjoin(usage_sub, usage_sub.c.user_id == User.id)
+        .where(
+            or_(
+                usage_sub.c.user_id.is_not(None),
+                UserSubscription.id.is_not(None),
+            )
+        )
+    )
+    if search:
+        pattern = f"%{search.strip()}%"
+        stmt = stmt.where(or_(User.email.ilike(pattern), User.name.ilike(pattern)))
+
+    now = datetime.now(timezone.utc)
+    rows = (await db.execute(stmt)).all()
+    out: list[dict[str, Any]] = []
+    for user, subscription, turns, tokens, ai_cost_usd in rows:
+        built = _build_economics_row(
+            user_id=user.id,
+            email=user.email,
+            name=user.name,
+            subscription=subscription,
+            turns=int(turns or 0),
+            tokens=int(tokens or 0),
+            ai_cost_usd=_to_float(ai_cost_usd) or 0.0,
+            window_days=window_days,
+            now=now,
+        )
+        if built is not None:
+            out.append(built)
+    return window_days, out
+
+
+async def get_economics_summary(
+    db: AsyncSession,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, Any]:
+    window_days, rows = await _load_economics_rows(db, start=start, end=end)
+    by_tier: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        bucket = by_tier.setdefault(
+            row["tier"],
+            {
+                "tier": row["tier"],
+                "label": row["tier_label"],
+                "users": 0,
+                "ai_cost_usd": 0.0,
+                "estimated_revenue_usd": 0.0,
+                "profit_usd": 0.0,
+            },
+        )
+        bucket["users"] += 1
+        bucket["ai_cost_usd"] += row["ai_cost_usd"]
+        bucket["estimated_revenue_usd"] += row["estimated_revenue_usd"]
+        bucket["profit_usd"] += row["profit_usd"]
+
+    total_cost = sum(r["ai_cost_usd"] for r in rows)
+    total_revenue = sum(r["estimated_revenue_usd"] for r in rows)
+    return {
+        "window_days": window_days,
+        "users": len(rows),
+        "paying_users": sum(1 for r in rows if r["is_paid"]),
+        "losing_users": sum(1 for r in rows if r["profit_usd"] < 0),
+        "winning_users": sum(1 for r in rows if r["profit_usd"] >= 0),
+        "ai_cost_usd": _money(total_cost),
+        "estimated_revenue_usd": _money(total_revenue),
+        "profit_usd": _money(total_revenue - total_cost),
+        "by_tier": [
+            {
+                "tier": b["tier"],
+                "label": b["label"],
+                "users": b["users"],
+                "ai_cost_usd": _money(b["ai_cost_usd"]),
+                "estimated_revenue_usd": _money(b["estimated_revenue_usd"]),
+                "profit_usd": _money(b["profit_usd"]),
+            }
+            for b in sorted(by_tier.values(), key=lambda x: x["tier"])
+        ],
+    }
+
+
+_SORT_KEYS = {
+    "profit": "profit_usd",
+    "cost": "ai_cost_usd",
+    "revenue": "estimated_revenue_usd",
+    "tokens": "tokens",
+    "turns": "turns",
+}
+
+
+async def get_economics_users(
+    db: AsyncSession,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    tier: str | None = None,
+    outcome: Literal["winning", "losing", "all"] = "all",
+    search: str | None = None,
+    sort: Literal["profit", "cost", "revenue", "tokens", "turns"] = "profit",
+    order: Literal["asc", "desc"] = "asc",
+    skip: int = 0,
+    limit: int = 50,
+) -> dict[str, Any]:
+    _, rows = await _load_economics_rows(db, start=start, end=end, search=search)
+    if tier:
+        rows = [r for r in rows if r["tier"] == tier]
+    if outcome == "winning":
+        rows = [r for r in rows if r["profit_usd"] >= 0]
+    elif outcome == "losing":
+        rows = [r for r in rows if r["profit_usd"] < 0]
+
+    key = _SORT_KEYS.get(sort, "profit_usd")
+    rows.sort(key=lambda r: r[key], reverse=(order == "desc"))
+    return {"items": rows[skip : skip + limit], "count": len(rows)}
+

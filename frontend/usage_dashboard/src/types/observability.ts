@@ -102,12 +102,4 @@ export type TurnsListResponse = {
   count: number
 }
 
-export type TimeRangeKey = '7d' | '30d' | 'all'
-
-export type UserMe = {
-  id: number | null
-  email: string | null
-  country: string | null
-  is_superuser: boolean
-  subscription_tier: string | null
-}
+export type ObservabilityRangeKey = '7d' | '30d' | 'all'
