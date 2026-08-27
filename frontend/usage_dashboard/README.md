@@ -7,7 +7,7 @@ Superuser operator view for Toston Chat:
 
 Revenue on the P&L tab is **catalog list price** (`$4.99` / `$14.99`), pro-rated to the selected window (`window_days / 30`). It is not Polar invoice data.
 
-## Run
+## Run locally
 
 Backend on `:8888`, then:
 
@@ -17,8 +17,23 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5174 and sign in with an operator account. Access is
+Open http://localhost:5174 and sign in with a superuser account. Access is
 checked by calling an admin observability endpoint (not an `is_superuser` flag).
+
+## Deploy (Coolify / VPS)
+
+The `usage_dashboard` service in `docker-compose.yml` binds only to
+`${TAILSCALE_IP}:5174`, the same way pgAdmin binds `${TAILSCALE_IP}:5050`.
+Do **not** add a Coolify public domain or Traefik labels for this service.
+
+On the VPS, open it over Tailscale:
+
+```text
+http://<TAILSCALE_IP>:5174
+```
+
+Nginx in the container proxies `/api` to the `backend` service on the
+internal Docker network, so the browser never talks to the public API host.
 
 ## API
 
