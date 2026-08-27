@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.sql import select
 
@@ -39,6 +39,42 @@ from app.models.chat_observability import (
 logger = logging.getLogger(__name__)
 
 _PROVIDER = "openrouter"
+
+
+def _as_cost(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        cost = float(value)
+    except (TypeError, ValueError):
+        return None
+    if cost != cost or cost < 0:
+        return None
+    return cost
+
+
+def extract_cost_usd(response: Any) -> float | None:
+    """Billed USD for one model response, if the provider reported it.
+
+    OpenRouter puts the actual invoice amount on ``provider_details['cost']``
+    when usage accounting is enabled. ``response.cost()`` is genai-prices
+    list-price fallback for providers that do not return a billed amount.
+    """
+    details = getattr(response, "provider_details", None) or {}
+    if isinstance(details, dict):
+        billed = _as_cost(details.get("cost"))
+        if billed is not None:
+            return billed
+    cost_fn = getattr(response, "cost", None)
+    if callable(cost_fn):
+        try:
+            calculation = cost_fn()
+        except Exception:
+            calculation = None
+        priced = _as_cost(getattr(calculation, "total_price", None))
+        if priced is not None:
+            return priced
+    return None
 
 
 def _enabled() -> bool:
@@ -254,12 +290,35 @@ async def finalize_turn(
         values["total_cost_usd"] = total_cost_usd
     try:
         async with async_session() as db:
+            if "total_cost_usd" not in values:
+                rolled_up = await db.scalar(
+                    select(func.sum(ChatObsLLMCall.cost_usd)).where(
+                        ChatObsLLMCall.turn_id == turn_id
+                    )
+                )
+                if rolled_up is not None:
+                    values["total_cost_usd"] = rolled_up
             await db.execute(
                 update(ChatObsTurn).where(ChatObsTurn.id == turn_id).values(**values)
             )
             await db.commit()
     except Exception:
         logger.exception("observability: failed to finalize turn %s", turn_id)
+
+
+def _pricing_model_candidates(model: str) -> list[str]:
+    names = [model]
+    if "/" in model:
+        names.append(model.split("/", 1)[1])
+    else:
+        names.append(f"openai/{model}")
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
 
 
 async def _compute_cost_from_pricing(
@@ -270,14 +329,21 @@ async def _compute_cost_from_pricing(
         return None
     try:
         async with async_session() as db:
-            row = (
+            candidates = _pricing_model_candidates(model)
+            rows = (
                 (
                     await db.execute(
-                        select(ChatModelPricing).where(ChatModelPricing.model == model)
+                        select(ChatModelPricing).where(
+                            ChatModelPricing.model.in_(candidates)
+                        )
                     )
                 )
                 .scalars()
-                .first()
+                .all()
+            )
+            by_model = {r.model: r for r in rows}
+            row = next(
+                (by_model[name] for name in candidates if name in by_model), None
             )
             if row is None:
                 return None

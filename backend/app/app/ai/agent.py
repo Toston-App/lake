@@ -101,7 +101,11 @@ from app.services import feedback as feedback_service
 from app.services import transactions as transaction_service
 from app.services.errors import ServiceError
 from app.services.v3_dashboard import fetch_period_charts, fetch_period_summary
-from app.utilities.observability import record_llm_call, record_tool_call
+from app.utilities.observability import (
+    extract_cost_usd,
+    record_llm_call,
+    record_tool_call,
+)
 from app.utilities.redis import store_pending_action
 
 # Tool errors surfaced to the model as a normal (non-fatal) tool result rather
@@ -140,6 +144,8 @@ def build_model() -> OpenRouterModel:
             app_url=settings.OPENROUTER_SITE_URL,
             app_title=settings.OPENROUTER_APP_NAME,
         ),
+        # Without this, OpenRouter returns token counts but omits `usage.cost`.
+        settings={"openrouter_usage": {"include": True}},
     )
 
 
@@ -363,9 +369,7 @@ async def manage_place(
     )
 
 
-async def create_expense(
-    ctx: RunContext[ChatDeps], payload: CreateExpenseArgs
-) -> str:
+async def create_expense(ctx: RunContext[ChatDeps], payload: CreateExpenseArgs) -> str:
     """Create an expense. `amount` is required. If no date is provided, today's
     date is used. Saves immediately."""
     data = payload.model_dump(exclude_none=True)
@@ -401,9 +405,7 @@ async def delete_expense(
     )
 
 
-async def create_income(
-    ctx: RunContext[ChatDeps], payload: CreateIncomeArgs
-) -> str:
+async def create_income(ctx: RunContext[ChatDeps], payload: CreateIncomeArgs) -> str:
     """Create an income. `amount` is required. If no date is provided, today's
     date is used. Saves immediately."""
     data = payload.model_dump(exclude_none=True)
@@ -477,8 +479,7 @@ async def delete_transfer(
 def _transaction_model_reference(item: dict[str, Any]) -> dict[str, Any]:
     """Return compact private context for resolving transaction follow-ups."""
     reference = {
-        key: item.get(key)
-        for key in ("id", "type", "amount", "date", "description")
+        key: item.get(key) for key in ("id", "type", "amount", "date", "description")
     }
     for relationship in ("account", "category", "subcategory", "place"):
         value = item.get(relationship)
@@ -520,8 +521,7 @@ async def search_transactions(
         params=Params(page=payload.page, size=payload.limit),
     )
     items = [
-        _serialize_transaction_search_item(item)
-        for item in page.items[: payload.limit]
+        _serialize_transaction_search_item(item) for item in page.items[: payload.limit]
     ]
     has_more = payload.page * payload.limit < page.total
     next_page = payload.page + 1 if has_more else None
@@ -665,9 +665,7 @@ async def submit_feedback(
     ctx: RunContext[ChatDeps], payload: SubmitFeedbackArgs
 ) -> str:
     """Submit user feedback to the team."""
-    obj = schemas.FeedbackCreate(
-        message=payload.message, sentiment=payload.sentiment
-    )
+    obj = schemas.FeedbackCreate(message=payload.message, sentiment=payload.sentiment)
     await feedback_service.submit_feedback(ctx.deps.db, ctx.deps.user, obj)
     return "Feedback submitted. Thank you!"
 
@@ -864,8 +862,10 @@ async def _obs_tool_execute(
 
 
 async def _obs_after_model(
-    ctx: RunContext[ChatDeps], *, request_context: Any,  # noqa: ARG001
-    response: Any
+    ctx: RunContext[ChatDeps],
+    *,
+    request_context: Any,  # noqa: ARG001
+    response: Any,
 ) -> Any:
     usage = response.usage
     await record_llm_call(
@@ -876,6 +876,7 @@ async def _obs_after_model(
         completion_tokens=usage.output_tokens,
         total_tokens=usage.input_tokens + usage.output_tokens,
         cached_tokens=usage.cache_read_tokens,
+        cost_usd=extract_cost_usd(response),
         finish_reason=response.finish_reason,
         had_tool_calls=bool(response.tool_calls),
     )
