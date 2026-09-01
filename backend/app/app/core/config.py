@@ -210,6 +210,17 @@ class Settings(BaseSettings):
     REDIS_URL: str
     REDIS_TOKEN: str
 
+    # Cloudflare R2 for user data exports. Separate from the backup AWS_* bucket.
+    R2_ACCESS_KEY_ID: str | None = None
+    R2_SECRET_ACCESS_KEY: str | None = None
+    R2_ENDPOINT: str | None = None
+    R2_BUCKET_NAME: str | None = None
+    R2_PATH: str | None = None
+    R2_REGION: str = "auto"
+    EXPORT_RETENTION_DAYS: int = 30
+    EXPORT_PRESIGN_EXPIRES_SECONDS: int = 300
+    EXPORT_STALE_HEARTBEAT_SECONDS: int = 900
+
     # Axiom Logging Settings
     AXIOM_DATASET: str = "cleverbill"
     AXIOM_API_TOKEN: str | None = None

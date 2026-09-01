@@ -16,6 +16,14 @@ services:
       - run
       - --reload
       - "app/main.py"
+
+  export-worker:
+    volumes:
+      - ./backend/app:/app
+    command:
+      - /opt/venv/bin/python
+      - -m
+      - app.worker.export_worker
     develop:
       watch:
         - path: ./backend

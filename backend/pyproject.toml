@@ -38,6 +38,8 @@ dependencies = [
     "pandas>=2.3.0",
     "yfinance>=01.0",
     "faker>=40.31.0",
+    "openpyxl>=3.1.5",
+    "boto3>=1.43.84",
 ]
 name = "app"
 version = "0.1.0"

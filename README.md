@@ -23,7 +23,7 @@
 - 📊 Advanced filtering
 - 🏷️ Customizable categories and subcategories
 - 📥 Import capabilities
-- 📤 Export capabilities // Soon
+- 📤 Export capabilities
 - 🤖 AI-powered insights // soon
 
 ## 🚀 Getting Started
