@@ -148,31 +148,19 @@ async def build_workbook(
     ws = wb.create_sheet("profile")
     ws.append(
         [
-            "id",
             "email",
-            "name",
-            "phone",
-            "country",
-            "is_active",
             "balance_total",
             "balance_income",
             "balance_outcome",
-            "default_account_id",
             "created_at",
         ]
     )
     ws.append(
         [
-            _cell(user.id),
             _cell(user.email),
-            _cell(user.name),
-            _cell(user.phone),
-            _cell(user.country),
-            _cell(user.is_active),
             _cell(user.balance_total),
             _cell(user.balance_income),
             _cell(user.balance_outcome),
-            _cell(user.default_account_id),
             _cell(user.created_at),
         ]
     )
@@ -186,10 +174,8 @@ async def build_workbook(
         db,
         ws,
         select(
-            Account.id,
             Account.name,
             Account.type,
-            Account.color,
             Account.initial_balance,
             Account.current_balance,
             Account.total_expenses,
@@ -203,10 +189,8 @@ async def build_workbook(
         .where(Account.owner_id == owner)
         .order_by(Account.id),
         [
-            "id",
             "name",
             "type",
-            "color",
             "initial_balance",
             "current_balance",
             "total_expenses",
@@ -227,10 +211,8 @@ async def build_workbook(
         db,
         ws,
         select(
-            Category.id,
             Category.name,
             Category.description,
-            Category.color,
             Category.is_income,
             Category.total,
             Category.created_at,
@@ -238,10 +220,8 @@ async def build_workbook(
         .where(Category.owner_id == owner)
         .order_by(Category.id),
         [
-            "id",
             "name",
             "description",
-            "color",
             "is_income",
             "total",
             "created_at",
@@ -256,10 +236,8 @@ async def build_workbook(
         db,
         ws,
         select(
-            Subcategory.id,
             Subcategory.name,
             Subcategory.description,
-            Subcategory.category_id,
             Category.name.label("category_name"),
             Subcategory.total,
             Subcategory.created_at,
@@ -268,10 +246,8 @@ async def build_workbook(
         .where(Subcategory.owner_id == owner)
         .order_by(Subcategory.id),
         [
-            "id",
             "name",
             "description",
-            "category_id",
             "category_name",
             "total",
             "created_at",
@@ -286,14 +262,13 @@ async def build_workbook(
         db,
         ws,
         select(
-            Place.id,
             Place.name,
             Place.is_online,
             Place.created_at,
         )
         .where(Place.owner_id == owner)
         .order_by(Place.id),
-        ["id", "name", "is_online", "created_at"],
+        ["name", "is_online", "created_at"],
         base_name="places",
         workbook=wb,
     )
@@ -304,17 +279,12 @@ async def build_workbook(
         db,
         ws,
         select(
-            Expense.id,
             Expense.amount,
             Expense.date,
             Expense.description,
-            Expense.account_id,
             Account.name.label("account_name"),
-            Expense.category_id,
             Category.name.label("category_name"),
-            Expense.subcategory_id,
             Subcategory.name.label("subcategory_name"),
-            Expense.place_id,
             Place.name.label("place_name"),
             Expense.made_from,
             Expense.created_at,
@@ -326,17 +296,12 @@ async def build_workbook(
         .where(Expense.owner_id == owner)
         .order_by(Expense.id),
         [
-            "id",
             "amount",
             "date",
             "description",
-            "account_id",
             "account_name",
-            "category_id",
             "category_name",
-            "subcategory_id",
             "subcategory_name",
-            "place_id",
             "place_name",
             "made_from",
             "created_at",
@@ -351,15 +316,11 @@ async def build_workbook(
         db,
         ws,
         select(
-            Income.id,
             Income.amount,
             Income.date,
             Income.description,
-            Income.account_id,
             Account.name.label("account_name"),
-            Income.subcategory_id,
             Subcategory.name.label("subcategory_name"),
-            Income.place_id,
             Place.name.label("place_name"),
             Income.made_from,
             Income.created_at,
@@ -370,15 +331,11 @@ async def build_workbook(
         .where(Income.owner_id == owner)
         .order_by(Income.id),
         [
-            "id",
             "amount",
             "date",
             "description",
-            "account_id",
             "account_name",
-            "subcategory_id",
             "subcategory_name",
-            "place_id",
             "place_name",
             "made_from",
             "created_at",
@@ -395,13 +352,10 @@ async def build_workbook(
         db,
         ws,
         select(
-            Transfer.id,
             Transfer.amount,
             Transfer.date,
             Transfer.description,
-            Transfer.from_acc,
             account_from.name.label("from_account_name"),
-            Transfer.to_acc,
             account_to.name.label("to_account_name"),
             Transfer.created_at,
         )
@@ -410,13 +364,10 @@ async def build_workbook(
         .where(Transfer.owner_id == owner)
         .order_by(Transfer.id),
         [
-            "id",
             "amount",
             "date",
             "description",
-            "from_acc",
             "from_account_name",
-            "to_acc",
             "to_account_name",
             "created_at",
         ],
@@ -430,8 +381,6 @@ async def build_workbook(
         db,
         ws,
         select(
-            BalanceAdjustment.id,
-            BalanceAdjustment.account_id,
             Account.name.label("account_name"),
             BalanceAdjustment.old_balance,
             BalanceAdjustment.new_balance,
@@ -444,8 +393,6 @@ async def build_workbook(
         .where(BalanceAdjustment.owner_id == owner)
         .order_by(BalanceAdjustment.id),
         [
-            "id",
-            "account_id",
             "account_name",
             "old_balance",
             "new_balance",
@@ -464,10 +411,7 @@ async def build_workbook(
         db,
         ws,
         select(
-            Holding.id,
-            Holding.account_id,
             Account.name.label("account_name"),
-            Holding.asset_id,
             Asset.symbol.label("asset_symbol"),
             Asset.name.label("asset_name"),
             Holding.quantity,
@@ -486,10 +430,7 @@ async def build_workbook(
         .where(Holding.owner_id == owner)
         .order_by(Holding.id),
         [
-            "id",
-            "account_id",
             "account_name",
-            "asset_id",
             "asset_symbol",
             "asset_name",
             "quantity",
@@ -513,10 +454,7 @@ async def build_workbook(
         db,
         ws,
         select(
-            InvestmentTransaction.id,
-            InvestmentTransaction.account_id,
             Account.name.label("account_name"),
-            InvestmentTransaction.holding_id,
             InvestmentTransaction.transaction_type,
             InvestmentTransaction.quantity,
             InvestmentTransaction.price_per_unit,
@@ -532,10 +470,7 @@ async def build_workbook(
         .where(InvestmentTransaction.owner_id == owner)
         .order_by(InvestmentTransaction.id),
         [
-            "id",
-            "account_id",
             "account_name",
-            "holding_id",
             "transaction_type",
             "quantity",
             "price_per_unit",
@@ -557,7 +492,6 @@ async def build_workbook(
         db,
         ws,
         select(
-            Asset.id,
             Asset.symbol,
             Asset.name,
             Asset.asset_class,
@@ -566,15 +500,12 @@ async def build_workbook(
             Asset.market,
             Asset.sector,
             Asset.country,
-            Asset.coingecko_id,
-            Asset.is_active,
         )
         .where(
             Asset.id.in_(select(Holding.asset_id).where(Holding.owner_id == owner))
         )
         .order_by(Asset.id),
         [
-            "id",
             "symbol",
             "name",
             "asset_class",
@@ -583,8 +514,6 @@ async def build_workbook(
             "market",
             "sector",
             "country",
-            "coingecko_id",
-            "is_active",
         ],
         base_name="assets",
         workbook=wb,
