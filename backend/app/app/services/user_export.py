@@ -6,13 +6,14 @@ import os
 import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -41,12 +42,45 @@ GENERIC_FAIL = "Export failed. Please try again."
 
 ProgressCb = Callable[[int, str], Awaitable[None]]
 
+_MONEY_TOKENS = (
+    "amount",
+    "balance",
+    "total",
+    "value",
+    "price",
+    "fee",
+    "cost",
+    "invested",
+    "pct",
+)
+_NOT_MONEY_HEADERS = {
+    "quantity",
+    "affects_cash_balance",
+    "cost_currency",
+}
 
-def _cell(value: Any) -> Any:
+
+def _is_money_header(name: str) -> bool:
+    if name in _NOT_MONEY_HEADERS:
+        return False
+    lowered = name.lower()
+    return any(token in lowered for token in _MONEY_TOKENS)
+
+
+def _as_money(value: Any) -> float:
+    quantized = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return float(quantized)
+
+
+def _cell(value: Any, *, header: str | None = None) -> Any:
     if value is None:
         return None
+    if isinstance(value, bool):
+        return value
     if isinstance(value, Enum):
         return value.value
+    if header and _is_money_header(header) and isinstance(value, (int, float, Decimal)):
+        return _as_money(value)
     if isinstance(value, Decimal):
         return float(value)
     if isinstance(value, datetime):
@@ -56,6 +90,15 @@ def _cell(value: Any) -> Any:
     if isinstance(value, UUID):
         return str(value)
     return value
+
+
+def _excel_value(ws, header: str, value: Any) -> Any:
+    converted = _cell(value, header=header)
+    if converted is None or not _is_money_header(header):
+        return converted
+    cell = WriteOnlyCell(ws, value=converted)
+    cell.number_format = "0.00"
+    return cell
 
 
 def export_filename(when: datetime | None = None) -> str:
@@ -97,9 +140,9 @@ async def _write_query_sheet(
     async for row in _stream_rows(db, stmt):
         mapping = row._mapping if hasattr(row, "_mapping") else None
         if mapping is not None:
-            values = [_cell(mapping[h]) for h in headers]
+            values = [_excel_value(current, h, mapping[h]) for h in headers]
         else:
-            values = [_cell(v) for v in row]
+            values = [_excel_value(current, h, v) for h, v in zip(headers, row, strict=False)]
         if sheet_rows >= EXCEL_MAX_ROWS:
             current = workbook.create_sheet(f"{base_name}_{suffix}"[:31])
             current.append(headers)
@@ -157,11 +200,11 @@ async def build_workbook(
     )
     ws.append(
         [
-            _cell(user.email),
-            _cell(user.balance_total),
-            _cell(user.balance_income),
-            _cell(user.balance_outcome),
-            _cell(user.created_at),
+            _excel_value(ws, "email", user.email),
+            _excel_value(ws, "balance_total", user.balance_total),
+            _excel_value(ws, "balance_income", user.balance_income),
+            _excel_value(ws, "balance_outcome", user.balance_outcome),
+            _excel_value(ws, "created_at", user.created_at),
         ]
     )
     counts["profile"] = 1
