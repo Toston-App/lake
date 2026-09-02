@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .account import Account  # noqa: F401
     from .balance_adjustment import BalanceAdjustment  # noqa: F401
     from .category import Category  # noqa: F401
+    from .data_export import DataExport  # noqa: F401
     from .expense import Expense  # noqa: F401
     from .feedback import Feedback  # noqa: F401
     from .holding import Holding  # noqa: F401
@@ -82,4 +83,7 @@ class User(Base):
     )
     investment_transactions: list["InvestmentTransaction"] = relationship(
         "InvestmentTransaction", back_populates="owner", cascade="all, delete-orphan"
+    )
+    data_exports: list["DataExport"] = relationship(
+        "DataExport", back_populates="owner", cascade="all, delete-orphan"
     )

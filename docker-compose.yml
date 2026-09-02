@@ -85,6 +85,21 @@ services:
       context: ./backend
       dockerfile: backend.dockerfile
 
+  export-worker:
+    image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      prestart:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    build:
+      context: ./backend
+      dockerfile: backend.dockerfile
+    command: python -m app.worker.export_worker
+
   # Alternative to whatsapp, uncomment to use
   # waha:
   #   restart: always

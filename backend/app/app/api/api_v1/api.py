@@ -7,6 +7,7 @@ from app.api.api_v1.endpoints import (
     categories,
     demo_data,
     expenses,
+    exports,
     feedback,
     imports,
     incomes,
@@ -26,6 +27,7 @@ from app.api.api_v1.endpoints import (
 api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(exports.router, prefix="/exports", tags=["exports"])
 api_router.include_router(utils.router, prefix="/utils", tags=["utils"])
 api_router.include_router(demo_data.router, prefix="/demo-data", tags=["demo-data"])
 api_router.include_router(places.router, prefix="/places", tags=["places"])

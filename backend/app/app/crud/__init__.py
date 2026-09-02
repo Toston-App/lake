@@ -5,6 +5,7 @@ from .crud_asset import asset
 from .crud_asset_price import asset_price
 from .crud_balance_adjustment import balance_adjustment
 from .crud_category import category
+from .crud_data_export import data_export
 from .crud_expense import expense
 from .crud_feedback import feedback
 from .crud_holding import holding
