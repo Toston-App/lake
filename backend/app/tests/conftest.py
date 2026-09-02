@@ -45,6 +45,12 @@ os.environ.setdefault("WAHA_URL", "http://localhost:3000")
 os.environ.setdefault("WHATSAPP_API_KEY", "test-key")
 os.environ.setdefault("REDIS_URL", "https://fake-redis.upstash.io")
 os.environ.setdefault("REDIS_TOKEN", "fake-token")
+os.environ.setdefault("R2_ACCESS_KEY_ID", "test-r2-key")
+os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-r2-secret")
+os.environ.setdefault("R2_ENDPOINT", "https://example.r2.cloudflarestorage.com")
+os.environ.setdefault("R2_BUCKET_NAME", "toston-user-exports-test")
+os.environ.setdefault("R2_PATH", "toston-user-exports")
+os.environ.setdefault("R2_REGION", "auto")
 os.environ.setdefault("DOCS_USER", "admin")
 os.environ.setdefault("DOCS_PASSWORD", "password")
 # Authentication settings are required at application import time. These values
@@ -70,6 +76,7 @@ from app.models import (  # noqa: E402, F401
     Account,
     BalanceAdjustment,
     Category,
+    DataExport,
     Expense,
     Import,
     Income,
