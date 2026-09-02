@@ -6,6 +6,7 @@ Revises: 2f7c9e4a1b63
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 revision = "c3e8a91b4d20"
@@ -13,18 +14,26 @@ down_revision = "2f7c9e4a1b63"
 branch_labels = None
 depends_on = None
 
-dataexportstatus = sa.Enum(
+# create_type=False so create_table does not emit a second CREATE TYPE.
+dataexportstatus = postgresql.ENUM(
     "pending",
     "processing",
     "ready",
     "failed",
     "expired",
     name="dataexportstatus",
+    create_type=False,
 )
 
 
 def upgrade() -> None:
-    dataexportstatus.create(op.get_bind(), checkfirst=True)
+    bind = op.get_bind()
+    dataexportstatus.create(bind, checkfirst=True)
+
+    inspector = inspect(bind)
+    if "data_export" in inspector.get_table_names():
+        return
+
     op.create_table(
         "data_export",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -62,8 +71,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("uq_data_export_owner_inflight", table_name="data_export")
-    op.drop_index("ix_data_export_status", table_name="data_export")
-    op.drop_index("ix_data_export_owner_id", table_name="data_export")
-    op.drop_table("data_export")
-    dataexportstatus.drop(op.get_bind(), checkfirst=True)
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    if "data_export" in inspector.get_table_names():
+        op.drop_index("uq_data_export_owner_inflight", table_name="data_export")
+        op.drop_index("ix_data_export_status", table_name="data_export")
+        op.drop_index("ix_data_export_owner_id", table_name="data_export")
+        op.drop_table("data_export")
+    dataexportstatus.drop(bind, checkfirst=True)
