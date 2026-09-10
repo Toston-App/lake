@@ -8,8 +8,6 @@ services:
       retries: 5
       start_period: 30s
       timeout: 10s
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data/pgdata
     env_file:
@@ -41,7 +39,7 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     ports:
-      - "5050:5050"
+    - "${TAILSCALE_IP}:5050:5050"
     depends_on:
       - db
     env_file:
