@@ -17,8 +17,11 @@ The WhatsApp integration allows users to send transaction information via WhatsA
    WHATSAPP_ACCESS_TOKEN=your-access-token
    WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
    WHATSAPP_VERIFY_TOKEN=your-webhook-verify-token
+   WHATSAPP_APP_SECRET=your-meta-app-secret
    WHATSAPP_API_VERSION=vXX.X
    ```
+
+   `WHATSAPP_APP_SECRET` is the App Secret from **App settings → Basic** in the Meta dashboard. Every webhook call is checked against Meta's `X-Hub-Signature-256` header with it, and calls are rejected (401) while it is unset.
 
 ## User Configuration
 

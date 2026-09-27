@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
+import hmac
 import time
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, schemas
@@ -70,7 +72,9 @@ async def verify_webhook(
     WhatsApp API will call this endpoint to verify the webhook is properly configured
     """
     # Check if webhook token matches our configuration
-    verified = hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN
+    verified = bool(settings.WHATSAPP_VERIFY_TOKEN) and hmac.compare_digest(
+        hub_verify_token.encode(), settings.WHATSAPP_VERIFY_TOKEN.encode()
+    )
     enrich_event(request, webhook={"type": "whatsapp", "verification": {"mode": hub_mode, "verified": verified}})
     if not verified:
         raise HTTPException(
@@ -81,10 +85,23 @@ async def verify_webhook(
     return hub_challenge
 
 
-@router.post("/webhook")
+def _signature_is_valid(body: bytes, signature_header: str | None) -> bool:
+    """Check Meta's ``X-Hub-Signature-256`` (HMAC-SHA256 of the raw body keyed with the app secret)."""
+    if not settings.WHATSAPP_APP_SECRET or not signature_header:
+        return False
+    scheme, _, received = signature_header.partition("=")
+    if scheme != "sha256" or not received:
+        return False
+    expected = hmac.new(settings.WHATSAPP_APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, received)
+
+
+@router.post(
+    "/webhook",
+    openapi_extra={"requestBody": {"content": {"application/json": {"schema": WhatsAppCallback.model_json_schema()}}}},
+)
 async def process_webhook(
     request: Request,
-    callback: WhatsAppCallback = Body(...),
     db: AsyncSession = Depends(deps.async_get_db),
 ) -> dict[str, str]:
     """
@@ -99,6 +116,24 @@ async def process_webhook(
     """
     # Mark this critical endpoint to always be logged (bypasses sampling)
     mark_for_logging(request)
+
+    # Verify the request really comes from Meta before trusting anything in it.
+    # The raw body is needed for this, so the payload is parsed by hand afterwards.
+    body = await request.body()
+    if not _signature_is_valid(body, request.headers.get("X-Hub-Signature-256")):
+        enrich_event(
+            request,
+            webhook={
+                "type": "whatsapp",
+                "rejected": "missing_app_secret" if not settings.WHATSAPP_APP_SECRET else "invalid_signature",
+            },
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+
+    try:
+        callback = WhatsAppCallback.model_validate_json(body)
+    except ValidationError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors(include_url=False)) from e
 
     request_id = get_request_id(request)
     interaction_ids: list[str] = []
@@ -424,11 +459,12 @@ Por favor, intenta de nuevo con un formato más claro."""
             transaction_id = button_id.replace("confirm_", "")
             ix.set(action="confirm_transaction")
 
-            # Check if transaction exists in cache
-            cached_data = await get_transaction(transaction_id)
+            # Check if transaction exists in cache and belongs to this user
+            cached_data = await _get_owned_transaction(transaction_id, user.id, ix)
 
             if not cached_data:
-                ix.set(outcome="expired", feedback=_feedback(transaction_id, None, "expired"))
+                ix.setdefault("outcome", "expired")
+                ix.set(feedback=_feedback(transaction_id, None, ix.event["outcome"]))
                 await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
                 await send_text_message(
                     send_to,
@@ -438,7 +474,7 @@ Por favor, intenta de nuevo con un formato más claro."""
                 return
 
             transaction_data = cached_data["data"]
-            user_id = int(cached_data["user_id"])
+            user_id = user.id
             message_to_react = transaction_data["message_to_react"]
             ix.set(
                 feedback=_feedback(transaction_id, transaction_data, "confirmed"),
@@ -584,14 +620,14 @@ Por favor, intenta de nuevo con un formato más claro."""
             transaction_id = button_id.replace("cancel_", "")
             ix.set(action="cancel_transaction")
 
-            cached_data = await get_transaction(transaction_id)
-            ix.set(
-                outcome="cancelled",
-                feedback=_feedback(transaction_id, cached_data["data"] if cached_data else None, "cancelled"),
-            )
+            cached_data = await _get_owned_transaction(transaction_id, user.id, ix)
+            ix.setdefault("outcome", "cancelled")
+            ix.set(feedback=_feedback(transaction_id, cached_data["data"] if cached_data else None, ix.event["outcome"]))
 
-            # Remove from cache if exists
-            await delete_transaction(transaction_id)
+            # Only the owner can discard a pending transaction. Anyone else gets
+            # the same reply as for an unknown id, so ids can't be probed.
+            if cached_data:
+                await delete_transaction(transaction_id)
 
             await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="❌")
             await send_text_message(
@@ -676,6 +712,17 @@ Si quieres usar otra cuenta específica, solo menciona su nombre: "gasté 200 en
     else:
         # Images, audio, stickers, locations... are not supported yet
         ix.set(action="unsupported_message", outcome="ignored")
+
+
+async def _get_owned_transaction(transaction_id: str, user_id: int, ix: WhatsAppInteraction) -> dict[str, Any] | None:
+    """Fetch a pending transaction, treating one that belongs to another user as missing."""
+    cached_data = await get_transaction(transaction_id)
+    if not cached_data:
+        return None
+    if int(cached_data.get("user_id", -1)) != user_id:
+        ix.set(outcome="owner_mismatch")
+        return None
+    return cached_data
 
 
 def _describe_input(message_obj: dict[str, Any]) -> dict[str, Any]:

@@ -72,6 +72,9 @@ class WhatsAppInteraction:
         """Set top-level event fields (``action``, ``outcome``, ``user`` ...)."""
         self.event.update(fields)
 
+    def setdefault(self, key: str, value: Any) -> None:
+        self.event.setdefault(key, value)
+
     def record_reply(self, reply: dict[str, Any]) -> None:
         self.event["replies"].append(reply)
 
