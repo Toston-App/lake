@@ -16,12 +16,13 @@ PROMPT_TEMPLATE = """You are an assistant in a personal finance app. Parse the f
 
 CRITICAL REQUIREMENTS:
 - You MUST always return a valid JSON object
-- The 'type' field is REQUIRED and MUST be one of: 'expense', 'income', or 'transfer'
-- The 'amount' field is REQUIRED and must be a positive number
+- If the message describes a transaction, 'type' MUST be one of: 'expense', 'income', or 'transfer', and 'amount' MUST be the positive number written in the message
+- If the message is NOT a transaction, or it doesn't state an amount, return {{"type": null, "amount": null}}. This includes greetings ("hola", "buenos días"), thanks, questions ("¿cuánto gasté este mes?"), random text, and transactions without an amount ("gasté en comida")
+- NEVER invent, guess or default an amount. Only use a number that appears in the message
 
         Rules:
-        - type: **REQUIRED** - MUST be one of: 'expense', 'income', or 'transfer'. This field cannot be null or omitted.
-        - amount: Extract the numerical amount as a float
+        - type: 'expense', 'income', or 'transfer'. null if the message is not a transaction.
+        - amount: Extract the numerical amount written in the message as a float. null if the message has no amount.
         - date: Extract date in YYYY-MM-DD format. If relative dates are mentioned (today, yesterday, etc.), calculate the actual date ({today})
         - category: Match the best category based on the description from this list: {categories}. Respond with the id and name of the category or null if not applicable.
         - subcategory: **CRITICAL** - The subcategory MUST belong to the selected category. Each category has a list of subcategories. You can ONLY choose a subcategory from the "subcategories" array of the selected category. If the selected category doesn't have an appropriate subcategory in its list, return null. Respond with the id and name of the subcategory or null.
@@ -40,6 +41,12 @@ CRITICAL REQUIREMENTS:
         - "transferir 500 de bbva a santander"
         - "pasar 1000 de efectivo a tarjeta de credito"
 
+        Examples of messages that are NOT transactions (return {{"type": null, "amount": null}}):
+        - "hola"
+        - "gracias!"
+        - "¿cuánto llevo gastado?"
+        - "gasté en el super" (no amount)
+
         IMPORTANT: When selecting a subcategory, verify it exists in the selected category's subcategories array. For example:
         - If you select category "Compras" with id 5, you can only choose subcategories that appear in categories[where id=5].subcategories
         - If you select category "Alimentación" with id 3, you can only choose subcategories from categories[where id=3].subcategories
@@ -47,7 +54,7 @@ CRITICAL REQUIREMENTS:
 
         Do not attempt fuzzy matching for accounts or places. Only return a match if you are highly confident it's the correct one from the provided lists.
 
-        Respond with a single valid JSON object containing all extracted fields. Use null for any fields you cannot determine, EXCEPT for 'type' and 'amount' which are REQUIRED and must always be present.
+        Respond with a single valid JSON object containing all extracted fields. Use null for any fields you cannot determine. If 'type' or 'amount' is null, the message is treated as not being a transaction.
         """
 
 # Changes automatically whenever the prompt is edited, so LLM quality can be
@@ -67,10 +74,13 @@ class ParseResult:
     """Outcome of parsing a message, plus a trace of what the LLM did.
 
     ``transaction`` is empty when the message could not be parsed, in which
-    case ``trace["failure_reason"]`` says why.
+    case ``trace["failure_reason"]`` says why, or when the LLM correctly
+    decided the message isn't a transaction (``not_a_transaction``), which is
+    not a failure.
     """
     transaction: dict[str, Any]
     trace: dict[str, Any] = field(default_factory=dict)
+    not_a_transaction: bool = False
 
     @property
     def ok(self) -> bool:
@@ -228,6 +238,10 @@ class WhatsAppParser:
         trace["ai_result"] = ai_result
         if not ai_result:
             return fail("empty_result")
+
+        # The prompt asks for a null type/amount when the message isn't a transaction
+        if isinstance(ai_result, dict) and (ai_result.get("type") is None or ai_result.get("amount") is None):
+            return ParseResult(transaction={}, trace=trace, not_a_transaction=True)
 
         try:
             transaction = self.convert_ai_result_to_transaction(ai_result, default_account)

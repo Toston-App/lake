@@ -300,9 +300,10 @@ Para agregar una cuenta:
 
             ix.set(llm={**parsed.trace, "parse_duration_ms": t_parse.ms})
 
-            # Check if parsing returned empty data
+            # Not a transaction (greeting, question...) or the parse failed:
+            # same help reply, but only the latter counts as an LLM failure.
             if not parsed.ok:
-                ix.set(outcome="parse_failed")
+                ix.set(outcome="not_a_transaction" if parsed.not_a_transaction else "parse_failed")
                 await send_reaction(phone_number=send_to, message_id=message_obj["id"], emoji="😵‍💫")
                 await send_text_message(
                     send_to,
