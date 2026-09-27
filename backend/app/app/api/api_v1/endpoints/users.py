@@ -14,7 +14,6 @@ from app.api import deps
 from app.core import security
 from app.core.config import settings
 from app.utilities.encryption import hash_sha256
-from app.utils import send_new_account_email
 from app.utilities.wide_events import enrich_event, mark_for_logging, timed
 
 router = APIRouter()

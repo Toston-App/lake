@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from pydantic import AnyHttpUrl, EmailStr, HttpUrl, PostgresDsn, field_validator
+from pydantic import AnyHttpUrl, EmailStr, PostgresDsn, field_validator
 from pydantic_settings import BaseSettings, NoDecode
 
 
@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     API_V2_STR: str = "/api/v2"
     API_V3_STR: str = "/api/v3"
 
-    # HS256 signing secret for our own (email/password) access tokens
-    # and password-reset tokens. MUST be set; no insecure default.
+    # HS256 signing secret for our own (email/password) access tokens.
+    # MUST be set; no insecure default.
     LOCAL_JWT_SECRET: str
 
     # Clerk JWT verification (RS256). The public key is base64-encoded PEM,
@@ -64,13 +64,6 @@ class Settings(BaseSettings):
     PROFILE_QUERY_MODE: bool = False
 
     PROJECT_NAME: str
-    SENTRY_DSN: HttpUrl | None = None
-
-    @field_validator("SENTRY_DSN", mode="before")
-    def sentry_dsn_can_be_blank(cls, v: str | None) -> str | None:
-        if v is None or len(v) == 0:
-            return None
-        return v
 
     POSTGRES_SERVER: str
     POSTGRES_USER: str
@@ -101,32 +94,6 @@ class Settings(BaseSettings):
             password=info.data.get("POSTGRES_PASSWORD"),
             host=info.data.get("POSTGRES_SERVER"),
             path=f"{info.data.get('POSTGRES_DB') or ''}",
-        )
-
-    SMTP_TLS: bool = True
-    SMTP_PORT: int | None = None
-    SMTP_HOST: str | None = None
-    SMTP_USER: str | None = None
-    SMTP_PASSWORD: str | None = None
-    EMAILS_FROM_EMAIL: EmailStr | None = None
-    EMAILS_FROM_NAME: str | None = None
-
-    @field_validator("EMAILS_FROM_NAME")
-    def get_project_name(cls, v: str | None, info: dict[str, Any]) -> str | None:
-        if not v:
-            return info.data.get("PROJECT_NAME")
-        return v
-
-    EMAIL_RESET_TOKEN_EXPIRE_HOURS: int = 48
-    EMAIL_TEMPLATES_DIR: str = "/app/app/email-templates/build"
-    EMAILS_ENABLED: bool = False
-
-    @field_validator("EMAILS_ENABLED", mode="before")
-    def get_emails_enabled(cls, v: bool, info: dict[str, Any]) -> bool:
-        return bool(
-            info.data.get("SMTP_HOST")
-            and info.data.get("SMTP_PORT")
-            and info.data.get("EMAILS_FROM_EMAIL")
         )
 
     FIRST_SUPERUSER: EmailStr
