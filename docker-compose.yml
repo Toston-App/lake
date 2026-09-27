@@ -98,28 +98,6 @@ services:
       dockerfile: backend.dockerfile
     command: python -m app.worker.export_worker
 
-  # Alternative to whatsapp, uncomment to use
-  # waha:
-  #   restart: always
-  #   # in macos change to waha:arm
-  #   image: devlikeapro/waha:latest-2025.7.9
-  #   ports:
-  #     - "127.0.0.1:3000:3000/tcp"
-  #   depends_on:
-  #     - backend
-  #   env_file:
-  #     - .env
-
-  # # used to expose the waha service to the internet
-  # cloudflaretunnel:
-  #   image: cloudflare/cloudflared:latest
-  #   restart: always
-  #   depends_on:
-  #     - waha
-  #   environment:
-  #     - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-  #   command: tunnel --no-autoupdate run --url http://waha:3000
-
 volumes:
   postgres_data:
   pgadmin-data:

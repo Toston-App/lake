@@ -200,12 +200,10 @@ class Settings(BaseSettings):
     WHATSAPP_ACCESS_TOKEN: str
     WHATSAPP_PHONE_NUMBER_ID: str | None = None
     WHATSAPP_VERIFY_TOKEN: str | None = None
+    # Meta App Secret, used to verify the X-Hub-Signature-256 header on webhook
+    # calls. Webhooks are rejected while this is unset.
+    WHATSAPP_APP_SECRET: str | None = None
     WHATSAPP_API_VERSION: str = "v22.0"
-
-    # WAHA
-    WAHA_SESSION: str
-    WAHA_URL: str
-    WHATSAPP_API_KEY: str
 
     REDIS_URL: str
     REDIS_TOKEN: str

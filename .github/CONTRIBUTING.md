@@ -37,7 +37,6 @@ Now you can open your browser and interact with these URLs:
 - Automatic interactive documentation with Swagger UI (from the OpenAPI backend): http://localhost:8000/docs
 - Alternative automatic documentation with ReDoc (from the OpenAPI backend): http://localhost:8000/redoc
 - PGAdmin, PostgreSQL web administration: http://localhost:5050
-- WAHA WhatsApp integration (In case you're using it): http://localhost:3000
 
 
 ### DB Migrations
