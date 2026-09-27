@@ -4,7 +4,9 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.ai.whatsapp_parser import PROMPT_VERSION, WhatsAppParser
+import pytest
+
+from app.ai.whatsapp_parser import PROMPT_TEMPLATE, PROMPT_VERSION, WhatsAppParser
 
 CATEGORIES = [
     {"id": 1, "name": "Alimentación", "subcategories": [{"id": 10, "name": "Restaurantes"}]},
@@ -104,6 +106,35 @@ async def test_llm_error_is_recorded():
     assert not result.ok
     assert result.trace["failure_reason"] == "llm_error"
     assert "boom" in result.trace["error"]
+
+
+@pytest.mark.parametrize(
+    "ai_result",
+    [
+        {"type": None, "amount": None},
+        {"type": None, "amount": None, "description": None, "id": "hola"},
+        {"type": "expense", "amount": None},  # a transaction but no amount given
+        {"type": None, "amount": 200},
+    ],
+)
+async def test_null_type_or_amount_means_not_a_transaction(ai_result):
+    parser = _parser(AsyncMock(return_value=_completion(json.dumps(ai_result))))
+
+    result = await parser.parse_message("hola")
+
+    assert not result.ok
+    assert result.not_a_transaction
+    # Not a failure: the LLM answered correctly
+    assert "failure_reason" not in result.trace
+    assert result.trace["ai_result"] == ai_result
+
+
+def test_prompt_tells_the_model_how_to_answer_non_transactions():
+    rendered = PROMPT_TEMPLATE.format(today="2026-09-27", categories=[], places=[], accounts=[])
+
+    assert '{"type": null, "amount": null}' in rendered
+    assert "NEVER invent" in rendered
+    assert "REQUIRED" not in rendered
 
 
 async def test_validation_failure_is_recorded():

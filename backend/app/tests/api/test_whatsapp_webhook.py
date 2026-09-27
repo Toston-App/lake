@@ -161,6 +161,24 @@ async def test_parse_failure_records_reason_and_help_message(
     assert event["replies"][2]["text"].startswith("❌ No pude entender tu mensaje")
 
 
+async def test_non_transaction_message_gets_help_reply_without_counting_as_failure(
+    client: AsyncClient, linked_user: User, events, monkeypatch: pytest.MonkeyPatch
+):
+    trace = {"raw_output": '{"type": null, "amount": null}', "ai_result": {"type": None, "amount": None}}
+    parsed = ParseResult({}, trace, not_a_transaction=True)
+    monkeypatch.setattr(endpoint.whatsapp_parser, "parse_message", AsyncMock(return_value=parsed))
+    store = AsyncMock(return_value=True)
+    monkeypatch.setattr(endpoint, "store_transaction", store)
+
+    await _post(client, _text("holaaa"))
+
+    [event] = events
+    assert event["outcome"] == "not_a_transaction"
+    assert "failure_reason" not in event["llm"]
+    assert event["replies"][2]["text"].startswith("❌ No pude entender tu mensaje")
+    store.assert_not_awaited()  # nothing to confirm
+
+
 async def test_cancel_records_feedback_linked_to_parse(
     client: AsyncClient, linked_user: User, events, monkeypatch: pytest.MonkeyPatch
 ):
