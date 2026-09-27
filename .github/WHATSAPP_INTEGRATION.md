@@ -4,9 +4,6 @@
 
 The WhatsApp integration allows users to send transaction information via WhatsApp messages. This makes it easy to record expenses, incomes, and transfers on the go.
 
-> [!IMPORTANT]
-> Waha implementation is not fully complete. Transfers are not fully supported yet or code may be different to WhatsApp API.
-
 ## Setup Requirements
 
 1. [Meta for Developers account](https://developers.facebook.com/)

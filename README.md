@@ -58,7 +58,6 @@ Now you can open your browser and interact with these URLs:
 - Alternative automatic documentation with ReDoc (from the OpenAPI backend): http://localhost:8888/redoc
   - Default credentials: `admin:root`
 - PGAdmin, PostgreSQL web administration: http://localhost:5050
-- WAHA WhatsApp integration (In case you're using it): http://localhost:3000
 
 ### DB Migrations
 
