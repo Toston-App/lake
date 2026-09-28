@@ -1,15 +1,14 @@
 # ruff: noqa: ARG001
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from app.api import deps
-from app.core.config import Settings, settings
+from app.core.config import settings
 from app.models.asset import Currency
+from app.models.subscription import UserSubscription
 from app.schemas.asset_price import AssetPriceCreate
 from app.services.price_fetcher import PriceFetcher
-from fastapi import HTTPException
 from httpx import AsyncClient
 
 from app import crud
@@ -28,26 +27,88 @@ async def test_feature_gate_denies_all_subrouters_when_disabled(
     assert response.status_code == 403
 
 
-def test_access_supports_id_uuid_and_superuser(monkeypatch):
-    user = SimpleNamespace(id=7, uuid="user_uuid", is_superuser=False)
-    admin = SimpleNamespace(id=99, uuid=None, is_superuser=True)
+@pytest.fixture
+def billing_on(monkeypatch):
+    """Resolve tiers from user_subscription rows, bypassing the Redis cache."""
     monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", "3, 7")
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "")
-    assert deps.require_investments_access(user) is user
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", "")
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "user_uuid")
-    assert deps.require_investments_access(user) is user
-    assert deps.require_investments_access(admin) is admin
-    user.uuid = "USER_UUID"
-    with pytest.raises(HTTPException):
-        deps.require_investments_access(user)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
+    monkeypatch.setattr(
+        "app.services.entitlements.get_entitlement", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        "app.services.entitlements.set_entitlement", AsyncMock(return_value=True)
+    )
 
 
-@pytest.mark.parametrize("value", ["abc", "1,two", "0", "-4"])
-def test_invalid_allowlist_is_rejected(value):
-    with pytest.raises(ValueError):
-        Settings.validate_investment_user_ids(value)
+async def _subscribe(db_session, user, *, tier: str, status: str = "active"):
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        UserSubscription(
+            user_id=user.id,
+            polar_customer_id=f"customer_{user.id}",
+            polar_subscription_id=f"subscription_{user.id}",
+            tier=tier,
+            status=status,
+            current_period_start=now - timedelta(days=1),
+            current_period_end=now + timedelta(days=29),
+        )
+    )
+    await db_session.commit()
+
+
+@pytest.mark.parametrize("tier", ["tier1", "tier2"])
+async def test_any_paid_tier_can_use_investments(
+    client: AsyncClient, db_session, test_user, billing_on, tier
+):
+    await _subscribe(db_session, test_user, tier=tier)
+
+    response = await client.get(f"{BASE}/holdings")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path", ["/assets", "/holdings", "/transactions", "/portfolio/summary"]
+)
+async def test_free_user_is_asked_to_subscribe(client: AsyncClient, billing_on, path):
+    response = await client.get(f"{BASE}{path}")
+
+    assert response.status_code == 402
+    assert response.json()["detail"] == (
+        "Investments require an active paid subscription"
+    )
+
+
+@pytest.mark.parametrize("status", ["revoked", "past_due", "canceled"])
+async def test_lapsed_subscription_loses_investments(
+    client: AsyncClient, db_session, test_user, billing_on, status
+):
+    await _subscribe(db_session, test_user, tier="tier2", status=status)
+
+    response = await client.get(f"{BASE}/holdings")
+
+    assert response.status_code == 402
+
+
+async def test_superuser_needs_no_subscription(
+    superuser_client: AsyncClient, billing_on
+):
+    response = await superuser_client.get(f"{BASE}/holdings")
+
+    assert response.status_code == 200
+
+
+async def test_production_without_billing_denies_investments(
+    client: AsyncClient, monkeypatch
+):
+    monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", False)
+    # What the production settings validator forces when Polar is off.
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "free")
+
+    response = await client.get(f"{BASE}/holdings")
+
+    assert response.status_code == 402
 
 
 @pytest.mark.parametrize(
@@ -139,3 +200,12 @@ async def test_price_refresh_rolls_back_shared_state(monkeypatch):
         await PriceFetcher.fetch_and_store_price(db, asset)
     db.rollback.assert_awaited_once()
     db.commit.assert_not_awaited()
+
+
+def test_every_paid_tier_and_only_paid_tiers_include_investments():
+    from app.core.tiers import FEATURE_INVESTMENTS, Tier, has_feature
+
+    assert not has_feature(Tier.free, FEATURE_INVESTMENTS)
+    assert all(
+        has_feature(tier, FEATURE_INVESTMENTS) for tier in Tier if tier != Tier.free
+    )

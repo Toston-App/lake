@@ -199,14 +199,14 @@ Defined in `backend/app/app/core/tiers.py` (numbers are tunable starting default
 | Tier | Message limit / mo | Token limit / mo | Features (examples) |
 |------|--------------------|------------------|---------------------|
 | `free` | 10 | 20_000 | none |
-| `tier1` (Basic, $4.99/mo) | 100 | 600_000 | `charts` |
-| `tier2` (Premium, $14.99/mo) | unlimited | 5_000_000 (fair use) | all (`search_web`, `charts`, `advanced_analytics`, `bulk_operations`, `priority_support`, …) |
+| `tier1` (Basic, $4.99/mo) | 100 | 600_000 | `charts`, `investments` |
+| `tier2` (Premium, $14.99/mo) | unlimited | 5_000_000 (fair use) | all (`search_web`, `charts`, `advanced_analytics`, `bulk_operations`, `priority_support`, `investments`, …) |
 
 - `polar_product_id` is injected from env via `configure_product_ids`.
 - Checkout uses product id → Polar.
 - Webhooks reverse-map product id → tier via `tier_for_product`. An unknown product never grants or changes a tier. Snapshots that end or suspend access (cancellation, revocation, `past_due`, any `ends_at`/`ended_at`) are still applied to the row when it tracks the same `polar_subscription_id`, keeping the row's tier. Otherwise retiring or rotating a product id would leave its subscribers paid forever.
 
-Feature keys gate tools and system-prompt sections in `ai/chat_tools.py` (`has_feature`).
+Feature keys gate tools and system-prompt sections in `ai/chat_tools.py` (`has_feature`). The `investments` key gates `/api/v1/investments/**` (`deps.require_investments_access`); free users get **402**.
 
 ### Customer identity
 

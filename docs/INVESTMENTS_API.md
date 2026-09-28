@@ -98,17 +98,22 @@ const headers = {
 
 ### Investment Data Security Rules
 
-All investment endpoints are protected by an environment-controlled feature gate:
+All investment endpoints are behind an environment switch and a subscription check:
 
 ```env
 INVESTMENTS_ENABLED=true
-INVESTMENTS_ALLOWED_USER_IDS=1,42
-INVESTMENTS_ALLOWED_USER_UUIDS=user_abc,user_xyz
 ```
 
-The feature is disabled by default. When enabled, active superusers and active users whose
-database ID or UUID appears in the corresponding comma-separated allowlist can access
-`/api/v1/investments/**`. Other authenticated users receive `403 Forbidden`.
+The feature is disabled by default (`403 Forbidden`). When enabled, `/api/v1/investments/**`
+is available to active users on any paid tier (the `investments` feature in
+`app/core/tiers.py`) and to superusers. Free users, and users whose subscription is
+revoked, past due or has ended, receive `402 Payment Required` with the detail
+`Investments require an active paid subscription`.
+
+The tier comes from the same entitlement resolution as chat (see
+[POLAR_SUBSCRIPTIONS.md](./POLAR_SUBSCRIPTIONS.md)). With subscriptions disabled, every user
+gets `SUBSCRIPTIONS_DEV_DEFAULT_TIER`, which is forced to `free` in production, so only
+superusers keep access there.
 
 - Asset records are global and shared by all portfolios. Only superusers may create,
   update, or deactivate them directly. Regular users can still add assets through the

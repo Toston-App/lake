@@ -255,11 +255,12 @@ async def client(
 
 
 @pytest.fixture
-def enable_investments(monkeypatch: pytest.MonkeyPatch, test_user: User) -> None:
+def enable_investments(monkeypatch: pytest.MonkeyPatch) -> None:
     """Enable investment endpoints and isolate all common external dependencies."""
     monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", str(test_user.id))
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "")
+    # Investments are paid-only; with billing off every user gets this tier.
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", False)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "tier1")
     monkeypatch.setattr(
         CurrencyConverter,
         "get_usd_to_mxn_rate",

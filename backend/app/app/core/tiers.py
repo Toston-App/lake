@@ -33,6 +33,8 @@ FEATURE_CHARTS = "charts"
 FEATURE_ADVANCED_ANALYTICS = "advanced_analytics"
 FEATURE_BULK_OPERATIONS = "bulk_operations"
 FEATURE_PRIORITY_SUPPORT = "priority_support"
+# Investment portfolio endpoints (/api/v1/investments/**). Every paid tier.
+FEATURE_INVESTMENTS = "investments"
 
 ALL_FEATURES = frozenset(
     {
@@ -41,6 +43,7 @@ ALL_FEATURES = frozenset(
         FEATURE_ADVANCED_ANALYTICS,
         FEATURE_BULK_OPERATIONS,
         FEATURE_PRIORITY_SUPPORT,
+        FEATURE_INVESTMENTS,
     }
 )
 
@@ -91,7 +94,7 @@ TIERS: dict[Tier, TierConfig] = {
         label="Basic",
         monthly_message_limit=100,
         monthly_token_limit=600_000,
-        features=frozenset({FEATURE_CHARTS}),
+        features=frozenset({FEATURE_CHARTS, FEATURE_INVESTMENTS}),
         polar_product_id=None,  # set via configure_product_ids from env
         price_hint="$4.99/mo",
         monthly_price_usd=4.99,

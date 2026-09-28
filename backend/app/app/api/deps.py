@@ -185,10 +185,15 @@ def require_chat_access(
     return current_user
 
 
-def require_investments_access(
+async def require_investments_access(
     current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(async_get_db),
     request: Request = None,
 ) -> models.User:
+    """Investments are a paid feature: any paid tier, or a superuser."""
+    from app.core.tiers import FEATURE_INVESTMENTS, has_feature
+    from app.services.entitlements import get_user_tier
+
     if request is not None:
         from app.utilities.investment_telemetry import (
             complete_investment_stage,
@@ -198,14 +203,7 @@ def require_investments_access(
 
         start_investment_event(request, user_id=current_user.id)
 
-    allowed_by_id = current_user.id in settings.investments_allowed_user_ids
-    allowed_by_uuid = (
-        current_user.uuid is not None
-        and current_user.uuid in settings.investments_allowed_user_uuids
-    )
-    if not settings.INVESTMENTS_ENABLED or not (
-        crud.user.is_superuser(current_user) or allowed_by_id or allowed_by_uuid
-    ):
+    if not settings.INVESTMENTS_ENABLED:
         if request is not None:
             fail_investment_event(
                 request,
@@ -214,8 +212,21 @@ def require_investments_access(
             )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Investments feature access is not enabled for this user",
+            detail="Investments feature is not enabled",
         )
+    if not crud.user.is_superuser(current_user):
+        tier, _ = await get_user_tier(db, current_user.id)
+        if not has_feature(tier, FEATURE_INVESTMENTS):
+            if request is not None:
+                fail_investment_event(
+                    request,
+                    reason="subscription_required",
+                    stage="access",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Investments require an active paid subscription",
+            )
     if request is not None:
         complete_investment_stage(request, "access")
     return current_user

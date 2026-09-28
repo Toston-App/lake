@@ -14,6 +14,7 @@ const FEATURE_LABELS: Record<string, string> = {
   advanced_analytics: 'Advanced analytics',
   bulk_operations: 'Bulk operations',
   priority_support: 'Priority support',
+  investments: 'Investment portfolio tracking',
 }
 
 function featureLabel(key: string): string {
