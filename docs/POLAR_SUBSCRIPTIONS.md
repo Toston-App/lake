@@ -206,7 +206,7 @@ Defined in `backend/app/app/core/tiers.py` (numbers are tunable starting default
 - Checkout uses product id → Polar.
 - Webhooks reverse-map product id → tier via `tier_for_product`. An unknown product never grants or changes a tier. Snapshots that end or suspend access (cancellation, revocation, `past_due`, any `ends_at`/`ended_at`) are still applied to the row when it tracks the same `polar_subscription_id`, keeping the row's tier. Otherwise retiring or rotating a product id would leave its subscribers paid forever.
 
-Feature keys gate tools and system-prompt sections in `ai/chat_tools.py` (`has_feature`). The `investments` key gates `/api/v1/investments/**` (`deps.require_investments_access`); free users get **402**.
+Feature keys gate tools and system-prompt sections in `ai/chat_tools.py` (`has_feature`). The `investments` key gates `/api/v1/investments/**` (`deps.require_investments_access`): never-subscribed users get **402**, and users whose subscription lapsed keep read-only access (writes get **402**).
 
 ### Customer identity
 

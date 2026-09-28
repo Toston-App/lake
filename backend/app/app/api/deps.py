@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncGenerator, Generator
 from enum import Enum
+from typing import NoReturn
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
@@ -185,50 +186,61 @@ def require_chat_access(
     return current_user
 
 
+# Methods that only read investment data; everything else creates, edits or
+# deletes it.
+_INVESTMENT_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
 async def require_investments_access(
+    request: Request,
     current_user: models.User = Depends(get_current_active_user),
     db: AsyncSession = Depends(async_get_db),
-    request: Request = None,
 ) -> models.User:
-    """Investments are a paid feature: any paid tier, or a superuser."""
+    """Investments are a paid feature: any paid tier, or a superuser.
+
+    A user whose subscription lapsed (canceled, revoked, payment failure) keeps
+    read-only access so they can still see their portfolio, but can't add,
+    edit or delete anything until they renew.
+    """
     from app.core.tiers import FEATURE_INVESTMENTS, has_feature
+    from app.crud import crud_subscription
     from app.services.entitlements import get_user_tier
+    from app.utilities.investment_telemetry import (
+        complete_investment_stage,
+        fail_investment_event,
+        start_investment_event,
+    )
 
-    if request is not None:
-        from app.utilities.investment_telemetry import (
-            complete_investment_stage,
-            fail_investment_event,
-            start_investment_event,
-        )
+    start_investment_event(request, user_id=current_user.id)
 
-        start_investment_event(request, user_id=current_user.id)
+    def deny(status_code: int, reason: str, detail: str) -> NoReturn:
+        fail_investment_event(request, reason=reason, stage="access")
+        raise HTTPException(status_code=status_code, detail=detail)
 
     if not settings.INVESTMENTS_ENABLED:
-        if request is not None:
-            fail_investment_event(
-                request,
-                reason="feature_access_denied",
-                stage="access",
-            )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Investments feature is not enabled",
+        deny(
+            status.HTTP_403_FORBIDDEN,
+            "feature_access_denied",
+            "Investments feature is not enabled",
         )
     if not crud.user.is_superuser(current_user):
         tier, _ = await get_user_tier(db, current_user.id)
         if not has_feature(tier, FEATURE_INVESTMENTS):
-            if request is not None:
-                fail_investment_event(
-                    request,
-                    reason="subscription_required",
-                    stage="access",
+            subscription = await crud_subscription.get_by_user(db, current_user.id)
+            if subscription is None or not subscription.polar_subscription_id:
+                deny(
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    "subscription_required",
+                    "Investments require an active paid subscription",
                 )
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Investments require an active paid subscription",
-            )
-    if request is not None:
-        complete_investment_stage(request, "access")
+            if request.method not in _INVESTMENT_READ_METHODS:
+                deny(
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    "subscription_inactive",
+                    "Your subscription is inactive: investments are read-only "
+                    "until you renew",
+                )
+    complete_investment_stage(request, "access")
     return current_user
 
 

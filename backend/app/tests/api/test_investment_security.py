@@ -79,15 +79,65 @@ async def test_free_user_is_asked_to_subscribe(client: AsyncClient, billing_on, 
     )
 
 
+INVESTMENT_WRITES = [
+    ("POST", "/holdings", {}),
+    ("PUT", "/holdings/1", {}),
+    ("DELETE", "/holdings/1", None),
+    ("POST", "/transactions", {}),
+    ("POST", "/transactions/with-asset", {}),
+    ("DELETE", "/transactions/1", None),
+    ("POST", "/assets/refresh-prices", None),
+]
+READ_ONLY_DETAIL = (
+    "Your subscription is inactive: investments are read-only until you renew"
+)
+
+
+@pytest.mark.parametrize("path", ["/assets", "/holdings", "/transactions"])
 @pytest.mark.parametrize("status", ["revoked", "past_due", "canceled"])
-async def test_lapsed_subscription_loses_investments(
-    client: AsyncClient, db_session, test_user, billing_on, status
+async def test_lapsed_subscription_keeps_read_access(
+    client: AsyncClient, db_session, test_user, billing_on, status, path
 ):
     await _subscribe(db_session, test_user, tier="tier2", status=status)
 
-    response = await client.get(f"{BASE}/holdings")
+    response = await client.get(f"{BASE}{path}")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("method,path,payload", INVESTMENT_WRITES)
+async def test_lapsed_subscription_cannot_change_investments(
+    client: AsyncClient, db_session, test_user, billing_on, method, path, payload
+):
+    await _subscribe(db_session, test_user, tier="tier1", status="revoked")
+
+    response = await client.request(method, f"{BASE}{path}", json=payload)
 
     assert response.status_code == 402
+    assert response.json()["detail"] == READ_ONLY_DETAIL
+
+
+@pytest.mark.parametrize("method,path,payload", INVESTMENT_WRITES)
+async def test_never_subscribed_user_cannot_change_investments(
+    client: AsyncClient, billing_on, method, path, payload
+):
+    response = await client.request(method, f"{BASE}{path}", json=payload)
+
+    assert response.status_code == 402
+    assert response.json()["detail"] == (
+        "Investments require an active paid subscription"
+    )
+
+
+async def test_active_subscription_writes_pass_the_gate(
+    client: AsyncClient, db_session, test_user, billing_on
+):
+    await _subscribe(db_session, test_user, tier="tier1")
+
+    response = await client.post(f"{BASE}/holdings", json={})
+
+    # Past the subscription gate; the empty body fails validation.
+    assert response.status_code == 422
 
 
 async def test_superuser_needs_no_subscription(

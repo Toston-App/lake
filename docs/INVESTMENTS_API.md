@@ -104,11 +104,18 @@ All investment endpoints are behind an environment switch and a subscription che
 INVESTMENTS_ENABLED=true
 ```
 
-The feature is disabled by default (`403 Forbidden`). When enabled, `/api/v1/investments/**`
-is available to active users on any paid tier (the `investments` feature in
-`app/core/tiers.py`) and to superusers. Free users, and users whose subscription is
-revoked, past due or has ended, receive `402 Payment Required` with the detail
-`Investments require an active paid subscription`.
+The feature is disabled by default (`403 Forbidden`). When enabled, access to
+`/api/v1/investments/**` depends on the user's subscription:
+
+| User | Reads (`GET`) | Writes (`POST`, `PUT`, `DELETE`) |
+|------|---------------|----------------------------------|
+| Any paid tier (the `investments` feature in `app/core/tiers.py`), or a superuser | yes | yes |
+| Had a subscription that is now canceled, revoked or past due | yes (read-only) | `402`: `Your subscription is inactive: investments are read-only until you renew` |
+| Never subscribed | `402`: `Investments require an active paid subscription` | `402`: same |
+
+Read-only users can still see their holdings, transactions, portfolio and prices, but
+can't add, edit or delete holdings or transactions, or force a price refresh, until they
+renew. A scheduled cancellation keeps full access until its end date.
 
 The tier comes from the same entitlement resolution as chat (see
 [POLAR_SUBSCRIPTIONS.md](./POLAR_SUBSCRIPTIONS.md)). With subscriptions disabled, every user
