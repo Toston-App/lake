@@ -326,3 +326,31 @@ async def test_transaction_choices_use_human_names(monkeypatch) -> None:
         {"value": 4, "label": "Dining", "parent_value": 3}
     ]
     assert choices["place_id"] == [{"value": 5, "label": "Cafe"}]
+
+
+async def test_preview_labels_hide_other_users_records(monkeypatch) -> None:
+    user = SimpleNamespace(id=1, is_superuser=False)
+    records = {
+        "category": SimpleNamespace(owner_id=1, name="Food"),
+        "subcategory": SimpleNamespace(owner_id=2, name="Therapy"),
+        "place": SimpleNamespace(owner_id=2, name="Dr. Smith's clinic"),
+    }
+    for entity, record in records.items():
+        monkeypatch.setattr(
+            getattr(chat_tools.crud, entity), "get", AsyncMock(return_value=record)
+        )
+    monkeypatch.setattr(
+        chat_tools.crud.account, "get_by_id", AsyncMock(return_value=None)
+    )
+
+    labels = await chat_tools._expense_field_labels(
+        AsyncMock(),
+        user,
+        {"category_id": 3, "subcategory_id": 4, "place_id": 5},
+    )
+
+    assert labels == {
+        "category_id": "Food",
+        "subcategory_id": "Subcategory #4",
+        "place_id": "Place #5",
+    }

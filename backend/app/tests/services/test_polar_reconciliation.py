@@ -3,9 +3,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from app.core import tiers
+from app.core.config import settings
 from app.core.tiers import configure_product_ids
 from app.models.subscription import UserSubscription
 from app.models.user import User
+from app.services import polar as polar_service
 from app.services.polar_reconciliation import reconcile_subscriptions
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -117,3 +120,30 @@ async def test_reconciliation_explicit_repair_updates_state_and_cache(
     assert row.status == "canceled"
     assert report.repaired_user_ids == [test_user.id]
     cache_write.assert_awaited_once()
+
+
+async def test_reconciliation_loads_product_ids_from_settings(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI never configures the catalog itself; the service must."""
+    monkeypatch.setattr(tiers, "TIERS", dict(tiers.TIERS))
+    monkeypatch.setattr(tiers, "_PRODUCT_INDEX", {})
+    monkeypatch.setattr(polar_service, "_product_ids_configured", False)
+    monkeypatch.setattr(settings, "POLAR_PRODUCT_TIER1_ID", "product_1")
+    monkeypatch.setattr(settings, "POLAR_PRODUCT_TIER2_ID", "product_2")
+    remote = _remote()
+    await _local_row(db_session, test_user, remote)
+    monkeypatch.setattr(
+        "app.services.polar_reconciliation.get_entitlement",
+        AsyncMock(return_value=None),
+    )
+    polar = SimpleNamespace(
+        subscriptions=SimpleNamespace(get_async=AsyncMock(return_value=remote))
+    )
+
+    report = await reconcile_subscriptions(db_session, polar=polar)
+
+    assert report.unknown_product_subscription_ids == []
+    assert report.as_dict()["counts"]["drifted"] == 0

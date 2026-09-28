@@ -168,15 +168,15 @@ def get_current_active_user(
 def require_chat_access(
     current_user: models.User = Depends(get_current_active_user),
 ) -> models.User:
-    """Require global chat enablement and explicit UUID allowlisting."""
+    """Require global chat enablement and UUID allowlisting ("*" allows all)."""
     if not settings.CHAT_ENABLED:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Chat is disabled",
         )
-    if (
-        current_user.uuid is None
-        or current_user.uuid not in settings.chat_allowed_user_uuids
+    allowed = settings.chat_allowed_user_uuids
+    if "*" not in allowed and (
+        current_user.uuid is None or current_user.uuid not in allowed
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

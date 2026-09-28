@@ -382,6 +382,7 @@ def _build_economics_row(
         ends_at=subscription.ends_at,
         ended_at=subscription.ended_at,
         now=now,
+        current_period_end=subscription.current_period_end,
     ):
         try:
             effective = tier_from_value(subscription.tier)

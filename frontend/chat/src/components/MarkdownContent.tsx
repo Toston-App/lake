@@ -17,6 +17,9 @@ export function MarkdownContent({ content, className }: MarkdownContentProps) {
               {children}
             </a>
           ),
+          // Never load remote images from model output: a prompt-injected
+          // reply could encode the user's data in an image URL. Show alt text.
+          img: ({ alt }) => (alt ? <span>{alt}</span> : null),
           table: ({ children }) => (
             <div className="markdown-table-wrap">
               <table>{children}</table>

@@ -75,3 +75,46 @@ def test_legacy_cache_payload_is_reloaded() -> None:
         effective_tier_from_payload({"tier": "tier2", "status": "active"}, now=NOW)
         is None
     )
+
+
+@pytest.mark.parametrize(
+    ("period_end", "expected"),
+    [
+        (None, True),
+        (NOW - timedelta(hours=71), True),
+        (NOW - timedelta(hours=72), False),
+        (NOW - timedelta(days=30), False),
+    ],
+)
+def test_paid_entitlement_lapses_after_missed_renewal(
+    period_end: datetime | None, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SUBSCRIPTION_RENEWAL_GRACE_HOURS", 72)
+
+    assert (
+        has_paid_entitlement(
+            status="active",
+            cancel_at_period_end=False,
+            ends_at=None,
+            ended_at=None,
+            now=NOW,
+            current_period_end=period_end,
+        )
+        is expected
+    )
+
+
+def test_cached_entitlement_lapses_after_missed_renewal() -> None:
+    payload: dict[str, object] = {
+        "lifecycle_version": 1,
+        "tier": "tier2",
+        "status": "active",
+        "current_period_end": (NOW - timedelta(days=10)).isoformat(),
+        "cancel_at_period_end": False,
+        "ends_at": None,
+        "ended_at": None,
+    }
+
+    assert effective_tier_from_payload(payload, now=NOW) == Tier.free

@@ -626,7 +626,29 @@ async def _handle_subscription_event(
             product_id=product_id,
             reason="unknown_product",
         )
-        return
+        # An unmapped product never grants a tier, but cancellations and
+        # revocations must still land or the old paid access would never end.
+        subscription_id = getattr(data, "id", None)
+        if not subscription_id or not _limits_access(status, data):
+            return None
+        applied = await crud_subscription.apply_lifecycle_from_webhook(
+            db,
+            user_id=user.id,
+            polar_subscription_id=subscription_id,
+            status=status,
+            current_period_start=_coerce_dt(
+                getattr(data, "current_period_start", None)
+            ),
+            current_period_end=_coerce_dt(getattr(data, "current_period_end", None)),
+            canceled_at=_coerce_dt(getattr(data, "canceled_at", None)),
+            cancel_at_period_end=bool(getattr(data, "cancel_at_period_end", False)),
+            ends_at=_coerce_dt(getattr(data, "ends_at", None)),
+            ended_at=_coerce_dt(getattr(data, "ended_at", None)),
+            metadata={"event_type": event_type, "unknown_product": True},
+            event_at=event_at,
+            event_priority=_subscription_event_priority(event_type, status, data),
+        )
+        return user.id if applied is not None else None
 
     pending_tier: str | None = None
     pending_effective_at: datetime | None = None
@@ -702,6 +724,16 @@ def _subscription_status_for_event(event_type: str, data: Any) -> str:
         "subscription.uncanceled": "active",
     }
     return mapping.get(event_type, "active")
+
+
+def _limits_access(status: str, data: Any) -> bool:
+    """Whether a snapshot ends, suspends or schedules the end of paid access."""
+    return (
+        status not in {"active", "trialing"}
+        or bool(getattr(data, "cancel_at_period_end", False))
+        or getattr(data, "ends_at", None) is not None
+        or getattr(data, "ended_at", None) is not None
+    )
 
 
 def _subscription_event_priority(event_type: str, status: str, data: Any) -> int:

@@ -45,6 +45,7 @@ from pydantic_ai.capabilities import Hooks
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk, SourceUrlChunk
+from pydantic_ai.usage import UsageLimits
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
@@ -134,6 +135,10 @@ class ChatDeps:
     # tool call.
     pending_question: dict[str, Any] | None = None
     pending_question_id: str | None = None
+    # Running token totals for this turn, updated after every model response so
+    # an interrupted or failed run can still be billed for what it consumed.
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def build_model() -> OpenRouterModel:
@@ -144,8 +149,19 @@ def build_model() -> OpenRouterModel:
             app_url=settings.OPENROUTER_SITE_URL,
             app_title=settings.OPENROUTER_APP_NAME,
         ),
-        # Without this, OpenRouter returns token counts but omits `usage.cost`.
-        settings={"openrouter_usage": {"include": True}},
+        settings={
+            # Without this, OpenRouter returns token counts but omits `usage.cost`.
+            "openrouter_usage": {"include": True},
+            "max_tokens": settings.CHAT_MAX_OUTPUT_TOKENS,
+        },
+    )
+
+
+def build_usage_limits() -> UsageLimits:
+    """Per-turn ceilings: the configured tool rounds plus the final answer."""
+    return UsageLimits(
+        request_limit=settings.CHAT_MAX_TOOL_ROUNDS + 1,
+        total_tokens_limit=settings.CHAT_MAX_TOKENS_PER_TURN,
     )
 
 
@@ -868,6 +884,8 @@ async def _obs_after_model(
     response: Any,
 ) -> Any:
     usage = response.usage
+    ctx.deps.input_tokens += usage.input_tokens
+    ctx.deps.output_tokens += usage.output_tokens
     await record_llm_call(
         turn_id=ctx.deps.turn_id,
         round_index=ctx.run_step,

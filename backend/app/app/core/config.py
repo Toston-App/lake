@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # and can accept either a JSON array or a comma-separated list.
     CLERK_AUTHORIZED_PARTIES: Annotated[list[str], NoDecode] = []
 
-    @field_validator("CLERK_AUTHORIZED_PARTIES", mode="before")
+    @field_validator("CLERK_AUTHORIZED_PARTIES", "BACKEND_CORS_ORIGINS", mode="before")
     def split_authorized_parties(cls, v: Any) -> Any:
         if v is None:
             return []
@@ -71,6 +71,19 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
     SERVER_NAME: str = "localhost"
     SERVER_HOST: AnyHttpUrl = AnyHttpUrl("http://localhost")
+    # Extra CORS origins (JSON array or comma-separated) added to the built-in
+    # allow-list in main.py. Credentials are allowed, so "*" is rejected: it
+    # would let any website make authenticated requests with the session cookie.
+    BACKEND_CORS_ORIGINS: Annotated[list[str], NoDecode] = []
+
+    @field_validator("BACKEND_CORS_ORIGINS")
+    def _reject_wildcard_cors(cls, v: list[str]) -> list[str]:
+        if any(origin.strip() == "*" for origin in v):
+            raise ValueError(
+                "BACKEND_CORS_ORIGINS must list explicit origins; '*' is not allowed"
+            )
+        return [origin.strip().rstrip("/") for origin in v]
+
     PROFILE_QUERY_MODE: bool = False
 
     PROJECT_NAME: str
@@ -200,9 +213,18 @@ class Settings(BaseSettings):
 
     # Chat agent
     CHAT_ENABLED: bool = True
-    # Comma-separated user UUID allowlist. Empty means no user can access chat.
+    # Comma-separated user UUID allowlist. Empty means no user can access chat;
+    # "*" opens chat to every active user, including email/password accounts.
     CHAT_ALLOWED_USER_UUIDS: str = ""
     CHAT_MAX_TOOL_ROUNDS: int = 8
+    # Hard per-turn ceilings so one request can't run up an unbounded model
+    # bill: total tokens across every model call in the turn, and the size of
+    # any single response.
+    CHAT_MAX_TOKENS_PER_TURN: int = 200_000
+    CHAT_MAX_OUTPUT_TOKENS: int = 8_192
+    # Per-user request limits for POST /chat. 0 disables a window.
+    CHAT_RATE_LIMIT_PER_MINUTE: int = 10
+    CHAT_RATE_LIMIT_PER_DAY: int = 300
     CHAT_CONVERSATION_TTL_SECONDS: int = 60 * 60 * 24 * 7
     CHAT_MODEL: str | None = "openai/gpt-5.6-luna"
     TAVILY_API_KEY: str | None = None
@@ -247,6 +269,9 @@ class Settings(BaseSettings):
     AXIOM_SLOW_REQUEST_THRESHOLD_MS: int = 2000  # Consider requests >2s as slow
 
     DEPLOYMENT_ID: str | None = None  # For tracking deployments
+    # Unset means production so a forgotten variable fails closed. Use
+    # "development", "staging" or "test" elsewhere.
+    ENVIRONMENT: str = "production"
     REGION: str | None = None  # e.g., "us-east-1", "eu-west-1"
 
     # ---------- Polar.sh subscriptions ----------
@@ -263,13 +288,17 @@ class Settings(BaseSettings):
     POLAR_PRODUCT_TIER1_ID: str | None = None
     POLAR_PRODUCT_TIER2_ID: str | None = None
     POLAR_WEBHOOK_MAX_BYTES: int = 262_144
+    # Paid access lapses this long after `current_period_end` unless a renewal
+    # webhook moved the period forward, so missed webhooks can't grant access
+    # forever.
+    SUBSCRIPTION_RENEWAL_GRACE_HOURS: int = 72
     # Master switch. None/unset = auto-enable when POLAR_ACCESS_TOKEN is set.
     # Explicit false always disables (even if a token is present). Explicit true
     # (or auto-enable) requires access token + webhook secret + org id.
     SUBSCRIPTIONS_ENABLED: bool | None = None
     # Used only when SUBSCRIPTIONS_ENABLED is False. Sandbox/dev default is
-    # tier2 (unlimited) for full chat locally; production always forces free
-    # (see validator).
+    # tier2 (unlimited) for full chat locally; production (ENVIRONMENT or
+    # POLAR_SERVER) always forces free (see validators).
     SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier2"
 
     @field_validator("POLAR_SERVER")
@@ -324,8 +353,23 @@ class Settings(BaseSettings):
                 )
         return enabled
 
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.strip().lower() in ("production", "prod")
+
     @model_validator(mode="after")
     def _validate_production_polar(self) -> "Settings":
+        if self.is_production:
+            if not self.SUBSCRIPTIONS_ENABLED:
+                # Fail closed: never hand every user a paid tier in production,
+                # even when POLAR_SERVER was left at its sandbox default.
+                self.SUBSCRIPTIONS_DEV_DEFAULT_TIER = "free"
+            elif self.POLAR_SERVER != "production":
+                raise ValueError(
+                    "ENVIRONMENT=production with subscriptions enabled requires "
+                    "POLAR_SERVER=production; sandbox test cards would unlock "
+                    "paid tiers"
+                )
         if not self.SUBSCRIPTIONS_ENABLED or self.POLAR_SERVER != "production":
             return self
 
@@ -333,10 +377,6 @@ class Settings(BaseSettings):
             (self.POLAR_PRODUCT_TIER1_ID or "").strip(),
             (self.POLAR_PRODUCT_TIER2_ID or "").strip(),
         ]
-        if not all(product_ids):
-            raise ValueError(
-                "Production subscriptions require all POLAR_PRODUCT_TIER*_ID values"
-            )
         if not all(product_ids):
             raise ValueError(
                 "Production subscriptions require all POLAR_PRODUCT_TIER*_ID values"

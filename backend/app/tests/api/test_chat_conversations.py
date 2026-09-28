@@ -15,6 +15,13 @@ def setup_database() -> None:
     """These endpoint-unit tests do not require the integration database."""
 
 
+@pytest.fixture(autouse=True)
+def allow_rate_limit():
+    """Keep the Redis-backed chat rate limiter out of endpoint-unit tests."""
+    with patch.object(chat, "hit_rate_limit", new=AsyncMock(return_value=(1, 60))):
+        yield
+
+
 def _request(path: str = "/api/v1/chat") -> Request:
     return Request(
         {
@@ -274,3 +281,247 @@ async def test_failed_pending_write_cannot_render_an_approval_card() -> None:
         )
 
     assert deps.had_pending_confirmation is False
+
+
+def _stream_patches(run_stream, finalize, release):
+    """Patch ``chat_vercel`` collaborators so its metered stream can be driven."""
+    from app.core.tiers import Tier
+
+    adapter = SimpleNamespace(
+        conversation_id="metered",
+        messages=[],
+        run_stream=run_stream,
+        streaming_response=lambda stream: stream,
+    )
+    quota = SimpleNamespace(allowed=True, tier=Tier.free, reason=None)
+
+    async def passthrough(events):
+        async for event in events:
+            yield event
+
+    return (
+        patch.object(chat, "get_pydantic_agent", return_value=object()),
+        patch.object(
+            chat.VercelAIAdapter, "from_request", new=AsyncMock(return_value=adapter)
+        ),
+        patch.object(chat, "latest_user_request", return_value=[]),
+        patch.object(
+            chat, "acquire_conversation_lock", new=AsyncMock(return_value="token")
+        ),
+        patch.object(chat, "release_conversation_lock", new=release),
+        patch.object(
+            chat, "reserve_chat_turn", new=AsyncMock(return_value=(quota, 42))
+        ),
+        patch.object(chat, "get_conversation", new=AsyncMock(return_value=None)),
+        patch.object(chat, "load_model_messages", return_value=[]),
+        patch.object(chat, "deferred_question_results", return_value=None),
+        patch.object(chat, "build_toolset", return_value=object()),
+        patch.object(chat, "build_obs_hooks", return_value=object()),
+        patch.object(chat, "public_chat_stream", new=passthrough),
+        patch.object(chat, "finalize_turn", new=finalize),
+    )
+
+
+async def _open_stream(run_stream, finalize, release):
+    request = _request()
+    patches = _stream_patches(run_stream, finalize, release)
+    with patch.object(request, "json", new=AsyncMock(return_value={})):
+        for p in patches:
+            p.start()
+        try:
+            stream = await chat.chat_vercel(
+                request=request,
+                db=AsyncMock(),
+                current_user=SimpleNamespace(id=1, email=None),
+            )
+        except BaseException:
+            for p in reversed(patches):
+                p.stop()
+            raise
+    return stream, patches
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_bills_turn_as_interrupted() -> None:
+    finalize = AsyncMock()
+    release = AsyncMock(return_value=True)
+
+    def run_stream(**kwargs):
+        deps = kwargs["deps"]
+
+        async def events():
+            deps.input_tokens += 1200
+            deps.output_tokens += 300
+            yield "text-delta"
+            yield "finish"
+
+        return events()
+
+    stream, patches = await _open_stream(run_stream, finalize, release)
+    try:
+        assert await stream.__anext__() == "text-delta"
+        # Client closes the connection before on_complete records the turn.
+        await stream.aclose()
+    finally:
+        for p in reversed(patches):
+            p.stop()
+
+    finalize.assert_awaited_once()
+    kwargs = finalize.await_args.kwargs
+    assert kwargs["status"] == "interrupted"
+    assert kwargs["error"] == "stream_interrupted"
+    assert kwargs["total_tokens"] == 1500
+    release.assert_awaited_once_with(1, "metered", "token")
+
+
+@pytest.mark.asyncio
+async def test_failed_run_refunds_message_but_bills_tokens() -> None:
+    finalize = AsyncMock()
+    release = AsyncMock(return_value=True)
+
+    def run_stream(**kwargs):
+        deps = kwargs["deps"]
+
+        async def events():
+            deps.input_tokens += 900
+            deps.output_tokens += 100
+            yield "error"
+
+        return events()
+
+    stream, patches = await _open_stream(run_stream, finalize, release)
+    try:
+        assert [event async for event in stream] == ["error"]
+    finally:
+        for p in reversed(patches):
+            p.stop()
+
+    kwargs = finalize.await_args.kwargs
+    assert kwargs["status"] == "error"
+    assert kwargs["error"] == "run_failed"
+    assert kwargs["total_tokens"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_failed_confirmation_does_not_refund_the_proposing_turn() -> None:
+    finalize = AsyncMock()
+    with (
+        patch.object(
+            chat, "acquire_conversation_lock", new=AsyncMock(return_value="token")
+        ),
+        patch.object(
+            chat, "release_conversation_lock", new=AsyncMock(return_value=True)
+        ),
+        patch.object(chat, "_enforce_quota", new=AsyncMock()),
+        patch.object(
+            chat,
+            "get_pending_action",
+            new=AsyncMock(
+                return_value={
+                    "conversation_id": "conversation",
+                    "tool_name": "delete_expense",
+                    "tool_args": {"id": 1},
+                    "response_language": "en",
+                    "turn_id": 42,
+                }
+            ),
+        ),
+        patch.object(
+            chat,
+            "execute_tool",
+            new=AsyncMock(return_value=({"success": False, "error": "nope"}, None)),
+        ),
+        patch.object(chat, "delete_pending_action", new=AsyncMock(return_value=True)),
+        patch.object(chat, "record_tool_call", new=AsyncMock()),
+        patch.object(chat, "finalize_turn", new=finalize),
+        patch.object(chat, "get_conversation", new=AsyncMock(return_value=None)),
+        patch.object(chat, "load_model_messages", return_value=[]),
+        patch.object(chat, "append_confirmation_to_model_history", return_value=[]),
+        patch.object(chat, "public_ui_messages", return_value=[]),
+        patch.object(chat, "serialize_model_messages", return_value=[]),
+        patch.object(chat, "save_conversation", new=AsyncMock(return_value=True)),
+        patch.object(chat, "upsert_conversation", new=AsyncMock()),
+    ):
+        await chat.confirm_chat_action(
+            request=_request(),
+            conversation_id="conversation",
+            body=ChatConfirmRequest(action_id="action", tool_args={"id": 999}),
+            db=AsyncMock(),
+            current_user=SimpleNamespace(id=1),
+        )
+
+    finalize.assert_awaited_once_with(
+        42, status="ok", pending_confirmation=False, error="nope"
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_rejects_over_limit_with_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chat.settings, "CHAT_RATE_LIMIT_PER_MINUTE", 10)
+    with patch.object(chat, "hit_rate_limit", new=AsyncMock(return_value=(11, 30))):
+        with pytest.raises(HTTPException) as exc_info:
+            await chat._enforce_chat_rate_limit(1)
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers == {"Retry-After": "30"}
+    assert exc_info.value.detail == {"reason": "rate_limited", "retry_after": 30}
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_fails_closed_when_redis_is_down() -> None:
+    with patch.object(
+        chat, "hit_rate_limit", new=AsyncMock(side_effect=RuntimeError("down"))
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await chat._enforce_chat_rate_limit(1)
+
+    assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_chat_rate_limit_window_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chat.settings, "CHAT_RATE_LIMIT_PER_MINUTE", 0)
+    monkeypatch.setattr(chat.settings, "CHAT_RATE_LIMIT_PER_DAY", 0)
+    hit = AsyncMock(return_value=(10_000, 1))
+    with patch.object(chat, "hit_rate_limit", new=hit):
+        await chat._enforce_chat_rate_limit(1)
+
+    hit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stream_runs_with_per_turn_usage_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chat.settings, "CHAT_MAX_TOOL_ROUNDS", 4)
+    monkeypatch.setattr(chat.settings, "CHAT_MAX_TOKENS_PER_TURN", 50_000)
+    captured: dict = {}
+
+    def run_stream(**kwargs):
+        captured.update(kwargs)
+
+        async def events():
+            yield "finish"
+
+        return events()
+
+    stream, patches = await _open_stream(run_stream, AsyncMock(), AsyncMock())
+    try:
+        [event async for event in stream]
+    finally:
+        for p in reversed(patches):
+            p.stop()
+
+    limits = captured["usage_limits"]
+    assert limits.request_limit == 5
+    assert limits.total_tokens_limit == 50_000
+
+
+def test_chat_model_caps_output_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(agent.settings, "CHAT_MAX_OUTPUT_TOKENS", 1234)
+
+    assert agent.build_model().settings["max_tokens"] == 1234

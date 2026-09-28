@@ -16,8 +16,9 @@ Resolution order:
 The usage window starts at the subscription's `current_period_start` for
 active subscriptions, or the first day of the current calendar month for
 free users. Usage is persisted in `chat_obs_turns` even when optional detailed
-chat observability is disabled. Expired reservations and errored turns do not
-consume quota.
+chat observability is disabled. Expired reservations and server-errored turns
+do not consume a message; turns the client abandons mid-stream do. Tokens a
+turn actually consumed always count, whatever its status.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -47,6 +48,8 @@ _IMMEDIATE_LOSS_STATUSES = frozenset({"revoked", "unpaid"})
 _QUOTA_LOCK_NAMESPACE = (
     0x504F4C52  # "POLR"; avoids colliding with other advisory locks.
 )
+# Turn whose client disconnected mid-stream. Billed like a completed turn.
+TURN_STATUS_INTERRUPTED = "interrupted"
 
 
 class QuotaReservationError(RuntimeError):
@@ -88,15 +91,18 @@ def has_paid_entitlement(
     ends_at: datetime | None,
     ended_at: datetime | None,
     now: datetime,
+    current_period_end: datetime | None = None,
 ) -> bool:
     """Return whether a Polar lifecycle snapshot grants paid access.
 
     Naive provider timestamps are interpreted as UTC. The boundary is
-    exclusive: access is gone at the exact ending instant.
+    exclusive: access is gone at the exact ending instant. A period that ended
+    more than the renewal grace ago without a renewal webhook grants nothing.
     """
     now_utc = _as_utc(now)
     ends_at_utc = _as_utc(ends_at)
     ended_at_utc = _as_utc(ended_at)
+    period_end_utc = _as_utc(current_period_end)
     if now_utc is None:  # pragma: no cover - the public contract requires now
         return False
     if status in _IMMEDIATE_LOSS_STATUSES:
@@ -104,6 +110,9 @@ def has_paid_entitlement(
     if ended_at_utc is not None and ended_at_utc <= now_utc:
         return False
     if ends_at_utc is not None and ends_at_utc <= now_utc:
+        return False
+    grace = timedelta(hours=settings.SUBSCRIPTION_RENEWAL_GRACE_HOURS)
+    if period_end_utc is not None and period_end_utc + grace <= now_utc:
         return False
     if cancel_at_period_end:
         return bool(
@@ -162,6 +171,7 @@ def effective_tier_from_payload(
         ends_at=_parse_cached_dt(payload.get("ends_at")),
         ended_at=_parse_cached_dt(payload.get("ended_at")),
         now=now,
+        current_period_end=_parse_cached_dt(payload.get("current_period_end")),
     ):
         return Tier.free
     try:
@@ -181,6 +191,7 @@ def _effective_tier_from_row(
         ends_at=row.ends_at,
         ended_at=row.ended_at,
         now=now or datetime.now(timezone.utc),
+        current_period_end=row.current_period_end,
     ):
         try:
             tier = tier_from_value(row.tier)
@@ -232,25 +243,28 @@ async def get_period_usage(
 ) -> dict[str, int]:
     """Aggregate this user's chat turns since `period_start`.
 
-    Counts messages (turns) and sums tokens. Excludes errored turns so a
-    transient server error doesn't burn a user's quota.
+    Counts messages (turns) and sums tokens. A server error doesn't burn a
+    message, and neither does an in-progress reservation past its TTL. Tokens
+    are summed across every turn: model usage was paid for even when the run
+    failed, so errors can't be used to chat for free.
     """
+    reservation_cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.CHAT_TURN_RESERVATION_TTL_SECONDS
+    )
+    counts_as_message = and_(
+        ChatObsTurn.status != "error",
+        or_(
+            ChatObsTurn.status != "in_progress",
+            ChatObsTurn.started_at >= reservation_cutoff,
+        ),
+    )
     stmt = (
         select(
-            func.count(ChatObsTurn.id).label("messages"),
+            func.count(ChatObsTurn.id).filter(counts_as_message).label("messages"),
             func.coalesce(func.sum(ChatObsTurn.total_tokens), 0).label("tokens"),
         )
         .where(ChatObsTurn.user_id == user_id)
         .where(ChatObsTurn.started_at >= period_start)
-        .where(ChatObsTurn.status != "error")
-        .where(
-            or_(
-                ChatObsTurn.status != "in_progress",
-                ChatObsTurn.started_at
-                >= datetime.now(timezone.utc)
-                - timedelta(seconds=settings.CHAT_TURN_RESERVATION_TTL_SECONDS),
-            )
-        )
     )
     row = (await db.execute(stmt)).one()
     return {
@@ -272,6 +286,7 @@ async def check_quota(db: AsyncSession, user: User) -> QuotaResult:
             ends_at=row.ends_at,
             ended_at=row.ended_at,
             now=datetime.now(timezone.utc),
+            current_period_end=row.current_period_end,
         )
         and row.current_period_start is not None
     ):

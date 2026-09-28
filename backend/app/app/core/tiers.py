@@ -100,7 +100,8 @@ TIERS: dict[Tier, TierConfig] = {
         tier=Tier.tier2,
         label="Premium",
         monthly_message_limit=None,
-        monthly_token_limit=None,
+        # Fair-use ceiling: messages are unlimited, but model spend is not.
+        monthly_token_limit=5_000_000,
         features=frozenset(ALL_FEATURES),
         polar_product_id=None,
         price_hint="$14.99/mo",

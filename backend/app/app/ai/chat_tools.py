@@ -54,6 +54,7 @@ MANAGE_DELETE_ACTIONS = frozenset(
 
 RISKY_CONFIRMATION_TOOLS = frozenset(
     {
+        "create_transfer",
         "update_expense",
         "update_income",
         "update_transfer",
@@ -114,27 +115,43 @@ async def _label_account(
     return account.name if account else f"Account #{account_id}"
 
 
-async def _label_category(db: AsyncSession, category_id: int | None) -> str | None:
+def _owned_name(user: models.User, record: Any) -> str | None:
+    """Name of ``record`` if it belongs to ``user`` (the services' ownership rule).
+
+    Previews must not reveal the names of other users' records.
+    """
+    if record is None or (
+        record.owner_id != user.id and not crud.user.is_superuser(user)
+    ):
+        return None
+    return record.name
+
+
+async def _label_category(
+    db: AsyncSession, user: models.User, category_id: int | None
+) -> str | None:
     if category_id is None:
         return None
     category = await crud.category.get(db=db, id=category_id)
-    return category.name if category else f"Category #{category_id}"
+    return _owned_name(user, category) or f"Category #{category_id}"
 
 
 async def _label_subcategory(
-    db: AsyncSession, subcategory_id: int | None
+    db: AsyncSession, user: models.User, subcategory_id: int | None
 ) -> str | None:
     if subcategory_id is None:
         return None
     sub = await crud.subcategory.get(db=db, id=subcategory_id)
-    return sub.name if sub else f"Subcategory #{subcategory_id}"
+    return _owned_name(user, sub) or f"Subcategory #{subcategory_id}"
 
 
-async def _label_place(db: AsyncSession, place_id: int | None) -> str | None:
+async def _label_place(
+    db: AsyncSession, user: models.User, place_id: int | None
+) -> str | None:
     if place_id is None:
         return None
     place = await crud.place.get(db=db, id=place_id)
-    return place.name if place else f"Place #{place_id}"
+    return _owned_name(user, place) or f"Place #{place_id}"
 
 
 async def _expense_field_labels(
@@ -146,15 +163,15 @@ async def _expense_field_labels(
         if name:
             labels["account_id"] = name
     if fields.get("category_id") is not None:
-        name = await _label_category(db, fields["category_id"])
+        name = await _label_category(db, user, fields["category_id"])
         if name:
             labels["category_id"] = name
     if fields.get("subcategory_id") is not None:
-        name = await _label_subcategory(db, fields["subcategory_id"])
+        name = await _label_subcategory(db, user, fields["subcategory_id"])
         if name:
             labels["subcategory_id"] = name
     if fields.get("place_id") is not None:
-        name = await _label_place(db, fields["place_id"])
+        name = await _label_place(db, user, fields["place_id"])
         if name:
             labels["place_id"] = name
     return labels
@@ -169,11 +186,11 @@ async def _income_field_labels(
         if name:
             labels["account_id"] = name
     if fields.get("subcategory_id") is not None:
-        name = await _label_subcategory(db, fields["subcategory_id"])
+        name = await _label_subcategory(db, user, fields["subcategory_id"])
         if name:
             labels["subcategory_id"] = name
     if fields.get("place_id") is not None:
-        name = await _label_place(db, fields["place_id"])
+        name = await _label_place(db, user, fields["place_id"])
         if name:
             labels["place_id"] = name
     return labels

@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.expression import select
@@ -155,6 +155,68 @@ async def upsert_from_webhook(
     return await get_by_user(db, user_id)
 
 
+async def apply_lifecycle_from_webhook(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    polar_subscription_id: str,
+    status: str,
+    current_period_start: datetime | None,
+    current_period_end: datetime | None,
+    canceled_at: datetime | None,
+    cancel_at_period_end: bool,
+    ends_at: datetime | None,
+    ended_at: datetime | None,
+    metadata: dict[str, Any] | None,
+    event_at: datetime,
+    event_priority: int,
+) -> UserSubscription | None:
+    """Apply only lifecycle fields from a snapshot whose product is unmapped.
+
+    The row keeps its tier, and only a row already tracking this subscription
+    is touched, so an unrelated subscription can't revoke or grant anything.
+    Returns None when no row matched or a newer event was already applied.
+    """
+    await db.execute(
+        select(func.pg_advisory_xact_lock(_SUBSCRIPTION_LOCK_NAMESPACE, user_id))
+    )
+    if event_at.tzinfo is None:
+        event_at = event_at.replace(tzinfo=timezone.utc)
+    stmt = (
+        update(UserSubscription)
+        .where(UserSubscription.user_id == user_id)
+        .where(UserSubscription.polar_subscription_id == polar_subscription_id)
+        .where(
+            or_(
+                UserSubscription.last_event_at.is_(None),
+                UserSubscription.last_event_at < event_at,
+                and_(
+                    UserSubscription.last_event_at == event_at,
+                    UserSubscription.last_event_priority < event_priority,
+                ),
+            )
+        )
+        .values(
+            status=status,
+            current_period_start=current_period_start,
+            current_period_end=current_period_end,
+            canceled_at=canceled_at,
+            cancel_at_period_end=cancel_at_period_end,
+            ends_at=ends_at,
+            ended_at=ended_at,
+            last_event_at=event_at,
+            last_event_priority=event_priority,
+            polar_metadata=metadata,
+            updated_at=datetime.now(timezone.utc),
+        )
+        .returning(UserSubscription.id)
+    )
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none() is None:
+        return None
+    return await get_by_user(db, user_id)
+
+
 async def set_free(
     db: AsyncSession, user_id: int, *, canceled_at: datetime | None = None
 ) -> None:
@@ -174,8 +236,6 @@ async def set_polar_customer_id(
 
     Refuses to bind a customer id already owned by a different user.
     """
-    from sqlalchemy import update
-
     from app.models.user import User
 
     existing_user = (

@@ -8,6 +8,7 @@ from functools import wraps
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic_ai import DeferredToolRequests
@@ -16,7 +17,7 @@ from pydantic_ai.run import AgentRunResult
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.agent import ChatDeps, build_obs_hooks, build_toolset
+from app.ai.agent import ChatDeps, build_obs_hooks, build_toolset, build_usage_limits
 from app.ai.agent import get_chat_agent as get_pydantic_agent
 from app.ai.chat_presentation import (
     append_confirmation_to_model_history,
@@ -47,6 +48,7 @@ from app.schemas.chat import (
     chat_action_detail,
 )
 from app.services.entitlements import (
+    TURN_STATUS_INTERRUPTED,
     QuotaReservationError,
     check_quota,
     reserve_chat_turn,
@@ -63,6 +65,7 @@ from app.utilities.redis import (
     delete_pending_action,
     get_conversation,
     get_pending_action,
+    hit_rate_limit,
     list_user_conversations,
     refresh_conversation_lock,
     release_conversation_lock,
@@ -152,6 +155,29 @@ def _release_stream_lock_on_setup_error(
     return wrapped
 
 
+async def _enforce_chat_rate_limit(user_id: int) -> None:
+    """Throttle model-backed chat requests per user (fails closed)."""
+    windows = (
+        (60, settings.CHAT_RATE_LIMIT_PER_MINUTE),
+        (86_400, settings.CHAT_RATE_LIMIT_PER_DAY),
+    )
+    for window_seconds, limit in windows:
+        if limit <= 0:
+            continue
+        try:
+            hits, retry_after = await hit_rate_limit(f"chat:{user_id}", window_seconds)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail={"reason": "rate_limit_unavailable"}
+            ) from exc
+        if hits > limit:
+            raise HTTPException(
+                status_code=429,
+                detail={"reason": "rate_limited", "retry_after": retry_after},
+                headers={"Retry-After": str(retry_after)},
+            )
+
+
 async def _enforce_quota(
     db: AsyncSession, user: User
 ) -> tuple[bool, Tier, dict[str, Any]]:
@@ -235,6 +261,7 @@ async def chat_vercel(
     normal JSON error. Once streaming begins, the VercelAIAdapter owns the SSE
     response and emits the protocol chunks that `useChat` consumes.
     """
+    await _enforce_chat_rate_limit(current_user.id)
     agent = get_pydantic_agent()
     try:
         request_payload = await request.json()
@@ -320,10 +347,11 @@ async def chat_vercel(
     )
     started = time.perf_counter()
     completed = False
+    failure_reason: str | None = None
 
     async def on_complete(result: AgentRunResult) -> None:
         """Persist conversation + finalize observability after a successful run."""
-        nonlocal completed
+        nonlocal completed, failure_reason
         duration_ms = int((time.perf_counter() - started) * 1000)
         is_pending = deps.had_pending_confirmation
         has_pending_question = deps.pending_question is not None
@@ -377,12 +405,8 @@ async def chat_vercel(
             model_messages=private_msgs,
         )
         if not saved:
-            await finalize_turn(
-                turn_id,
-                status="error",
-                error="conversation_persistence_failed",
-                duration_ms=duration_ms,
-            )
+            # ``metered_stream`` finalizes the turn (with its token usage).
+            failure_reason = "conversation_persistence_failed"
             enrich_event(
                 request,
                 persistence={
@@ -417,6 +441,7 @@ async def chat_vercel(
         deps=deps,
         message_history=model_history,
         deferred_tool_results=deferred_results,
+        usage_limits=build_usage_limits(),
         toolsets=[build_toolset(tier)],
         capabilities=[build_obs_hooks()],
         on_complete=on_complete,
@@ -438,25 +463,41 @@ async def chat_vercel(
                     return
 
         renewal_task = asyncio.create_task(keep_lock_alive())
+        interrupted = False
         try:
             async for event in public_chat_stream(event_stream):
                 yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            # The client disconnected. Whatever it already received was paid
+            # for, so this is billed as a message, not refunded as an error.
+            interrupted = True
+            raise
         finally:
-            renewal_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await renewal_task
-            with suppress(Exception):
-                await release_conversation_lock(
-                    current_user.id, conversation_id, lock_token
-                )
-            request.state.chat_stream_lock = None
-            if not completed:
-                await finalize_turn(
-                    turn_id,
-                    status="error",
-                    error="stream_interrupted",
-                    duration_ms=int((time.perf_counter() - started) * 1000),
-                )
+            # After a disconnect the server's cancel scope would cancel every
+            # await below, skipping the lock release and the billing update.
+            with anyio.CancelScope(shield=True):
+                renewal_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await renewal_task
+                with suppress(Exception):
+                    await release_conversation_lock(
+                        current_user.id, conversation_id, lock_token
+                    )
+                request.state.chat_stream_lock = None
+                if not completed:
+                    await finalize_turn(
+                        turn_id,
+                        status=TURN_STATUS_INTERRUPTED if interrupted else "error",
+                        error=(
+                            "stream_interrupted"
+                            if interrupted
+                            else failure_reason or "run_failed"
+                        ),
+                        duration_ms=int((time.perf_counter() - started) * 1000),
+                        total_prompt_tokens=deps.input_tokens,
+                        total_completion_tokens=deps.output_tokens,
+                        total_tokens=deps.input_tokens + deps.output_tokens,
+                    )
 
     return adapter.streaming_response(metered_stream())
 
@@ -602,10 +643,6 @@ async def confirm_chat_action(
 
     orig_turn_id = pending.get("turn_id")
 
-    print(
-        f"🚀 [CONFIRM_CHAT_ACTION] Confirming tool {pending['tool_name']} with args {tool_args} for user {current_user.id} in conversation {conversation_id}"
-    )
-
     with timed() as t:
         result, action_type = await execute_tool(
             pending["tool_name"],
@@ -628,9 +665,11 @@ async def confirm_chat_action(
         duration_ms=t.ms,
         error=None if success else result.get("error"),
     )
+    # The model turn that proposed this action already ran and is billed; a
+    # failed confirmation must not flip it to "error" and refund the message.
     await finalize_turn(
         orig_turn_id,
-        status="ok" if success else "error",
+        status="ok",
         pending_confirmation=False,
         error=None if success else result.get("error"),
     )

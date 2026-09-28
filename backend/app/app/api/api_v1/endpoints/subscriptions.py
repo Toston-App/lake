@@ -119,11 +119,12 @@ async def create_subscription_checkout(
     request: Request,
     body: CheckoutRequest,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.require_chat_access),
 ) -> Any:
     """Create a Polar checkout session for the requested tier.
 
-    Returns a hosted URL the frontend should redirect to.
+    Returns a hosted URL the frontend should redirect to. Paid tiers only buy
+    chat capacity, so users without chat access can't start a checkout.
     """
     try:
         tier = tier_from_value(body.tier)
@@ -147,7 +148,7 @@ async def change_subscription_plan(
     request: Request,
     body: CheckoutRequest,
     db: AsyncSession = Depends(deps.async_get_db),
-    current_user: User = Depends(deps.get_current_active_user),
+    current_user: User = Depends(deps.require_chat_access),
 ) -> Any:
     try:
         tier = tier_from_value(body.tier)

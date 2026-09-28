@@ -20,9 +20,13 @@ function featureLabel(key: string): string {
   return FEATURE_LABELS[key] ?? key.replace(/_/g, ' ')
 }
 
-function formatMessages(limit: number | null): string {
-  if (limit == null) return 'Unlimited messages'
-  return `${limit} messages / mo`
+function formatMessages(tier: TierOut): string {
+  if (tier.monthly_message_limit == null) {
+    return tier.monthly_token_limit == null
+      ? 'Unlimited messages'
+      : 'Unlimited messages (fair use)'
+  }
+  return `${tier.monthly_message_limit} messages / mo`
 }
 
 export function PricingPlans({
@@ -51,7 +55,7 @@ export function PricingPlans({
                 {tier.price_hint ?? '—'}
               </span>
             </div>
-            <p className="pricing-meta">{formatMessages(tier.monthly_message_limit)}</p>
+            <p className="pricing-meta">{formatMessages(tier)}</p>
             <ul className="pricing-features">
               {tier.features.map((f) => (
                 <li key={f}>{featureLabel(f)}</li>

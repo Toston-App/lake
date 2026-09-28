@@ -6,7 +6,11 @@ import pytest
 from app.core.config import settings
 from app.models.chat_observability import ChatObsTurn
 from app.models.user import User
-from app.services.entitlements import reserve_chat_turn
+from app.services.entitlements import (
+    TURN_STATUS_INTERRUPTED,
+    get_period_usage,
+    reserve_chat_turn,
+)
 from sqlalchemy import delete
 
 from tests.conftest import TestSessionLocal
@@ -68,6 +72,44 @@ async def test_stale_reservation_does_not_consume_quota(
     )
     assert quota.allowed
     assert turn_id is not None
+
+
+async def test_interrupted_turns_count_and_errored_tokens_are_billed(
+    db_session, test_user: User
+) -> None:
+    period_start = datetime.now(timezone.utc) - timedelta(days=1)
+    rows = [
+        ("ok", 100),
+        (TURN_STATUS_INTERRUPTED, 200),
+        ("error", 400),
+        ("pending_confirmation", 800),
+    ]
+    for index, (status, tokens) in enumerate(rows):
+        db_session.add(
+            ChatObsTurn(
+                conversation_id=f"usage-{index}",
+                user_id=test_user.id,
+                provider="openrouter",
+                status=status,
+                total_tokens=tokens,
+            )
+        )
+    db_session.add(
+        ChatObsTurn(
+            conversation_id="usage-stale",
+            user_id=test_user.id,
+            provider="openrouter",
+            status="in_progress",
+            started_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+    )
+    await db_session.commit()
+
+    usage = await get_period_usage(db_session, test_user.id, period_start)
+
+    # A server error refunds the message but never the tokens it consumed; a
+    # client disconnect is billed in full.
+    assert usage == {"messages_used": 3, "tokens_used": 1500}
 
 
 async def test_parallel_reservations_admit_exactly_one_final_slot(

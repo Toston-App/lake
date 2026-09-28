@@ -1,6 +1,7 @@
 import datetime
 import json
 import re
+import time
 import uuid
 
 from upstash_redis.asyncio import Redis
@@ -538,6 +539,35 @@ async def invalidate_user_cache(user_id: int) -> bool:
     except Exception as e:
         logging.error(f"Redis error invalidating cache for user {user_id}: {str(e)}")
         return False
+
+
+# ==================== Rate limiting ====================
+
+RATE_LIMIT_PREFIX = "rate-limit"
+
+_FIXED_WINDOW_SCRIPT = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
+
+
+async def hit_rate_limit(key: str, window_seconds: int) -> tuple[int, int]:
+    """Count one hit in the current fixed window.
+
+    Returns (hits in this window, seconds until the window resets). Raises on
+    Redis errors so callers can decide whether to fail open or closed.
+    """
+    now = int(time.time())
+    window_start = now - now % window_seconds
+    count = await r.eval(
+        _FIXED_WINDOW_SCRIPT,
+        keys=[f"{RATE_LIMIT_PREFIX}:{key}:{window_seconds}:{window_start}"],
+        args=[str(window_seconds)],
+    )
+    return int(count), window_start + window_seconds - now
 
 
 # ==================== Subscription entitlement cache ====================

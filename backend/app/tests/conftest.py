@@ -55,6 +55,8 @@ os.environ.setdefault("CLERK_JWT_PUBLIC_KEY", "dGVzdC1jbGVyay1wdWJsaWMta2V5")
 os.environ.setdefault("CLERK_ISSUER", "https://test.clerk.accounts.dev")
 os.environ.setdefault("PROFILE_QUERY_MODE", "False")
 os.environ.setdefault("SENTRY_DSN", "")
+# Settings default to production (fail closed); tests are not production.
+os.environ.setdefault("ENVIRONMENT", "test")
 
 from app.api.deps import (  # noqa: E402
     async_get_db,

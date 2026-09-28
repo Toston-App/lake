@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.tiers import Tier, tier_for_product
 from app.models.subscription import UserSubscription
 from app.services.entitlements import entitlement_payload
+from app.services.polar import _configure_product_ids
 from app.utilities.redis import get_entitlement, set_entitlement
 
 
@@ -93,6 +94,9 @@ async def reconcile_subscriptions(
 
     The report contains identifiers and counts, never customer payloads.
     """
+    # Without the env product ids every subscription maps to free and would be
+    # reported as an unknown product, silently skipping all repairs.
+    _configure_product_ids()
     rows = (await db.execute(select(UserSubscription))).scalars().all()
     report = ReconciliationReport(scanned=len(rows))
     repaired_rows: list[UserSubscription] = []

@@ -59,9 +59,20 @@ Copy the Polar block from `.env.develop` into `.env` and fill values for the env
 | `POLAR_WEBHOOK_MAX_BYTES` | no | `262144` | Maximum raw webhook body size |
 | `CLERK_SECRET_KEY` | for UUID-only Clerk users | — | Clerk Backend API secret used to retrieve the user's primary email/name before creating a Polar customer |
 | `CHAT_TURN_RESERVATION_TTL_SECONDS` | no | `900` | Maximum age of an in-progress quota reservation |
-| `SUBSCRIPTIONS_DEV_DEFAULT_TIER` | no | `tier2` | Tier when subscriptions are disabled. Forced to `free` if `POLAR_SERVER=production` |
+| `SUBSCRIPTION_RENEWAL_GRACE_HOURS` | no | `72` | Paid access lapses this long after `current_period_end` unless a renewal webhook moved the period |
+| `SUBSCRIPTIONS_DEV_DEFAULT_TIER` | no | `tier2` | Tier when subscriptions are disabled. Forced to `free` if `POLAR_SERVER=production` or `ENVIRONMENT=production` |
+| `ENVIRONMENT` | no | `production` | Anything other than `production`/`prod` (e.g. `development`, `staging`, `test`) is non-production. See [Production fail-closed](#production-fail-closed) |
 
-Product ids are optional for sandbox app boot, but both are required and must be unique in production. Unknown webhook product ids are logged and ignored without changing the user's current entitlement.
+Product ids are optional for sandbox app boot, but both are required and must be unique in production. Unknown webhook product ids never grant a tier; see [Tier catalog](#tier-catalog) for how their cancellations are still applied.
+
+### Production fail-closed
+
+`ENVIRONMENT` defaults to `production`, so a deployment that forgets it is treated as production:
+
+- Subscriptions disabled → everyone is `free`, whatever `SUBSCRIPTIONS_DEV_DEFAULT_TIER` or `POLAR_SERVER` say.
+- Subscriptions enabled with `POLAR_SERVER=sandbox` → startup fails. Sandbox test cards would otherwise unlock paid tiers.
+
+Set `ENVIRONMENT=development` locally and `ENVIRONMENT=staging` for a sandbox-backed staging deployment.
 
 ### Enable rules
 
@@ -115,7 +126,8 @@ Do this once per environment (sandbox org for local/staging, production org for 
 8. **Paste product ids** into `POLAR_PRODUCT_TIER1_ID` / `TIER2`.
 9. Set `POLAR_SERVER` to `sandbox` or `production` to match the org you used.
 10. Set `POLAR_SUCCESS_URL_BASE` to the **public origin users hit for the chat app** if it differs from `SERVER_HOST` (checkout returns to `{base}/account?checkout=success`).
-11. Disable **multiple subscriptions per customer** in Polar. Application plan changes update the one existing subscription. Portal plan changes may remain disabled because the application enforces upgrade/downgrade proration itself.
+11. Disable **multiple subscriptions per customer** in Polar. Application plan changes update the one existing subscription.
+12. Disable **plan changes in the customer portal**, and keep only the two mapped products in the org. A portal switch to an unmapped product can't be mapped to a tier.
 
 ### 3. Database migrations
 
@@ -166,10 +178,12 @@ Webhook URL must hit **this** backend instance (same Postgres + Redis as chat).
 #### Production
 
 ```bash
+ENVIRONMENT=production
 SUBSCRIPTIONS_ENABLED=true
 POLAR_SERVER=production
 # production OAT, webhook secret, org id, product ids only
 # never reuse sandbox tokens or product ids
+CHAT_ALLOWED_USER_UUIDS=*   # or an explicit beta allowlist
 ```
 
 If Polar is off in production, everyone is **free** (`SUBSCRIPTIONS_DEV_DEFAULT_TIER` is forced to `free`).
@@ -185,12 +199,12 @@ Defined in `backend/app/app/core/tiers.py` (numbers are tunable starting default
 | Tier | Message limit / mo | Token limit / mo | Features (examples) |
 |------|--------------------|------------------|---------------------|
 | `free` | 10 | 20_000 | none |
-| `tier1` (Basic, $5/mo) | 100 | 200_000 | `search_web` |
-| `tier2` (Unlimited, $14.99/mo) | unlimited | unlimited | all (`search_web`, `charts`, `advanced_analytics`, `bulk_operations`, `priority_support`, …) |
+| `tier1` (Basic, $4.99/mo) | 100 | 600_000 | `charts` |
+| `tier2` (Premium, $14.99/mo) | unlimited | 5_000_000 (fair use) | all (`search_web`, `charts`, `advanced_analytics`, `bulk_operations`, `priority_support`, …) |
 
 - `polar_product_id` is injected from env via `configure_product_ids`.
 - Checkout uses product id → Polar.
-- Webhooks reverse-map product id → tier via `tier_for_product`. Unknown products are quarantined without mutating entitlement state.
+- Webhooks reverse-map product id → tier via `tier_for_product`. An unknown product never grants or changes a tier. Snapshots that end or suspend access (cancellation, revocation, `past_due`, any `ends_at`/`ended_at`) are still applied to the row when it tracks the same `polar_subscription_id`, keeping the row's tier. Otherwise retiring or rotating a product id would leave its subscribers paid forever.
 
 Feature keys gate tools and system-prompt sections in `ai/chat_tools.py` (`has_feature`).
 
@@ -346,6 +360,7 @@ So:
 | Scheduled cancellation (`cancel_at_period_end`, future `ends_at`) | Row’s tier until, but not including, `ends_at` |
 | `revoked`, `unpaid`, elapsed `ends_at`/`ended_at` | **`free`** immediately |
 | `past_due`, `incomplete`, unknown status, canceled without an end | **`free`** (fail closed) |
+| Any status more than `SUBSCRIPTION_RENEWAL_GRACE_HOURS` past `current_period_end` | **`free`**: the renewal webhook never arrived |
 
 The row may keep historical `tier` for display/debug; entitlements only grant paid features for active/trialing.
 
@@ -362,14 +377,16 @@ Usage window:
 - Paying active sub with `current_period_start` → that timestamp to `current_period_end`.
 - Free / inactive → first day of current UTC calendar month.
 
-Usage sources: aggregate `chat_obs_turns` for the user since period start, excluding errors and expired `in_progress` reservations. Before model execution, the backend holds a per-user PostgreSQL advisory lock, checks usage, and inserts an `in_progress` reservation atomically. Billing reservations remain enabled even when optional observability is disabled.
+Usage sources: aggregate `chat_obs_turns` for the user since period start. Messages exclude server errors and expired `in_progress` reservations; a turn whose client disconnected mid-stream is stored as `interrupted` and counts. Tokens count for every turn, including errors, because the model usage was paid for. A failed confirmation never refunds the turn that proposed it. Before model execution, the backend holds a per-user PostgreSQL advisory lock, checks usage, and inserts an `in_progress` reservation atomically. Billing reservations remain enabled even when optional observability is disabled.
 
 Limits from the tier config:
 
 - `messages_used >= monthly_message_limit` → deny (`message_limit_reached`)
 - `tokens_used >= monthly_token_limit` → deny (`token_limit_reached`)
 
-Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Successful subscription webhooks invalidate Redis after the database commit so the next turn sees the new tier without waiting for TTL. An invalidation failure returns HTTP 500; Polar's duplicate retry replays the idempotent handler and repairs the cache.
+Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Independently of tiers, `POST /chat` is rate limited per user (`CHAT_RATE_LIMIT_PER_MINUTE`, `CHAT_RATE_LIMIT_PER_DAY`, **429** with `Retry-After`), and each turn is capped at `CHAT_MAX_TOOL_ROUNDS` + 1 model calls, `CHAT_MAX_TOKENS_PER_TURN` total tokens and `CHAT_MAX_OUTPUT_TOKENS` per response.
+
+Checkout and plan changes require chat access (`CHAT_ALLOWED_USER_UUIDS`, `*` for everyone), so nobody can pay for a plan they can't use. Successful subscription webhooks invalidate Redis after the database commit so the next turn sees the new tier without waiting for TTL. An invalidation failure returns HTTP 500; Polar's duplicate retry replays the idempotent handler and repairs the cache.
 
 ### Reconciliation
 
@@ -383,7 +400,7 @@ python -m app.reconcile_polar_subscriptions
 python -m app.reconcile_polar_subscriptions --repair
 ```
 
-Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repair. Unknown products are never mapped automatically.
+Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repair. Unknown products are never mapped automatically. The command loads product ids from the same `POLAR_PRODUCT_TIER*_ID` settings as the API, so run it with the production environment. Schedule it (e.g. daily dry run with alerting on drift) as the safety net for missed webhooks.
 
 ### Chat client surface
 
@@ -400,11 +417,11 @@ Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repai
 
 1. **Webhooks are the source of truth.** Do not grant paid tiers from the success URL alone.
 2. **Sandbox ≠ production.** Separate tokens, secrets, org ids, and product ids. Mixing them causes “paid but free” or API failures.
-3. **Product ids must match on every webhook consumer.** Wrong or empty mappings trigger `unknown_product`; the event is acknowledged without overwriting the existing entitlement.
+3. **Product ids must match on every webhook consumer.** Wrong or empty mappings trigger `unknown_product`; the event never grants a tier, but cancellations and revocations still end access.
 4. **Webhook target = chat backend.** Same database and Redis; otherwise the UI never sees upgrades.
 5. **1:1 customer binding.** One Polar customer cannot be reassigned to another local user (checkout **409**; webhook bind refused).
 6. **Idempotency and ordering.** Duplicate `webhook-id` → skip; older `last_event_at` → skip.
-7. **Production fail-closed.** With Polar off and `POLAR_SERVER=production`, everyone is free.
+7. **Production fail-closed.** With Polar off and `POLAR_SERVER=production` or `ENVIRONMENT=production` (the default), everyone is free. Production refuses to start against the sandbox server.
 8. **Secrets.** Never commit real OATs or webhook secrets. Use placeholders in docs and sample env.
 9. **Observability.** Webhook and Polar ops attach to wide events (Axiom). Monitor `handler_error`, `unresolved_customer`, `unknown_product`, `stale_event`, webhook latency, quota reservation failures, and stale reservations.
 10. **Tier numbers are product decisions.** Change limits/features in `tiers.py`; change prices in Polar (and optionally `price_hint`).
