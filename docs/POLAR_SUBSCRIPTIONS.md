@@ -377,14 +377,16 @@ Usage window:
 - Paying active sub with `current_period_start` → that timestamp to `current_period_end`.
 - Free / inactive → first day of current UTC calendar month.
 
-Usage sources: aggregate `chat_obs_turns` for the user since period start. Messages exclude server errors and expired `in_progress` reservations; a turn whose client disconnected mid-stream is stored as `interrupted` and counts. Tokens count for every turn, including errors, because the model usage was paid for. A failed confirmation never refunds the turn that proposed it. Before model execution, the backend holds a per-user PostgreSQL advisory lock, checks usage, and inserts an `in_progress` reservation atomically. Billing reservations remain enabled even when optional observability is disabled.
+Usage sources: aggregate `chat_obs_turns` for the user since period start. Messages exclude server errors and expired `in_progress` reservations; a turn whose client disconnected mid-stream is stored as `interrupted` and counts. Tokens count for every turn, including errors, because the model usage was paid for. A failed turn is billed from Pydantic AI's run usage, which includes a model call abandoned mid-stream. A failed confirmation never refunds the turn that proposed it. Before model execution, the backend holds a per-user PostgreSQL advisory lock, checks usage, and inserts an `in_progress` reservation atomically. Billing reservations remain enabled even when optional observability is disabled.
 
 Limits from the tier config:
 
 - `messages_used >= monthly_message_limit` → deny (`message_limit_reached`)
 - `tokens_used >= monthly_token_limit` → deny (`token_limit_reached`)
 
-Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Independently of tiers, `POST /chat` is rate limited per user (`CHAT_RATE_LIMIT_PER_MINUTE`, `CHAT_RATE_LIMIT_PER_DAY`, **429** with `Retry-After`), and each turn is capped at `CHAT_MAX_TOOL_ROUNDS` + 1 model calls, `CHAT_MAX_TOKENS_PER_TURN` total tokens and `CHAT_MAX_OUTPUT_TOKENS` per response.
+Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Independently of tiers, `POST /chat` is rate limited per user (`CHAT_RATE_LIMIT_PER_MINUTE`, `CHAT_RATE_LIMIT_PER_DAY`, **429** with `Retry-After`).
+
+Each turn has a budget of `CHAT_MAX_TOOL_ROUNDS` tool rounds and `CHAT_MAX_TOKENS_PER_TURN` tokens summed over its model calls. Once either is used up, the next model call runs with `tool_choice="none"` and must answer, so the turn ends with a reply, is billed like any other message, and goes over the token budget by at most that one call. `CHAT_MAX_OUTPUT_TOKENS` caps each response. The budget is deliberately not a Pydantic AI `total_tokens_limit`: that limit fires mid-stream, after the provider has already billed the call, so the user would get the whole answer and then an error.
 
 Checkout and plan changes require chat access (`CHAT_ALLOWED_USER_UUIDS`, `*` for everyone), so nobody can pay for a plan they can't use. Successful subscription webhooks invalidate Redis after the database commit so the next turn sees the new tier without waiting for TTL. An invalidation failure returns HTTP 500; Polar's duplicate retry replays the idempotent handler and repairs the cache.
 

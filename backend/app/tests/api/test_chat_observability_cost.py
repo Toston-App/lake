@@ -83,16 +83,10 @@ async def test_obs_after_model_passes_billed_cost(
         finish_reason="stop",
         tool_calls=[],
     )
-    ctx = SimpleNamespace(
-        deps=SimpleNamespace(turn_id=7, input_tokens=5, output_tokens=1),
-        run_step=1,
-    )
+    ctx = SimpleNamespace(deps=SimpleNamespace(turn_id=7), run_step=1)
 
     await agent._obs_after_model(ctx, request_context=None, response=response)
 
-    # Running totals let an interrupted turn be billed for what it consumed.
-    assert ctx.deps.input_tokens == 100_005
-    assert ctx.deps.output_tokens == 20_001
     recorded.assert_awaited_once()
     assert recorded.await_args.kwargs["cost_usd"] == pytest.approx(0.044)
     assert recorded.await_args.kwargs["prompt_tokens"] == 100_000

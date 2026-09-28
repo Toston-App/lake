@@ -7,6 +7,7 @@ from app.api.api_v1.endpoints import chat
 from app.schemas.chat import ChatConfirmRequest
 from app.utilities.redis import PendingActionPersistenceError
 from fastapi import HTTPException
+from pydantic_ai.usage import RequestUsage
 from starlette.requests import Request
 
 
@@ -347,11 +348,11 @@ async def test_client_disconnect_bills_turn_as_interrupted() -> None:
     release = AsyncMock(return_value=True)
 
     def run_stream(**kwargs):
-        deps = kwargs["deps"]
+        # Pydantic AI accumulates into the run usage the endpoint passes in.
+        usage = kwargs["usage"]
 
         async def events():
-            deps.input_tokens += 1200
-            deps.output_tokens += 300
+            usage.incr(RequestUsage(input_tokens=1200, output_tokens=300))
             yield "text-delta"
             yield "finish"
 
@@ -380,11 +381,10 @@ async def test_failed_run_refunds_message_but_bills_tokens() -> None:
     release = AsyncMock(return_value=True)
 
     def run_stream(**kwargs):
-        deps = kwargs["deps"]
+        usage = kwargs["usage"]
 
         async def events():
-            deps.input_tokens += 900
-            deps.output_tokens += 100
+            usage.incr(RequestUsage(input_tokens=900, output_tokens=100))
             yield "error"
 
         return events()
@@ -494,12 +494,12 @@ async def test_chat_rate_limit_window_can_be_disabled(
 
 
 @pytest.mark.asyncio
-async def test_stream_runs_with_per_turn_usage_limits(
+async def test_stream_runs_with_turn_budget_and_fresh_run_usage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(chat.settings, "CHAT_MAX_TOOL_ROUNDS", 4)
-    monkeypatch.setattr(chat.settings, "CHAT_MAX_TOKENS_PER_TURN", 50_000)
     captured: dict = {}
+    budget = object()
 
     def run_stream(**kwargs):
         captured.update(kwargs)
@@ -509,16 +509,20 @@ async def test_stream_runs_with_per_turn_usage_limits(
 
         return events()
 
-    stream, patches = await _open_stream(run_stream, AsyncMock(), AsyncMock())
-    try:
-        [event async for event in stream]
-    finally:
-        for p in reversed(patches):
-            p.stop()
+    with patch.object(chat, "build_turn_budget", return_value=budget):
+        stream, patches = await _open_stream(run_stream, AsyncMock(), AsyncMock())
+        try:
+            [event async for event in stream]
+        finally:
+            for p in reversed(patches):
+                p.stop()
 
     limits = captured["usage_limits"]
     assert limits.request_limit == 5
-    assert limits.total_tokens_limit == 50_000
+    # The token budget is enforced before each call, never mid-stream.
+    assert limits.total_tokens_limit is None
+    assert budget in captured["capabilities"]
+    assert captured["usage"].requests == 0
 
 
 def test_chat_model_caps_output_tokens(monkeypatch: pytest.MonkeyPatch) -> None:

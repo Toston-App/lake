@@ -42,10 +42,12 @@ from pydantic_ai import (
     ToolReturn,
 )
 from pydantic_ai.capabilities import Hooks
+from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.models.openrouter import OpenRouterModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
+from pydantic_ai.settings import ModelSettings, merge_model_settings
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk, SourceUrlChunk
-from pydantic_ai.usage import UsageLimits
+from pydantic_ai.usage import RunUsage, UsageLimits
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
@@ -135,10 +137,6 @@ class ChatDeps:
     # tool call.
     pending_question: dict[str, Any] | None = None
     pending_question_id: str | None = None
-    # Running token totals for this turn, updated after every model response so
-    # an interrupted or failed run can still be billed for what it consumed.
-    input_tokens: int = 0
-    output_tokens: int = 0
 
 
 def build_model() -> OpenRouterModel:
@@ -158,22 +156,48 @@ def build_model() -> OpenRouterModel:
 
 
 def build_usage_limits() -> UsageLimits:
-    """Per-turn ceilings: the configured tool rounds plus the final answer."""
-    return UsageLimits(
-        request_limit=settings.CHAT_MAX_TOOL_ROUNDS + 1,
-        total_tokens_limit=settings.CHAT_MAX_TOKENS_PER_TURN,
+    """Hard backstop: the configured tool rounds plus the final answer.
+
+    There is deliberately no ``total_tokens_limit``. Pydantic AI checks it while
+    a response streams, once the provider has already billed the call, so the
+    user would get the whole answer and then an error. The token budget is
+    enforced before each call instead (see ``turn_budget_spent``).
+    """
+    return UsageLimits(request_limit=settings.CHAT_MAX_TOOL_ROUNDS + 1)
+
+
+def turn_budget_spent(usage: RunUsage) -> bool:
+    """Whether the next model call must be the turn's final answer.
+
+    True once the turn has used its tool rounds or its token budget. That call
+    can't use tools, so a turn ends with a reply and goes over
+    ``CHAT_MAX_TOKENS_PER_TURN`` by at most one call.
+    """
+    return (
+        usage.requests >= settings.CHAT_MAX_TOOL_ROUNDS
+        or usage.total_tokens >= settings.CHAT_MAX_TOKENS_PER_TURN
     )
+
+
+_BUDGET_SPENT_INSTRUCTION = (
+    "This turn has used its tool budget, so tools are unavailable. Answer now "
+    "with the information you already have. If something is missing, say what "
+    "and suggest a narrower follow-up question."
+)
 
 
 async def chat_instructions(ctx: RunContext[ChatDeps]) -> str:
     """Dynamic, server-owned instructions (never persisted to the client)."""
     bootstrap = await load_bootstrap_context(ctx.deps.db, ctx.deps.user)
-    return build_system_prompt(
+    prompt = build_system_prompt(
         bootstrap,
         ctx.deps.tier,
         local_date=ctx.deps.local_date,
         time_zone=ctx.deps.time_zone,
     )
+    if turn_budget_spent(ctx.usage):
+        prompt = f"{prompt}\n\n{_BUDGET_SPENT_INSTRUCTION}"
+    return prompt
 
 
 agent = Agent(
@@ -884,8 +908,6 @@ async def _obs_after_model(
     response: Any,
 ) -> Any:
     usage = response.usage
-    ctx.deps.input_tokens += usage.input_tokens
-    ctx.deps.output_tokens += usage.output_tokens
     await record_llm_call(
         turn_id=ctx.deps.turn_id,
         round_index=ctx.run_step,
@@ -906,3 +928,18 @@ def build_obs_hooks() -> Hooks:
         tool_execute=_obs_tool_execute,
         after_model_request=_obs_after_model,
     )
+
+
+async def _answer_when_budget_spent(
+    ctx: RunContext[ChatDeps], request_context: ModelRequestContext
+) -> ModelRequestContext:
+    """Make the last affordable model call answer instead of calling tools."""
+    if turn_budget_spent(ctx.usage):
+        request_context.model_settings = merge_model_settings(
+            request_context.model_settings, ModelSettings(tool_choice="none")
+        )
+    return request_context
+
+
+def build_turn_budget() -> Hooks:
+    return Hooks(before_model_request=_answer_when_budget_spent)

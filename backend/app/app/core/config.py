@@ -182,9 +182,11 @@ class Settings(BaseSettings):
     # "*" opens chat to every active user, including email/password accounts.
     CHAT_ALLOWED_USER_UUIDS: str = ""
     CHAT_MAX_TOOL_ROUNDS: int = 8
-    # Hard per-turn ceilings so one request can't run up an unbounded model
-    # bill: total tokens across every model call in the turn, and the size of
-    # any single response.
+    # Per-turn ceilings so one request can't run up an unbounded model bill.
+    # Once a turn has used its tool rounds or CHAT_MAX_TOKENS_PER_TURN tokens
+    # (summed over every model call), its next call must answer without tools,
+    # so it goes over the token budget by at most that call.
+    # CHAT_MAX_OUTPUT_TOKENS caps any single response.
     CHAT_MAX_TOKENS_PER_TURN: int = 200_000
     CHAT_MAX_OUTPUT_TOKENS: int = 8_192
     # Per-user request limits for POST /chat. 0 disables a window.

@@ -15,9 +15,16 @@ from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.run import AgentRunResult
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
+from pydantic_ai.usage import RunUsage
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.agent import ChatDeps, build_obs_hooks, build_toolset, build_usage_limits
+from app.ai.agent import (
+    ChatDeps,
+    build_obs_hooks,
+    build_toolset,
+    build_turn_budget,
+    build_usage_limits,
+)
 from app.ai.agent import get_chat_agent as get_pydantic_agent
 from app.ai.chat_presentation import (
     append_confirmation_to_model_history,
@@ -345,6 +352,10 @@ async def chat_vercel(
         locale=locale,
         turn_id=turn_id,
     )
+    # Pydantic AI accumulates into this object, including the usage of a call
+    # the run abandoned mid-stream (a disconnect or an error), which the
+    # ``after_model_request`` hook never sees. Failed turns are billed from it.
+    run_usage = RunUsage()
     started = time.perf_counter()
     completed = False
     failure_reason: str | None = None
@@ -442,8 +453,9 @@ async def chat_vercel(
         message_history=model_history,
         deferred_tool_results=deferred_results,
         usage_limits=build_usage_limits(),
+        usage=run_usage,
         toolsets=[build_toolset(tier)],
-        capabilities=[build_obs_hooks()],
+        capabilities=[build_obs_hooks(), build_turn_budget()],
         on_complete=on_complete,
     )
 
@@ -494,9 +506,9 @@ async def chat_vercel(
                             else failure_reason or "run_failed"
                         ),
                         duration_ms=int((time.perf_counter() - started) * 1000),
-                        total_prompt_tokens=deps.input_tokens,
-                        total_completion_tokens=deps.output_tokens,
-                        total_tokens=deps.input_tokens + deps.output_tokens,
+                        total_prompt_tokens=run_usage.input_tokens,
+                        total_completion_tokens=run_usage.output_tokens,
+                        total_tokens=run_usage.total_tokens,
                     )
 
     return adapter.streaming_response(metered_stream())
