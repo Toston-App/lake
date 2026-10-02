@@ -38,3 +38,25 @@ services:
             - .venv
         - path: ./backend/pyproject.toml
           action: rebuild
+
+  portfolio-worker:
+    volumes:
+      - ./backend/app:/app
+    environment:
+      - WATCHFILES_FORCE_POLLING=true
+    command:
+      - /opt/venv/bin/watchfiles
+      - --filter
+      - python
+      - python -m app.worker.portfolio_snapshot_worker
+      - /app
+    develop:
+      watch:
+        - path: ./backend
+          action: sync
+          target: /app
+          ignore:
+            - ./backend/.venv
+            - .venv
+        - path: ./backend/pyproject.toml
+          action: rebuild

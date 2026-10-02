@@ -14,6 +14,7 @@ from .crud_income import income
 from .crud_investment_transaction import investment_transaction
 from .crud_item import item
 from .crud_place import place
+from .crud_portfolio_snapshot import portfolio_snapshot
 from .crud_subcategory import subcategory
 from .crud_transfer import transfer
 from .crud_user import user

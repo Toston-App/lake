@@ -93,6 +93,21 @@ services:
       dockerfile: backend.dockerfile
     command: python -m app.worker.export_worker
 
+  portfolio-worker:
+    image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      prestart:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    build:
+      context: ./backend
+      dockerfile: backend.dockerfile
+    command: python -m app.worker.portfolio_snapshot_worker
+
 volumes:
   postgres_data:
   pgadmin-data:

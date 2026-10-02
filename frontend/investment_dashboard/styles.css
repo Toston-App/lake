@@ -297,6 +297,290 @@ body {
     font-family: 'JetBrains Mono', monospace;
 }
 
+/* Performance */
+.performance-card {
+    --series-value: #7178f2;
+    --series-invested: #6b6b82;
+    --grid-line: #262634;
+    margin-bottom: 2rem;
+    transition: opacity var(--transition);
+}
+
+.performance-card.loading .perf-chart,
+.performance-card.loading .perf-stats {
+    opacity: 0.5;
+}
+
+.perf-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.perf-header h3 {
+    font-size: 1rem;
+    color: var(--text-secondary);
+}
+
+.perf-range {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.perf-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.segmented {
+    display: inline-flex;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 3px;
+    gap: 2px;
+}
+
+.segmented button {
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 500;
+    min-width: 2.5rem;
+    padding: 0.35rem 0.6rem;
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+}
+
+.segmented button:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.segmented button[aria-pressed="true"] {
+    background: var(--accent-primary);
+    color: #fff;
+}
+
+.segmented button:focus-visible,
+.perf-chart svg:focus-visible,
+.perf-table-toggle summary:focus-visible {
+    outline: 2px solid var(--accent-secondary);
+    outline-offset: 2px;
+}
+
+.perf-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+    transition: opacity var(--transition);
+}
+
+.perf-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.perf-stat-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+.perf-chart {
+    position: relative;
+    min-height: 260px;
+    transition: opacity var(--transition);
+}
+
+.perf-chart.is-empty {
+    min-height: 140px;
+}
+
+.card-change[hidden] {
+    display: none;
+}
+
+.perf-chart svg {
+    display: block;
+    width: 100%;
+    overflow: visible;
+    border-radius: var(--radius-sm);
+}
+
+.perf-grid line {
+    stroke: var(--grid-line);
+    stroke-width: 1;
+}
+
+.perf-grid text,
+.perf-axis text {
+    fill: var(--text-muted);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.perf-line {
+    fill: none;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.perf-line-value { stroke: var(--series-value); }
+.perf-line-invested { stroke: var(--series-invested); }
+
+.perf-area {
+    fill: var(--series-value);
+    opacity: 0.1;
+}
+
+.perf-dot {
+    stroke: var(--bg-card);
+    stroke-width: 2;
+}
+
+.perf-dot-value { fill: var(--series-value); }
+.perf-dot-invested { fill: var(--series-invested); }
+
+.perf-crosshair {
+    stroke: var(--text-muted);
+    stroke-width: 1;
+}
+
+.perf-tooltip {
+    position: absolute;
+    top: 0.5rem;
+    left: 0;
+    display: none;
+    min-width: 170px;
+    padding: 0.6rem 0.75rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    pointer-events: none;
+    font-size: 0.85rem;
+}
+
+.perf-tooltip.visible {
+    display: block;
+}
+
+.perf-tooltip-date {
+    color: var(--text-muted);
+    margin-bottom: 0.35rem;
+}
+
+.perf-tooltip-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+}
+
+.perf-tooltip-row strong {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.perf-tooltip-gain {
+    margin-top: 0.35rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.perf-tooltip-gain.positive { color: var(--positive); }
+.perf-tooltip-gain.negative { color: var(--negative); }
+
+.perf-message {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.perf-message.visible {
+    display: flex;
+}
+
+.perf-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.perf-legend {
+    display: flex;
+    gap: 1.25rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.legend-key {
+    display: inline-block;
+    width: 14px;
+    height: 2px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+
+.legend-key-value { background: var(--series-value); }
+.legend-key-invested { background: var(--series-invested); }
+
+.perf-table-toggle {
+    flex: 1 1 100%;
+    font-size: 0.85rem;
+}
+
+.perf-table-toggle summary {
+    width: fit-content;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+
+.perf-table-toggle summary:hover {
+    color: var(--text-primary);
+}
+
+.perf-table-wrap {
+    max-height: 280px;
+    overflow: auto;
+    margin-top: 0.75rem;
+}
+
+.perf-table-wrap .data-table td.positive { color: var(--positive); }
+.perf-table-wrap .data-table td.negative { color: var(--negative); }
+
+.perf-note {
+    margin-top: 1rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    max-width: 70ch;
+}
+
 /* Allocations Grid */
 .allocations-grid {
     display: grid;

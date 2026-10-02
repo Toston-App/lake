@@ -13,6 +13,7 @@ from .income import Income
 from .investment_transaction import InvestmentTransaction, TransactionType
 from .item import Item
 from .place import Place
+from .portfolio_snapshot import PortfolioSnapshot, PortfolioSnapshotHolding
 from .subcategory import Subcategory
 from .transfer import Transfer
 from .user import User

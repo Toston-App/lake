@@ -4,7 +4,7 @@ A simple web app to demonstrate the Investment Dashboard API.
 
 ## Features
 
-- **Dashboard**: Portfolio overview with total value, allocations by class/currency/market
+- **Dashboard**: Portfolio overview with total value, a performance chart (1W–All, USD/MXN), and allocations by class/currency/market
 - **Assets**: Add and manage trackable assets (stocks, ETFs, crypto, bonds, etc.)
 - **Holdings**: Track your positions with cost basis and gain/loss
 - **Transactions**: Record buy/sell/dividend transactions
@@ -43,6 +43,7 @@ Then open http://localhost:3000 in your browser.
 | `GET /api/v1/investments/portfolio/allocation/by-currency` | Allocation by currency |
 | `GET /api/v1/investments/portfolio/allocation/by-market` | Allocation by market |
 | `GET /api/v1/investments/portfolio/top-holdings` | Top holdings by value |
+| `GET /api/v1/investments/portfolio/performance` | Value over time and time-weighted return |
 | `GET /api/v1/investments/assets` | List assets |
 | `POST /api/v1/investments/assets` | Create asset |
 | `GET /api/v1/investments/assets/{id}/price` | Get asset price |

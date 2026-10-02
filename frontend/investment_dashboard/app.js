@@ -1,6 +1,6 @@
 // Configuration
 const API_BASE = 'http://localhost:8888/api/v1';
-let authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzgyMDE5MjgsInVzZXIiOnsibmFtZSI6InN0cmluZyIsImVtYWlsIjoidXNlcjNAZXhhbXBsZS5jb20iLCJjb3VudHJ5Ijoic3RyaW5nIiwiaWQiOjZ9fQ.g7tdYwwQz4CmQjogMNZhDv2n8G2ShYLGOfr-8OfLJSY"; // Set your auth token here
+let authToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2IiwiaXNzIjoibG9jYWwiLCJpYXQiOjE3OTA5MTY1MTgsImV4cCI6MTc5MTYwNzcxOCwianRpIjoidUpWaDVnQVJmN2ZjcTY5bm1CN3hmQSJ9.oUhxR9QnWw3PIZKayKaO0vs9QSanhgmk1q9Kyl4VKsQ"; // Set your auth token here
 
 // State
 let accountsList = [];
@@ -8,6 +8,7 @@ let accountsList = [];
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initNavigation();
+    initPerformance();
     checkApiConnection();
     
     // Set default date for transaction form
@@ -78,7 +79,11 @@ async function apiRequest(endpoint, options = {}) {
         
         if (!response.ok) {
             const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-            throw new Error(error.detail || `HTTP ${response.status}`);
+            // FastAPI validation errors (422) return a list of {loc, msg}.
+            const detail = Array.isArray(error.detail)
+                ? error.detail.map(e => `${(e.loc || []).slice(1).join('.')}: ${e.msg}`).join('; ')
+                : error.detail;
+            throw new Error(detail || `HTTP ${response.status}`);
         }
         
         return await response.json();
@@ -131,6 +136,8 @@ async function loadDashboard() {
         changeEl.textContent = `${summary.total_gain_loss_pct >= 0 ? '+' : ''}${summary.total_gain_loss_pct.toFixed(2)}%`;
         changeEl.className = `card-change ${summary.total_gain_loss_pct >= 0 ? 'positive' : 'negative'}`;
         
+        loadPerformance();
+
         // Load allocations
         loadAllocationByClass();
         loadAllocationByCurrency();
@@ -252,6 +259,379 @@ async function loadTopHoldings() {
     } catch (error) {
         console.error('Failed to load top holdings:', error);
     }
+}
+
+// Performance
+const PERF_STORAGE_KEY = 'lake-invest-performance';
+const perfState = { period: '1M', currency: 'USD', data: null, activeIndex: null, requestId: 0 };
+
+function readPerfPrefs() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(PERF_STORAGE_KEY) || '{}');
+        if (saved.period) perfState.period = saved.period;
+        if (saved.currency) perfState.currency = saved.currency;
+    } catch (error) {
+        // Storage unavailable; keep defaults.
+    }
+}
+
+function savePerfPrefs() {
+    try {
+        localStorage.setItem(PERF_STORAGE_KEY, JSON.stringify({
+            period: perfState.period,
+            currency: perfState.currency,
+        }));
+    } catch (error) {
+        // Storage unavailable; nothing to persist.
+    }
+}
+
+function initPerformance() {
+    readPerfPrefs();
+
+    document.querySelectorAll('#perf-period button').forEach(button => {
+        button.addEventListener('click', () => {
+            perfState.period = button.dataset.period;
+            savePerfPrefs();
+            loadPerformance();
+        });
+    });
+    document.querySelectorAll('#perf-currency button').forEach(button => {
+        button.addEventListener('click', () => {
+            perfState.currency = button.dataset.currency;
+            savePerfPrefs();
+            loadPerformance();
+        });
+    });
+
+    const svg = document.getElementById('perf-svg');
+    svg.addEventListener('pointermove', handlePerfPointer);
+    svg.addEventListener('pointerleave', () => setPerfActive(null));
+    svg.addEventListener('blur', () => setPerfActive(null));
+    svg.addEventListener('focus', () => {
+        const points = perfState.data?.data_points || [];
+        if (points.length > 1) setPerfActive(points.length - 1);
+    });
+    svg.addEventListener('keydown', handlePerfKey);
+
+    const chart = document.getElementById('perf-chart');
+    if (window.ResizeObserver) {
+        new ResizeObserver(() => {
+            if (perfState.data) renderPerfChart(perfState.data);
+        }).observe(chart);
+    }
+
+    syncPerfControls();
+}
+
+function syncPerfControls() {
+    document.querySelectorAll('#perf-period button').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.period === perfState.period));
+    });
+    document.querySelectorAll('#perf-currency button').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.currency === perfState.currency));
+    });
+}
+
+async function loadPerformance() {
+    syncPerfControls();
+    const card = document.getElementById('performance-card');
+    const requestId = ++perfState.requestId;
+    // Keep the previous render visible, dimmed, while refetching.
+    card.classList.add('loading');
+
+    try {
+        const params = new URLSearchParams({ period: perfState.period, currency: perfState.currency });
+        const data = await apiRequest(`/investments/portfolio/performance?${params}`);
+        if (requestId !== perfState.requestId) return;
+        perfState.data = data;
+        perfState.activeIndex = null;
+        renderPerformance(data);
+    } catch (error) {
+        if (requestId !== perfState.requestId) return;
+        perfState.data = null;
+        perfState.geometry = null;
+        clearPerfChart();
+        document.getElementById('perf-chart').classList.add('is-empty');
+        document.getElementById('perf-svg').setAttribute('height', 0);
+        showPerfMessage(
+            error.message.includes('USD/MXN')
+                ? 'Performance is unavailable while the USD/MXN exchange rate can’t be fetched. Try again in a few minutes.'
+                : `Couldn’t load performance: ${error.message}`
+        );
+    } finally {
+        if (requestId === perfState.requestId) card.classList.remove('loading');
+    }
+}
+
+function renderPerformance(data) {
+    const currency = data.currency;
+
+    document.getElementById('perf-range').textContent = data.start_date === data.end_date
+        ? formatPerfDate(data.end_date, true)
+        : `${formatPerfDate(data.start_date, true)} – ${formatPerfDate(data.end_date, true)}`;
+
+    document.getElementById('perf-end-value').textContent = formatCurrency(data.end_value, currency);
+    document.getElementById('perf-start-value').textContent = data.data_points.length > 1
+        ? `From ${formatCurrency(data.start_value, currency)}`
+        : '';
+
+    document.getElementById('perf-absolute-return').textContent = formatSignedCurrency(data.absolute_return, currency);
+    const pctEl = document.getElementById('perf-percentage-return');
+    pctEl.textContent = `${data.percentage_return >= 0 ? '+' : ''}${data.percentage_return.toFixed(2)}%`;
+    pctEl.className = `card-change ${data.percentage_return >= 0 ? 'positive' : 'negative'}`;
+    pctEl.hidden = data.data_points.length < 2;
+
+    document.getElementById('perf-net-contributions').textContent = formatSignedCurrency(data.net_contributions, currency);
+
+    renderPerfTable(data);
+    renderPerfChart(data);
+}
+
+function renderPerfTable(data) {
+    const tbody = document.getElementById('perf-table-body');
+    tbody.replaceChildren();
+    [...data.data_points].reverse().forEach(point => {
+        const row = document.createElement('tr');
+        const cells = [
+            formatPerfDate(point.date, true),
+            formatCurrency(point.value, data.currency),
+            formatCurrency(point.invested, data.currency),
+            `${formatSignedCurrency(point.gain_loss, data.currency)} (${point.gain_loss_pct.toFixed(2)}%)`,
+        ];
+        cells.forEach((text, i) => {
+            const cell = document.createElement('td');
+            cell.textContent = text;
+            if (i > 0) cell.className = 'mono';
+            if (i === 3) cell.classList.add(point.gain_loss >= 0 ? 'positive' : 'negative');
+            row.appendChild(cell);
+        });
+        tbody.appendChild(row);
+    });
+}
+
+const PERF_MARGIN = { top: 12, right: 16, bottom: 28, left: 64 };
+const PERF_HEIGHT = 260;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function svgEl(tag, attrs = {}) {
+    const el = document.createElementNS(SVG_NS, tag);
+    Object.entries(attrs).forEach(([key, value]) => el.setAttribute(key, value));
+    return el;
+}
+
+function clearPerfChart() {
+    document.getElementById('perf-svg').replaceChildren();
+    document.getElementById('perf-tooltip').classList.remove('visible');
+}
+
+function showPerfMessage(text) {
+    const message = document.getElementById('perf-message');
+    message.textContent = text;
+    message.classList.toggle('visible', Boolean(text));
+}
+
+function parsePerfDate(iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d);
+}
+
+function formatPerfDate(iso, withYear = false) {
+    return parsePerfDate(iso).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        ...(withYear ? { year: 'numeric' } : {}),
+    });
+}
+
+function niceTicks(min, max, count = 4) {
+    if (min === max) {
+        const pad = Math.abs(min) * 0.1 || 1;
+        min -= pad;
+        max += pad;
+    }
+    const rawStep = (max - min) / count;
+    const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+    const step = [1, 2, 2.5, 5, 10].map(f => f * magnitude).find(s => s >= rawStep);
+    const start = Math.floor(min / step) * step;
+    const end = Math.ceil(max / step) * step;
+    const ticks = [];
+    for (let v = start; v <= end + step / 2; v += step) ticks.push(Number(v.toFixed(10)));
+    return ticks;
+}
+
+function renderPerfChart(data) {
+    const svg = document.getElementById('perf-svg');
+    const points = data.data_points;
+    const width = document.getElementById('perf-chart').clientWidth;
+    clearPerfChart();
+    svg.setAttribute('viewBox', `0 0 ${width} ${PERF_HEIGHT}`);
+    svg.setAttribute('height', PERF_HEIGHT);
+
+    document.getElementById('perf-chart').classList.toggle('is-empty', points.length < 2);
+    if (points.length < 2) {
+        svg.setAttribute('height', 0);
+        showPerfMessage(points.length && points[0].value > 0
+            ? 'Not enough history yet. A new point is added each day, so the chart fills in over time.'
+            : 'No investments yet. Add a holding to start tracking performance.');
+        perfState.geometry = null;
+        return;
+    }
+    showPerfMessage('');
+
+    const innerW = width - PERF_MARGIN.left - PERF_MARGIN.right;
+    const innerH = PERF_HEIGHT - PERF_MARGIN.top - PERF_MARGIN.bottom;
+    const times = points.map(p => parsePerfDate(p.date).getTime());
+    const t0 = times[0];
+    const t1 = times[times.length - 1];
+    const values = points.flatMap(p => [p.value, p.invested]);
+    const ticks = niceTicks(Math.min(...values), Math.max(...values));
+    const yMin = ticks[0];
+    const yMax = ticks[ticks.length - 1];
+
+    const x = t => PERF_MARGIN.left + ((t - t0) / (t1 - t0)) * innerW;
+    const y = v => PERF_MARGIN.top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+
+    // Gridlines and y-axis labels
+    const compact = new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: data.currency,
+        notation: 'compact',
+        maximumFractionDigits: 1,
+    });
+    const grid = svgEl('g', { class: 'perf-grid' });
+    ticks.forEach(tick => {
+        const ty = y(tick);
+        grid.appendChild(svgEl('line', { x1: PERF_MARGIN.left, x2: width - PERF_MARGIN.right, y1: ty, y2: ty }));
+        const label = svgEl('text', { x: PERF_MARGIN.left - 10, y: ty, 'text-anchor': 'end', 'dominant-baseline': 'middle' });
+        label.textContent = compact.format(tick);
+        grid.appendChild(label);
+    });
+    svg.appendChild(grid);
+
+    // X-axis labels: evenly spaced, snapped to real data points
+    const xAxis = svgEl('g', { class: 'perf-axis' });
+    const labelCount = Math.max(2, Math.min(points.length, Math.floor(innerW / 90)));
+    const labelIndexes = new Set();
+    for (let i = 0; i < labelCount; i++) {
+        labelIndexes.add(Math.round((i / (labelCount - 1)) * (points.length - 1)));
+    }
+    labelIndexes.forEach(i => {
+        const anchor = i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle';
+        const label = svgEl('text', { x: x(times[i]), y: PERF_HEIGHT - 8, 'text-anchor': anchor });
+        label.textContent = formatPerfDate(points[i].date);
+        xAxis.appendChild(label);
+    });
+    svg.appendChild(xAxis);
+
+    const linePath = key => points
+        .map((p, i) => `${i ? 'L' : 'M'}${x(times[i]).toFixed(1)},${y(p[key]).toFixed(1)}`)
+        .join('');
+    const valuePath = linePath('value');
+    const baseY = y(yMin);
+
+    svg.appendChild(svgEl('path', {
+        class: 'perf-area',
+        d: `${valuePath}L${x(t1).toFixed(1)},${baseY}L${x(t0).toFixed(1)},${baseY}Z`,
+    }));
+    svg.appendChild(svgEl('path', { class: 'perf-line perf-line-invested', d: linePath('invested') }));
+    svg.appendChild(svgEl('path', { class: 'perf-line perf-line-value', d: valuePath }));
+
+    const last = points.length - 1;
+    svg.appendChild(svgEl('circle', { class: 'perf-dot perf-dot-value', cx: x(times[last]), cy: y(points[last].value), r: 4 }));
+
+    // Hover layer: crosshair plus a dot on each series
+    const hover = svgEl('g', { class: 'perf-hover', visibility: 'hidden' });
+    hover.appendChild(svgEl('line', { class: 'perf-crosshair', y1: PERF_MARGIN.top, y2: PERF_MARGIN.top + innerH }));
+    hover.appendChild(svgEl('circle', { class: 'perf-dot perf-dot-invested', r: 4 }));
+    hover.appendChild(svgEl('circle', { class: 'perf-dot perf-dot-value', r: 4 }));
+    svg.appendChild(hover);
+
+    perfState.geometry = { x, y, times, width };
+    if (perfState.activeIndex !== null) setPerfActive(perfState.activeIndex);
+}
+
+function handlePerfPointer(event) {
+    const geometry = perfState.geometry;
+    if (!geometry) return;
+    const svg = document.getElementById('perf-svg');
+    const rect = svg.getBoundingClientRect();
+    const px = ((event.clientX - rect.left) / rect.width) * geometry.width;
+    let nearest = 0;
+    geometry.times.forEach((t, i) => {
+        if (Math.abs(geometry.x(t) - px) < Math.abs(geometry.x(geometry.times[nearest]) - px)) nearest = i;
+    });
+    setPerfActive(nearest);
+}
+
+function handlePerfKey(event) {
+    const points = perfState.data?.data_points || [];
+    if (points.length < 2) return;
+    const current = perfState.activeIndex ?? points.length - 1;
+    const moves = { ArrowLeft: -1, ArrowRight: 1, Home: -Infinity, End: Infinity };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    setPerfActive(Math.max(0, Math.min(points.length - 1, current + moves[event.key])));
+}
+
+function setPerfActive(index) {
+    perfState.activeIndex = index;
+    const svg = document.getElementById('perf-svg');
+    const hover = svg.querySelector('.perf-hover');
+    const tooltip = document.getElementById('perf-tooltip');
+    const geometry = perfState.geometry;
+    if (index === null || !hover || !geometry) {
+        hover?.setAttribute('visibility', 'hidden');
+        tooltip.classList.remove('visible');
+        return;
+    }
+
+    const data = perfState.data;
+    const point = data.data_points[index];
+    const px = geometry.x(geometry.times[index]);
+    hover.setAttribute('visibility', 'visible');
+    const crosshair = hover.querySelector('.perf-crosshair');
+    crosshair.setAttribute('x1', px);
+    crosshair.setAttribute('x2', px);
+    const valueDot = hover.querySelector('.perf-dot-value');
+    valueDot.setAttribute('cx', px);
+    valueDot.setAttribute('cy', geometry.y(point.value));
+    const investedDot = hover.querySelector('.perf-dot-invested');
+    investedDot.setAttribute('cx', px);
+    investedDot.setAttribute('cy', geometry.y(point.invested));
+
+    tooltip.replaceChildren();
+    const title = document.createElement('div');
+    title.className = 'perf-tooltip-date';
+    title.textContent = formatPerfDate(point.date, true);
+    tooltip.appendChild(title);
+    [
+        ['value', 'Value', formatCurrency(point.value, data.currency)],
+        ['invested', 'Invested', formatCurrency(point.invested, data.currency)],
+    ].forEach(([key, label, amount]) => {
+        const row = document.createElement('div');
+        row.className = 'perf-tooltip-row';
+        const keyEl = document.createElement('span');
+        keyEl.className = `legend-key legend-key-${key}`;
+        const amountEl = document.createElement('strong');
+        amountEl.textContent = amount;
+        const labelEl = document.createElement('span');
+        labelEl.textContent = label;
+        row.append(keyEl, amountEl, labelEl);
+        tooltip.appendChild(row);
+    });
+    const gain = document.createElement('div');
+    gain.className = `perf-tooltip-gain ${point.gain_loss >= 0 ? 'positive' : 'negative'}`;
+    gain.textContent = `${formatSignedCurrency(point.gain_loss, data.currency)} (${point.gain_loss_pct.toFixed(2)}%)`;
+    tooltip.appendChild(gain);
+
+    tooltip.classList.add('visible');
+    const chartWidth = document.getElementById('perf-chart').clientWidth;
+    const scale = chartWidth / geometry.width;
+    const tooltipWidth = tooltip.offsetWidth;
+    let left = px * scale + 12;
+    if (left + tooltipWidth > chartWidth) left = px * scale - tooltipWidth - 12;
+    tooltip.style.left = `${Math.max(0, left)}px`;
 }
 
 async function refreshPrices() {
@@ -463,6 +843,18 @@ async function showAddHoldingModal() {
 let searchTimeout = null;
 let selectedAsset = null;
 
+// One key per opened transaction form: retrying a submit (e.g. after a network
+// error) reuses it, so the backend returns the original transaction instead of
+// recording it twice.
+let transactionIdempotencyKey = null;
+
+function newIdempotencyKey() {
+    if (window.crypto?.randomUUID) return crypto.randomUUID();
+    // randomUUID needs a secure context; fall back for plain-http LAN hosts.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // Load accounts on init
 async function loadAccountsList() {
     try {
@@ -617,6 +1009,7 @@ async function showAddTransactionModal() {
     }
 
     // Reset form and state
+    transactionIdempotencyKey = newIdempotencyKey();
     document.getElementById('add-transaction-form').reset();
     document.getElementById('tx-date').value = new Date().toISOString().slice(0, 16);
     
@@ -1033,6 +1426,7 @@ async function submitTransaction(event) {
     try {
         const result = await apiRequest('/investments/transactions/with-asset', {
             method: 'POST',
+            headers: { 'Idempotency-Key': transactionIdempotencyKey || newIdempotencyKey() },
             body: JSON.stringify(data),
         });
         
@@ -1071,6 +1465,12 @@ function formatCurrency(amount, currency = 'USD') {
     });
     
     return formatter.format(amount);
+}
+
+function formatSignedCurrency(amount, currency = 'USD') {
+    if (amount === null || amount === undefined) return '-';
+    const sign = amount > 0 ? '+' : amount < 0 ? '−' : '';
+    return `${sign}${formatCurrency(Math.abs(amount), currency)}`;
 }
 
 function showToast(message, type = 'info') {

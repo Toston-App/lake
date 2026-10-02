@@ -32,6 +32,7 @@ backend/app/app/
 │   ├── asset_price.py
 │   ├── holding.py
 │   ├── investment_transaction.py
+│   ├── portfolio_snapshot.py
 │   └── account.py
 ├── schemas/
 │   ├── asset.py
@@ -44,13 +45,17 @@ backend/app/app/
 │   ├── crud_asset_price.py
 │   ├── crud_holding.py
 │   ├── crud_investment_transaction.py
+│   ├── crud_portfolio_snapshot.py
 │   └── crud_account.py
-└── services/
-    ├── asset_resolver.py
-    ├── price_fetcher.py
-    ├── yahoo_finance.py
-    ├── coingecko.py
-    └── currency_converter.py
+├── services/
+│   ├── asset_resolver.py
+│   ├── price_fetcher.py
+│   ├── portfolio_snapshot.py
+│   ├── yahoo_finance.py
+│   ├── coingecko.py
+│   └── currency_converter.py
+└── worker/
+    └── portfolio_snapshot_worker.py
 ```
 
 The main router composes four subrouters:
@@ -312,6 +317,7 @@ filters are supplied, the current endpoint prioritizes holding, then account, th
 | `GET` | `/portfolio/allocation/by-country` | Geographic allocation |
 | `GET` | `/portfolio/allocation/by-account` | Allocation by owned account |
 | `GET` | `/portfolio/top-holdings` | Largest positions by USD value |
+| `GET` | `/portfolio/performance` | Value series and time-weighted return for 1W/1M/3M/6M/YTD/1Y/ALL |
 
 Portfolio analytics operate only on holdings owned by the current user.
 
@@ -379,6 +385,18 @@ Select asset or assets
 
 Fixed-income and some fund assets require manual pricing because the automatic fetcher
 currently handles equities and crypto only.
+
+### Daily portfolio snapshots
+
+The `portfolio-worker` service (`python -m app.worker.portfolio_snapshot_worker`) runs
+every `PORTFOLIO_SNAPSHOT_INTERVAL_SECONDS` (default one hour) while `INVESTMENTS_ENABLED`
+is on. Each run refreshes the price of every held, active asset whose latest price is older
+than `PORTFOLIO_SNAPSHOT_PRICE_MAX_AGE_MINUTES`. Each refresh briefly locks all holdings of
+that asset, in the same lock order as the transaction routes. If no trusted USD/MXN rate is
+available, the run writes nothing. Otherwise it upserts one `portfolio_snapshot` row plus
+one `portfolio_snapshot_holding` row per position for every user with holdings, keyed by
+the calendar day in `PORTFOLIO_SNAPSHOT_TIMEZONE`; the last run of the day wins. History
+begins on the day the worker is deployed (no backfill). Run a single replica.
 
 ## Validation and Security Invariants
 
@@ -460,10 +478,9 @@ must not be assumed unique.
 
 ### Currency conversion
 
-USD/MXN rates are cached in process for 15 minutes. If Yahoo fails, the converter returns
-the most recently cached rate when available; otherwise it currently falls back to `17.0`.
-This fallback keeps requests available but should be considered approximate financial
-data.
+USD/MXN rates are cached in process for 15 minutes. If Yahoo fails and no fresh cached
+rate exists, the converter raises `CurrencyRateUnavailable` and routes that need a rate
+respond with `503`. There is no hard-coded fallback rate.
 
 ## Database Integrity
 
@@ -570,7 +587,7 @@ Coverage includes:
 - Pagination and external-query bounds.
 - Rejection of client-owned valuation fields.
 - Rejection of unsafe transaction amounts and derived fields.
-- The 28-route investment operation inventory.
+- The 29-route investment operation inventory.
 - Telemetry merging, workflow stages, results, and normalized failures.
 - Error retention, success sampling, and forced retention of partial refreshes.
 - Redaction of search text, monetary data, notes, and exception parameters.
@@ -587,24 +604,28 @@ suite at an isolated test database, never a development or production database.
 
 ## Current Limitations and Design Considerations
 
-1. Financial values use floating-point columns and Python `float`. Exact financial
-   accounting would be safer with fixed-precision `NUMERIC`/`Decimal` values and explicit
-   rounding rules.
+1. Financial values are stored as fixed-precision `NUMERIC` and handled as `Decimal`
+   internally; responses round to two decimals and serialize as `float`.
 2. `Account.total_investments` sums `Holding.current_value`, which is the native valuation
    field. Accounts containing mixed native currencies need an explicit base-currency
    policy to make this cached total meaningful.
 3. Direct holding edits recalculate the position but do not create ledger entries. Use
    transaction routes when auditable history matters.
-4. Transaction fees are stored but are not currently included in cost basis.
+4. Buy fees are included in cost basis; sell proceeds are recorded net of fees. Realized
+   gains are not stored.
 5. Transaction history cannot be edited or deleted. A dedicated correction/reversal
    workflow could provide stronger semantics than manually choosing an opposite action.
-6. Price history is stored, but there is no implemented portfolio-performance-over-time
-   route despite performance schema classes existing in the codebase.
+6. `GET /portfolio/performance` reads daily snapshots, so its history starts on the
+   snapshot worker's deploy date (no backfill). The return is a holdings-based,
+   time-weighted return at daily granularity. Dividends are not counted as return. A split
+   entered by editing quantity via `PUT /holdings`, instead of a SPLIT transaction, shows
+   as a one-day loss.
 7. External throttling and exchange-rate caches are local to each process. Distributed
    deployments should use a shared rate limiter and cache.
 8. Asset symbols are globally unique across all markets. Instruments with the same symbol
    on different markets cannot currently coexist unless the identity model is expanded.
-9. The exchange-rate fallback favors availability over strict valuation accuracy.
+9. There is no exchange-rate fallback: when no current USD/MXN rate is available, routes
+   that need one fail with `503` and the snapshot worker skips that run.
 
 ## Extension Guidelines
 

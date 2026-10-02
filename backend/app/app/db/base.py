@@ -8,4 +8,5 @@ from app.models.data_export import DataExport  # noqa
 from app.models.holding import Holding  # noqa
 from app.models.investment_transaction import InvestmentTransaction  # noqa
 from app.models.item import Item  # noqa
+from app.models.portfolio_snapshot import PortfolioSnapshot, PortfolioSnapshotHolding  # noqa
 from app.models.user import User  # noqa

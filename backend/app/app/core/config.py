@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     INVESTMENTS_ALLOWED_USER_IDS: str = ""
     INVESTMENTS_ALLOWED_USER_UUIDS: str = ""
 
+    # Portfolio snapshot worker
+    PORTFOLIO_SNAPSHOT_INTERVAL_SECONDS: int = 3600
+    PORTFOLIO_SNAPSHOT_PRICE_MAX_AGE_MINUTES: int = 60
+    PORTFOLIO_SNAPSHOT_TIMEZONE: str = "America/Mexico_City"
+
     @field_validator("INVESTMENTS_ALLOWED_USER_IDS")
     def validate_investment_user_ids(cls, v: str) -> str:
         for raw_id in v.split(","):

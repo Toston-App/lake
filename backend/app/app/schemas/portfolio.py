@@ -1,8 +1,10 @@
+import datetime as dt
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel
 
-from app.models.asset import AssetClass, AssetType
+from app.models.asset import AssetClass, AssetType, Currency
 
 
 # Portfolio Summary
@@ -114,22 +116,36 @@ class AllocationByAccount(BaseModel):
 
 
 # Performance over time
-class PerformanceDataPoint(BaseModel):
-    """Single data point in performance history."""
+class PerformancePeriod(str, Enum):
+    ONE_WEEK = "1W"
+    ONE_MONTH = "1M"
+    THREE_MONTHS = "3M"
+    SIX_MONTHS = "6M"
+    YEAR_TO_DATE = "YTD"
+    ONE_YEAR = "1Y"
+    ALL = "ALL"
 
-    date: datetime
-    value_usd: float
-    value_mxn: float
+
+class PerformanceDataPoint(BaseModel):
+    """Portfolio valuation on one day, in the response currency."""
+
+    date: dt.date
+    value: float
+    invested: float
     gain_loss: float
     gain_loss_pct: float
 
 
 class PortfolioPerformance(BaseModel):
-    """Portfolio performance over time."""
+    """Value series and time-weighted, contribution-neutral return for a period."""
 
-    period: str  # "1D", "1W", "1M", "3M", "1Y", "ALL"
+    period: PerformancePeriod
+    currency: Currency
+    start_date: dt.date
+    end_date: dt.date
     start_value: float
     end_value: float
+    net_contributions: float
     absolute_return: float
     percentage_return: float
     data_points: list[PerformanceDataPoint]

@@ -1648,6 +1648,80 @@ const top10 = await apiCall('/portfolio/top-holdings');
 
 ---
 
+#### 8. Portfolio Performance
+
+Get the portfolio's value over time and its return for a period. Each data point is one
+day; the last point is computed live, so it matches `/portfolio/summary`. History starts
+on the day the snapshot worker was deployed.
+
+**Endpoint:** `GET /portfolio/performance`
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | string | `1M` | One of `1W`, `1M`, `3M`, `6M`, `YTD`, `1Y`, `ALL` |
+| `currency` | Currency | `USD` | Currency of every value in the response (`USD` or `MXN`) |
+
+**Response Schema:**
+
+```typescript
+interface PerformanceDataPoint {
+  date: string; // ISO date (YYYY-MM-DD)
+  value: number;
+  invested: number;
+  gain_loss: number; // value - invested
+  gain_loss_pct: number;
+}
+
+interface PortfolioPerformance {
+  period: "1W" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "ALL";
+  currency: Currency;
+  start_date: string;
+  end_date: string;
+  start_value: number;
+  end_value: number;
+  net_contributions: number;
+  absolute_return: number;
+  percentage_return: number;
+  data_points: PerformanceDataPoint[];
+}
+```
+
+`percentage_return` is a time-weighted return: it measures only how the holdings
+performed, so deposits and withdrawals do not move it. `net_contributions` is money added
+minus money withdrawn during the period, at market value, so
+`end_value - start_value = absolute_return + net_contributions`.
+
+**Example:**
+
+```javascript
+const performance = await apiCall('/portfolio/performance?period=3M&currency=MXN');
+```
+
+**Response:**
+
+```json
+{
+  "period": "1M",
+  "currency": "USD",
+  "start_date": "2024-01-01",
+  "end_date": "2024-01-03",
+  "start_value": 1000.00,
+  "end_value": 2200.00,
+  "net_contributions": 1100.00,
+  "absolute_return": 100.00,
+  "percentage_return": 10.00,
+  "data_points": [
+    { "date": "2024-01-01", "value": 1000.00, "invested": 1000.00, "gain_loss": 0.00, "gain_loss_pct": 0.00 },
+    { "date": "2024-01-02", "value": 1100.00, "invested": 1000.00, "gain_loss": 100.00, "gain_loss_pct": 10.00 },
+    { "date": "2024-01-03", "value": 2200.00, "invested": 2100.00, "gain_loss": 100.00, "gain_loss_pct": 4.76 }
+  ]
+}
+```
+
+---
+
 ## Complete User Workflow
 
 This section describes the typical user journey from initial setup to portfolio management.
@@ -2151,6 +2225,7 @@ async function apiCall(endpoint, options = {}) {
 | GET | `/portfolio/allocation/by-type` | Allocation by asset type |
 | GET | `/portfolio/allocation/by-country` | Allocation by country |
 | GET | `/portfolio/top-holdings` | Top holdings by value |
+| GET | `/portfolio/performance` | Portfolio performance over time |
 
 ---
 

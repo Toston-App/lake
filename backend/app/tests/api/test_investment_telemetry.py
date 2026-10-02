@@ -43,6 +43,7 @@ EXPECTED_OPERATIONS = {
     "get_allocation_by_country",
     "get_allocation_by_account",
     "get_top_holdings",
+    "get_portfolio_performance",
 }
 
 
@@ -86,7 +87,7 @@ def make_middleware(sample_rate=0.0):
 
 def test_operation_inventory_covers_all_routes():
     assert set(_RESOURCE_BY_OPERATION) == EXPECTED_OPERATIONS
-    assert len(_RESOURCE_BY_OPERATION) == 28
+    assert len(_RESOURCE_BY_OPERATION) == 29
 
 
 def test_helpers_merge_context_stages_results_and_redact_values():

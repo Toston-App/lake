@@ -100,6 +100,7 @@ from .portfolio import (
     AllocationByType,
     AllocationItem,
     PerformanceDataPoint,
+    PerformancePeriod,
     PortfolioPerformance,
     PortfolioSummary,
     TopHolding,

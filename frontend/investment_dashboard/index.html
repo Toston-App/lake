@@ -112,6 +112,82 @@
                     </div>
                 </div>
 
+                <!-- Performance -->
+                <div class="card performance-card" id="performance-card">
+                    <div class="perf-header">
+                        <div>
+                            <h3>Performance</h3>
+                            <p class="perf-range" id="perf-range"></p>
+                        </div>
+                        <div class="perf-controls">
+                            <div class="segmented" role="group" aria-label="Period" id="perf-period">
+                                <button type="button" data-period="1W">1W</button>
+                                <button type="button" data-period="1M">1M</button>
+                                <button type="button" data-period="3M">3M</button>
+                                <button type="button" data-period="6M">6M</button>
+                                <button type="button" data-period="YTD">YTD</button>
+                                <button type="button" data-period="1Y">1Y</button>
+                                <button type="button" data-period="ALL">All</button>
+                            </div>
+                            <div class="segmented" role="group" aria-label="Currency" id="perf-currency">
+                                <button type="button" data-currency="USD">USD</button>
+                                <button type="button" data-currency="MXN">MXN</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="perf-stats">
+                        <div class="perf-stat">
+                            <span class="card-label">Value</span>
+                            <span class="perf-stat-value" id="perf-end-value">–</span>
+                            <span class="card-sub" id="perf-start-value"></span>
+                        </div>
+                        <div class="perf-stat">
+                            <span class="card-label">Market return</span>
+                            <span class="perf-stat-value" id="perf-absolute-return">–</span>
+                            <span class="card-change" id="perf-percentage-return"></span>
+                        </div>
+                        <div class="perf-stat">
+                            <span class="card-label">Net contributions</span>
+                            <span class="perf-stat-value" id="perf-net-contributions">–</span>
+                            <span class="card-sub">Money added minus money withdrawn</span>
+                        </div>
+                    </div>
+
+                    <div class="perf-chart" id="perf-chart">
+                        <svg id="perf-svg" role="img" aria-label="Portfolio value and amount invested over time" tabindex="0"></svg>
+                        <div class="perf-tooltip" id="perf-tooltip" role="status" aria-live="polite"></div>
+                        <div class="perf-message" id="perf-message"></div>
+                    </div>
+
+                    <div class="perf-footer">
+                        <div class="perf-legend">
+                            <span class="legend-item"><span class="legend-key legend-key-value"></span>Value</span>
+                            <span class="legend-item"><span class="legend-key legend-key-invested"></span>Invested</span>
+                        </div>
+                        <details class="perf-table-toggle">
+                            <summary>Show data table</summary>
+                            <div class="perf-table-wrap">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>Value</th>
+                                            <th>Invested</th>
+                                            <th>Gain/Loss</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="perf-table-body"></tbody>
+                                </table>
+                            </div>
+                        </details>
+                    </div>
+                    <p class="perf-note">
+                        Market return is time-weighted: buying, selling and deleting holdings don't change it.
+                        History has one point per day since daily snapshots began.
+                    </p>
+                </div>
+
                 <!-- Allocations -->
                 <div class="allocations-grid">
                     <div class="card">

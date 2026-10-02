@@ -3,16 +3,19 @@ Portfolio analytics endpoints for the Investment Dashboard.
 """
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
 from app.api import deps
 from app.models.asset import AssetClass, AssetType, Currency, Market
+from app.models.investment_transaction import InvestmentTransaction, TransactionType
+from app.models.portfolio_snapshot import PortfolioSnapshot
 from app.schemas.portfolio import (
     AllocationByAccount,
     AllocationByClass,
@@ -21,11 +24,25 @@ from app.schemas.portfolio import (
     AllocationByMarket,
     AllocationByType,
     AllocationItem,
+    PerformanceDataPoint,
+    PerformancePeriod,
+    PortfolioPerformance,
     PortfolioSummary,
     TopHolding,
     TopHoldingsResponse,
 )
 from app.services.currency_converter import CurrencyConverter, CurrencyRateUnavailable
+from app.services.portfolio_performance import (
+    SplitEvent,
+    Valuation,
+    compute_performance,
+)
+from app.services.portfolio_snapshot import (
+    PortfolioTotals,
+    combined_invested,
+    compute_portfolio_totals,
+    portfolio_today,
+)
 from app.utilities.investment_telemetry import (
     begin_investment_stage,
     complete_investment_event,
@@ -597,4 +614,150 @@ async def get_top_holdings(
         holdings=result,
         total_shown=len(result),
         total_holdings=len(holdings),
+    )
+
+
+_PERIOD_DAYS = {
+    PerformancePeriod.ONE_WEEK: 7,
+    PerformancePeriod.ONE_MONTH: 30,
+    PerformancePeriod.THREE_MONTHS: 90,
+    PerformancePeriod.SIX_MONTHS: 182,
+    PerformancePeriod.ONE_YEAR: 365,
+}
+
+
+def _period_start(period: PerformancePeriod, today: date) -> date | None:
+    """First day of the window; None means no lower bound (ALL)."""
+    if period == PerformancePeriod.ALL:
+        return None
+    if period == PerformancePeriod.YEAR_TO_DATE:
+        return date(today.year, 1, 1)
+    return today - timedelta(days=_PERIOD_DAYS[period])
+
+
+def _snapshot_valuation(snapshot: PortfolioSnapshot, currency: Currency) -> Valuation:
+    in_usd = currency == Currency.USD
+    return Valuation(
+        day=snapshot.snapshot_date,
+        captured_at=snapshot.captured_at,
+        value=snapshot.total_value_usd if in_usd else snapshot.total_value_mxn,
+        invested=combined_invested(
+            snapshot.total_invested_usd,
+            snapshot.total_invested_mxn,
+            snapshot.usd_mxn_rate,
+            currency,
+        ),
+        positions={
+            p.holding_id: (p.quantity, p.value_usd if in_usd else p.value_mxn)
+            for p in snapshot.positions
+        },
+    )
+
+
+def _live_valuation(
+    totals: PortfolioTotals, rate: Decimal, currency: Currency, today: date
+) -> Valuation:
+    in_usd = currency == Currency.USD
+    return Valuation(
+        day=today,
+        captured_at=datetime.now(timezone.utc),
+        value=totals.total_value_usd if in_usd else totals.total_value_mxn,
+        invested=combined_invested(
+            totals.total_invested_usd, totals.total_invested_mxn, rate, currency
+        ),
+        positions={
+            p.holding_id: (p.quantity, p.value_usd if in_usd else p.value_mxn)
+            for p in totals.positions
+        },
+    )
+
+
+@router.get("/performance", response_model=PortfolioPerformance)
+async def get_portfolio_performance(
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+    period: PerformancePeriod = Query(PerformancePeriod.ONE_MONTH),
+    currency: Currency = Query(Currency.USD),
+) -> Any:
+    """
+    Get portfolio value over time and its time-weighted return for a period.
+    """
+    today = portfolio_today()
+    start = _period_start(period, today)
+
+    with investment_stage(request, "database_query"):
+        snapshots = await crud.portfolio_snapshot.get_range(
+            db, owner_id=current_user.id, start_date=start
+        )
+        if start is not None:
+            # Measure from the last known value at or before the window start.
+            baseline = await crud.portfolio_snapshot.get_latest_on_or_before(
+                db, owner_id=current_user.id, day=start
+            )
+            if baseline is not None and baseline.id not in {s.id for s in snapshots}:
+                snapshots.insert(0, baseline)
+        # The live point replaces today's stored snapshot.
+        snapshots = [s for s in snapshots if s.snapshot_date != today]
+        holdings = await crud.holding.get_by_owner(
+            db, owner_id=current_user.id, limit=None
+        )
+        split_query = select(InvestmentTransaction).where(
+            InvestmentTransaction.owner_id == current_user.id,
+            InvestmentTransaction.transaction_type == TransactionType.SPLIT,
+        )
+        if snapshots:
+            split_query = split_query.where(
+                InvestmentTransaction.created_at > snapshots[0].captured_at
+            )
+        splits = [
+            SplitEvent(
+                holding_id=tx.holding_id, recorded_at=tx.created_at, ratio=tx.quantity
+            )
+            for tx in (await db.execute(split_query)).scalars().all()
+        ]
+
+    with investment_stage(request, "fx_lookup"):
+        rate = await _trusted_usd_mxn_rate()
+    begin_investment_stage(request, "aggregation")
+
+    valuations = [_snapshot_valuation(s, currency) for s in snapshots] + [
+        _live_valuation(compute_portfolio_totals(holdings, rate), rate, currency, today)
+    ]
+    result = compute_performance(valuations, splits)
+
+    data_points = []
+    for valuation in valuations:
+        gain_loss = valuation.value - valuation.invested
+        gain_loss_pct = (
+            gain_loss / valuation.invested * 100 if valuation.invested > 0 else ZERO
+        )
+        data_points.append(
+            PerformanceDataPoint(
+                date=valuation.day,
+                value=round(valuation.value, 2),
+                invested=round(valuation.invested, 2),
+                gain_loss=round(gain_loss, 2),
+                gain_loss_pct=round(gain_loss_pct, 2),
+            )
+        )
+
+    complete_investment_stage(request, "aggregation")
+    complete_investment_event(
+        request,
+        result_count=len(valuations),
+        holdings_count=len(holdings),
+    )
+    first, last = valuations[0], valuations[-1]
+    return PortfolioPerformance(
+        period=period,
+        currency=currency,
+        start_date=first.day,
+        end_date=last.day,
+        start_value=round(first.value, 2),
+        end_value=round(last.value, 2),
+        net_contributions=round(result.net_contributions, 2),
+        absolute_return=round(result.absolute_return, 2),
+        percentage_return=round(result.percentage_return, 2),
+        data_points=data_points,
     )

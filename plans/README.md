@@ -9,8 +9,8 @@ conditions, and update your row when done.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001  | Daily portfolio snapshots + snapshot/price worker | P1 | M | — | TODO |
-| 002  | `GET /investments/portfolio/performance` endpoint | P1 | M | 001 | TODO |
+| 001  | Daily portfolio snapshots + snapshot/price worker | P1 | M | — | DONE |
+| 002  | `GET /investments/portfolio/performance` endpoint | P1 | M | 001 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 

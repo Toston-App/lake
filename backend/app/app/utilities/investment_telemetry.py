@@ -48,6 +48,7 @@ _RESOURCE_BY_OPERATION = {
     "get_allocation_by_country": "portfolio",
     "get_allocation_by_account": "portfolio",
     "get_top_holdings": "portfolio",
+    "get_portfolio_performance": "portfolio",
 }
 
 _CONTEXT_FIELDS = {
