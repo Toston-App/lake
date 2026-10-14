@@ -86,7 +86,6 @@ INVESTMENT_WRITES = [
     ("POST", "/transactions", {}),
     ("POST", "/transactions/with-asset", {}),
     ("DELETE", "/transactions/1", None),
-    ("POST", "/assets/refresh-prices", None),
 ]
 READ_ONLY_DETAIL = (
     "Your subscription is inactive: investments are read-only until you renew"
@@ -115,6 +114,42 @@ async def test_lapsed_subscription_cannot_change_investments(
 
     assert response.status_code == 402
     assert response.json()["detail"] == READ_ONLY_DETAIL
+
+
+async def test_lapsed_subscription_can_refresh_prices_once_a_day(
+    client: AsyncClient, db_session, test_user, billing_on, monkeypatch
+):
+    await _subscribe(db_session, test_user, tier="tier1", status="revoked")
+    monkeypatch.setattr(
+        PriceFetcher, "refresh_all_prices", AsyncMock(return_value=(1, []))
+    )
+    limiter_keys: set[str] = set()
+
+    async def fake_set(key, value, nx, ex):
+        assert ex == 24 * 60 * 60
+        if key in limiter_keys:
+            return None
+        limiter_keys.add(key)
+        return True
+
+    monkeypatch.setattr("app.services.investment_rate_limiter.r.set", fake_set)
+
+    first = await client.post(f"{BASE}/assets/refresh-prices")
+    second = await client.post(f"{BASE}/assets/refresh-prices")
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "once every 24 hours" in second.json()["detail"]
+
+
+async def test_lapsed_subscription_cannot_refresh_all_prices(
+    client: AsyncClient, db_session, test_user, billing_on
+):
+    await _subscribe(db_session, test_user, tier="tier1", status="revoked")
+
+    response = await client.post(f"{BASE}/assets/refresh-prices?only_my_holdings=false")
+
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize("method,path,payload", INVESTMENT_WRITES)

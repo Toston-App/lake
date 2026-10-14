@@ -189,6 +189,11 @@ def require_chat_access(
 # Methods that only read investment data; everything else creates, edits or
 # deletes it.
 _INVESTMENT_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# Writes a lapsed subscriber may still make; the endpoint throttles them via
+# request.state.investments_read_only.
+_INVESTMENT_LAPSED_WRITES = frozenset(
+    {("POST", f"{settings.API_V1_STR}/investments/assets/refresh-prices")}
+)
 
 
 async def require_investments_access(
@@ -200,7 +205,8 @@ async def require_investments_access(
 
     A user whose subscription lapsed (canceled, revoked, payment failure) keeps
     read-only access so they can still see their portfolio, but can't add,
-    edit or delete anything until they renew.
+    edit or delete anything until they renew. They may still refresh prices,
+    which the endpoint limits to once a day.
     """
     from app.core.tiers import FEATURE_INVESTMENTS, has_feature
     from app.crud import crud_subscription
@@ -233,7 +239,10 @@ async def require_investments_access(
                     "subscription_required",
                     "Investments require an active paid subscription",
                 )
-            if request.method not in _INVESTMENT_READ_METHODS:
+            request.state.investments_read_only = True
+            if request.method not in _INVESTMENT_READ_METHODS and (
+                (request.method, request.url.path) not in _INVESTMENT_LAPSED_WRITES
+            ):
                 deny(
                     status.HTTP_402_PAYMENT_REQUIRED,
                     "subscription_inactive",

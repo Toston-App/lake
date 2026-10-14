@@ -114,8 +114,9 @@ The feature is disabled by default (`403 Forbidden`). When enabled, access to
 | Never subscribed | `402`: `Investments require an active paid subscription` | `402`: same |
 
 Read-only users can still see their holdings, transactions, portfolio and prices, but
-can't add, edit or delete holdings or transactions, or force a price refresh, until they
-renew. A scheduled cancellation keeps full access until its end date.
+can't add, edit or delete holdings or transactions until they renew. They can call
+`POST /assets/refresh-prices` once every 24 hours; a second call within that window
+returns `429`. A scheduled cancellation keeps full access until its end date.
 
 The tier comes from the same entitlement resolution as chat (see
 [POLAR_SUBSCRIPTIONS.md](./POLAR_SUBSCRIPTIONS.md)). With subscriptions disabled, every user
@@ -722,6 +723,8 @@ Bulk refresh prices for tracked assets.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `only_my_holdings` | boolean | true | Only refresh assets in user's portfolio |
+
+Users whose subscription lapsed can call this once every 24 hours (`429` otherwise).
 
 **Response Schema:**
 

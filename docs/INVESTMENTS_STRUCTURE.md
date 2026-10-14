@@ -265,7 +265,8 @@ The application normally infers `asset_class` from `asset_type`.
 | `GET` | `/assets/{asset_id}/price` | Active user | Read price; holders or superusers may refresh |
 | `POST` | `/assets/refresh-prices` | Active user | Refresh assets in the user's holdings |
 
-Setting `only_my_holdings=false` on bulk price refresh is superuser-only.
+Setting `only_my_holdings=false` on bulk price refresh is superuser-only. Paid users can
+bulk refresh every 30 seconds; users whose subscription lapsed can do it once every 24 hours.
 Single-asset refresh is restricted to users who hold the asset and superusers. Other
 authenticated users can read cached global prices without causing upstream work.
 
