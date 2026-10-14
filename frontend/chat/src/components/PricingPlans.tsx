@@ -9,11 +9,6 @@ type PricingPlansProps = {
 }
 
 const FEATURE_LABELS: Record<string, string> = {
-  search_web: 'Web search',
-  charts: 'Charts & visualizations',
-  advanced_analytics: 'Advanced analytics',
-  bulk_operations: 'Bulk operations',
-  priority_support: 'Priority support',
   investments: 'Investment portfolio tracking',
 }
 
@@ -21,13 +16,12 @@ function featureLabel(key: string): string {
   return FEATURE_LABELS[key] ?? key.replace(/_/g, ' ')
 }
 
-function formatMessages(tier: TierOut): string {
-  if (tier.monthly_message_limit == null) {
-    return tier.monthly_token_limit == null
-      ? 'Unlimited messages'
-      : 'Unlimited messages (fair use)'
-  }
-  return `${tier.monthly_message_limit} messages / mo`
+function formatUsage(tier: TierOut): string {
+  if (tier.monthly_token_limit == null) return 'Unlimited usage'
+  const tokens = new Intl.NumberFormat('en', { notation: 'compact' }).format(
+    tier.monthly_token_limit,
+  )
+  return `${tokens} tokens / mo`
 }
 
 export function PricingPlans({
@@ -56,14 +50,13 @@ export function PricingPlans({
                 {tier.price_hint ?? '—'}
               </span>
             </div>
-            <p className="pricing-meta">{formatMessages(tier)}</p>
+            <p className="pricing-meta">{formatUsage(tier)}</p>
             <ul className="pricing-features">
+              <li>All chat features</li>
+              <li>{tier.premium_model ? 'Smarter AI model' : 'Standard AI model'}</li>
               {tier.features.map((f) => (
                 <li key={f}>{featureLabel(f)}</li>
               ))}
-              {tier.features.length === 0 && (
-                <li className="muted">Basic chat tools</li>
-              )}
             </ul>
             <button
               type="button"

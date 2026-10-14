@@ -40,7 +40,6 @@ export type EconomicsUserRow = {
   is_paid: boolean
   turns: number
   tokens: number
-  messages_limit: number | null
   tokens_limit: number | null
   ai_cost_usd: number
   monthly_price_usd: number

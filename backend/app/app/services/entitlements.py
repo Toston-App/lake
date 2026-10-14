@@ -16,9 +16,11 @@ Resolution order:
 The usage window starts at the subscription's `current_period_start` for
 active subscriptions, or the first day of the current calendar month for
 free users. Usage is persisted in `chat_obs_turns` even when optional detailed
-chat observability is disabled. Expired reservations and server-errored turns
-do not consume a message; turns the client abandons mid-stream do. Tokens a
-turn actually consumed always count, whatever its status.
+chat observability is disabled. Only tokens are limited: a turn is allowed
+while the period's tokens are under the tier's `monthly_token_limit`. Tokens a
+turn actually consumed always count, whatever its status. Messages are counted
+for reporting only; expired reservations and server-errored turns don't count
+as a message, turns the client abandons mid-stream do.
 """
 
 from __future__ import annotations
@@ -30,7 +32,12 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.tiers import Tier, get_tier_config, tier_from_value
+from app.core.tiers import (
+    Tier,
+    chat_model_for_tier,
+    get_tier_config,
+    tier_from_value,
+)
 from app.crud import crud_subscription
 from app.models.chat_observability import ChatObsTurn
 from app.models.subscription import UserSubscription
@@ -300,30 +307,21 @@ async def check_quota(db: AsyncSession, user: User) -> QuotaResult:
     messages_used = usage_raw["messages_used"]
     tokens_used = usage_raw["tokens_used"]
 
-    reason: str | None = None
-    allowed = True
-    if (
-        cfg.monthly_message_limit is not None
-        and messages_used >= cfg.monthly_message_limit
-    ):
-        allowed = False
-        reason = "message_limit_reached"
-    elif cfg.monthly_token_limit is not None and tokens_used >= cfg.monthly_token_limit:
-        allowed = False
-        reason = "token_limit_reached"
-
-    remaining: int | None = None
-    if cfg.monthly_message_limit is not None:
-        remaining = max(0, cfg.monthly_message_limit - messages_used)
+    # Only tokens are limited; messages are counted for reporting.
+    limit = cfg.monthly_token_limit
+    allowed = limit is None or tokens_used < limit
+    reason = None if allowed else "token_limit_reached"
 
     usage = UsageOut(
         period_start=period_start,
         period_end=period_end,
         messages_used=messages_used,
-        messages_limit=cfg.monthly_message_limit,
         tokens_used=tokens_used,
-        tokens_limit=cfg.monthly_token_limit,
-        remaining=remaining,
+        tokens_limit=limit,
+        # Rounded down so 100 only shows once chat is actually blocked.
+        percent_used=(
+            None if limit is None else min(100.0, tokens_used * 1000 // limit / 10)
+        ),
     )
     return QuotaResult(
         tier=tier,
@@ -340,11 +338,10 @@ async def reserve_chat_turn(
     *,
     conversation_id: str,
     user_message: str,
-    model: str,
     trace_id: str | None = None,
     request_id: str | None = None,
 ) -> tuple[QuotaResult, int | None]:
-    """Atomically check quota and reserve one message slot for a chat turn."""
+    """Atomically check quota and record an in-progress turn for a chat turn."""
     try:
         await db.execute(
             select(func.pg_advisory_xact_lock(_QUOTA_LOCK_NAMESPACE, user.id))
@@ -368,7 +365,7 @@ async def reserve_chat_turn(
                 "user_message": (
                     user_message if settings.CHAT_OBSERVABILITY_ENABLED else None
                 ),
-                "model": model,
+                "model": chat_model_for_tier(quota.tier),
                 "provider": "openrouter",
                 "status": "in_progress",
                 "trace_id": trace_id,

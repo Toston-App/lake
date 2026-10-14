@@ -194,6 +194,8 @@ class Settings(BaseSettings):
     CHAT_RATE_LIMIT_PER_DAY: int = 300
     CHAT_CONVERSATION_TTL_SECONDS: int = 60 * 60 * 24 * 7
     CHAT_MODEL: str | None = "openai/gpt-5.6-luna"
+    # Smarter model for the Premium tier; unset falls back to CHAT_MODEL.
+    CHAT_PREMIUM_MODEL: str | None = None
     TAVILY_API_KEY: str | None = None
     CHAT_WEB_SEARCH_MAX_RESULTS: int = 5
     # Chat observability: persist turns/llm-calls/tool-calls to Postgres.
@@ -264,7 +266,7 @@ class Settings(BaseSettings):
     # (or auto-enable) requires access token + webhook secret + org id.
     SUBSCRIPTIONS_ENABLED: bool | None = None
     # Used only when SUBSCRIPTIONS_ENABLED is False. Sandbox/dev default is
-    # tier2 (unlimited) for full chat locally; production (ENVIRONMENT or
+    # tier2 (Premium model, investments) locally; production (ENVIRONMENT or
     # POLAR_SERVER) always forces free (see validators).
     SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier2"
 

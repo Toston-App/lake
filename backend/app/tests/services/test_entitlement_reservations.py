@@ -1,6 +1,4 @@
-import asyncio
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
 import pytest
 from app.core.config import settings
@@ -11,9 +9,6 @@ from app.services.entitlements import (
     get_period_usage,
     reserve_chat_turn,
 )
-from sqlalchemy import delete
-
-from tests.conftest import TestSessionLocal
 
 
 async def test_reservation_records_billing_when_observability_is_disabled(
@@ -27,7 +22,6 @@ async def test_reservation_records_billing_when_observability_is_disabled(
         test_user,
         conversation_id="billing-only",
         user_message="sensitive text",
-        model="test-model",
     )
 
     assert quota.allowed
@@ -38,27 +32,50 @@ async def test_reservation_records_billing_when_observability_is_disabled(
     assert turn.user_message is None
 
 
-async def test_stale_reservation_does_not_consume_quota(
+async def test_messages_are_not_limited(
     db_session, test_user: User, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
     monkeypatch.setattr(settings, "CHAT_OBSERVABILITY_ENABLED", False)
-    for index in range(9):
-        db_session.add(
-            ChatObsTurn(
-                conversation_id=f"done-{index}",
-                user_id=test_user.id,
-                provider="openrouter",
-                status="ok",
-            )
-        )
-    db_session.add(
+    db_session.add_all(
         ChatObsTurn(
-            conversation_id="stale",
+            conversation_id=f"done-{index}",
             user_id=test_user.id,
             provider="openrouter",
-            status="in_progress",
-            started_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            status="ok",
+            total_tokens=100,
+        )
+        for index in range(50)
+    )
+    await db_session.commit()
+
+    quota, turn_id = await reserve_chat_turn(
+        db_session,
+        test_user,
+        conversation_id="many-messages",
+        user_message="hello",
+    )
+
+    assert quota.allowed
+    assert turn_id is not None
+    assert quota.usage.messages_used == 50
+    assert quota.usage.tokens_used == 5_000
+    assert quota.usage.tokens_limit == 20_000
+    assert quota.usage.percent_used == 25.0
+
+
+async def test_token_limit_blocks_the_turn(
+    db_session, test_user: User, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
+    monkeypatch.setattr(settings, "CHAT_OBSERVABILITY_ENABLED", False)
+    db_session.add(
+        ChatObsTurn(
+            conversation_id="big-turn",
+            user_id=test_user.id,
+            provider="openrouter",
+            status="ok",
+            total_tokens=25_000,
         )
     )
     await db_session.commit()
@@ -66,12 +83,50 @@ async def test_stale_reservation_does_not_consume_quota(
     quota, turn_id = await reserve_chat_turn(
         db_session,
         test_user,
-        conversation_id="last-slot",
+        conversation_id="over-limit",
         user_message="hello",
-        model="test-model",
     )
-    assert quota.allowed
-    assert turn_id is not None
+
+    assert not quota.allowed
+    assert quota.reason == "token_limit_reached"
+    assert turn_id is None
+    assert quota.usage.percent_used == 100.0
+
+
+@pytest.mark.parametrize(
+    "tier,premium_model,expected",
+    [
+        ("free", "premium-model", "base-model"),
+        ("tier1", "premium-model", "base-model"),
+        ("tier2", "premium-model", "premium-model"),
+        ("tier2", None, "base-model"),
+    ],
+)
+async def test_turn_records_the_tier_model(
+    db_session,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+    tier,
+    premium_model,
+    expected,
+) -> None:
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", False)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", tier)
+    monkeypatch.setattr(settings, "CHAT_OBSERVABILITY_ENABLED", True)
+    monkeypatch.setattr(settings, "CHAT_MODEL", "base-model")
+    monkeypatch.setattr(settings, "CHAT_PREMIUM_MODEL", premium_model)
+
+    quota, turn_id = await reserve_chat_turn(
+        db_session,
+        test_user,
+        conversation_id=f"model-{tier}",
+        user_message="hello",
+    )
+
+    assert quota.tier.value == tier
+    turn = await db_session.get(ChatObsTurn, turn_id)
+    assert turn is not None
+    assert turn.model == expected
 
 
 async def test_interrupted_turns_count_and_errored_tokens_are_billed(
@@ -110,53 +165,3 @@ async def test_interrupted_turns_count_and_errored_tokens_are_billed(
     # A server error refunds the message but never the tokens it consumed; a
     # client disconnect is billed in full.
     assert usage == {"messages_used": 3, "tokens_used": 1500}
-
-
-async def test_parallel_reservations_admit_exactly_one_final_slot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
-    monkeypatch.setattr(settings, "CHAT_OBSERVABILITY_ENABLED", False)
-    email = f"quota-{uuid4()}@example.com"
-
-    async with TestSessionLocal() as setup:
-        user = User(email=email, country="USD", is_active=True, is_superuser=False)
-        setup.add(user)
-        await setup.flush()
-        user_id = user.id
-        setup.add_all(
-            [
-                ChatObsTurn(
-                    conversation_id=f"existing-{index}",
-                    user_id=user_id,
-                    provider="openrouter",
-                    status="ok",
-                )
-                for index in range(9)
-            ]
-        )
-        await setup.commit()
-
-    async def reserve(index: int):
-        async with TestSessionLocal() as session:
-            user = await session.get(User, user_id)
-            assert user is not None
-            return await reserve_chat_turn(
-                session,
-                user,
-                conversation_id=f"parallel-{index}",
-                user_message="hello",
-                model="test-model",
-            )
-
-    try:
-        results = await asyncio.gather(reserve(1), reserve(2))
-        assert sum(1 for quota, _ in results if quota.allowed) == 1
-        assert sum(1 for _, turn_id in results if turn_id is not None) == 1
-    finally:
-        async with TestSessionLocal() as cleanup:
-            await cleanup.execute(
-                delete(ChatObsTurn).where(ChatObsTurn.user_id == user_id)
-            )
-            await cleanup.execute(delete(User).where(User.id == user_id))
-            await cleanup.commit()

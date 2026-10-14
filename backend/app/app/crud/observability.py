@@ -408,7 +408,6 @@ def _build_economics_row(
         "is_paid": is_paid,
         "turns": turns,
         "tokens": tokens,
-        "messages_limit": cfg.monthly_message_limit,
         "tokens_limit": cfg.monthly_token_limit,
         "ai_cost_usd": _money(cost),
         "monthly_price_usd": _money(monthly),

@@ -2,11 +2,12 @@
 
 Each tier maps to a Polar product (except `free`) and defines:
 
-* `monthly_message_limit` / `monthly_token_limit` — usage caps enforced
-  locally in the chat path by counting `chat_obs_turns` rows. `None` means
-  unlimited.
-* `features` — feature flags consumed by the chat agent to gate tools
-  (see `ai/chat_tools.get_tool_definitions`).
+* `monthly_token_limit` — the chat usage cap, enforced locally in the chat
+  path by summing `chat_obs_turns` tokens. `None` means unlimited. Messages
+  are counted too, but never limited.
+* `premium_model` — whether chat runs on `CHAT_PREMIUM_MODEL` instead of
+  `CHAT_MODEL`. Every tier gets the same chat tools.
+* `features` — non-chat feature flags (investments).
 * `polar_product_id` — the Polar product id this tier corresponds to.
   Set from env / Polar dashboard. Used only for the checkout flow; the
   webhook maps the *incoming* product id back to a tier via
@@ -17,6 +18,7 @@ The numbers below are dummy starting values; tune freely.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -27,25 +29,10 @@ class Tier(str, Enum):
     tier2 = "tier2"
 
 
-# Feature keys consumed by the chat agent / system prompt.
-FEATURE_SEARCH_WEB = "search_web"
-FEATURE_CHARTS = "charts"
-FEATURE_ADVANCED_ANALYTICS = "advanced_analytics"
-FEATURE_BULK_OPERATIONS = "bulk_operations"
-FEATURE_PRIORITY_SUPPORT = "priority_support"
 # Investment portfolio endpoints (/api/v1/investments/**). Every paid tier.
 FEATURE_INVESTMENTS = "investments"
 
-ALL_FEATURES = frozenset(
-    {
-        FEATURE_SEARCH_WEB,
-        FEATURE_CHARTS,
-        FEATURE_ADVANCED_ANALYTICS,
-        FEATURE_BULK_OPERATIONS,
-        FEATURE_PRIORITY_SUPPORT,
-        FEATURE_INVESTMENTS,
-    }
-)
+ALL_FEATURES = frozenset({FEATURE_INVESTMENTS})
 
 
 @dataclass(frozen=True)
@@ -53,9 +40,10 @@ class TierConfig:
     tier: Tier
     label: str
     # None => unlimited
-    monthly_message_limit: int | None
     monthly_token_limit: int | None
     features: frozenset[str] = field(default_factory=frozenset)
+    # Chat runs on CHAT_PREMIUM_MODEL instead of CHAT_MODEL.
+    premium_model: bool = False
     # Polar product id (set from env/dash). None for `free` and for any
     # paying tier whose product hasn't been wired up yet.
     polar_product_id: str | None = None
@@ -82,7 +70,6 @@ TIERS: dict[Tier, TierConfig] = {
     Tier.free: TierConfig(
         tier=Tier.free,
         label="Free",
-        monthly_message_limit=10,
         monthly_token_limit=20_000,
         features=frozenset(),
         polar_product_id=None,
@@ -92,9 +79,8 @@ TIERS: dict[Tier, TierConfig] = {
     Tier.tier1: TierConfig(
         tier=Tier.tier1,
         label="Basic",
-        monthly_message_limit=100,
-        monthly_token_limit=600_000,
-        features=frozenset({FEATURE_CHARTS, FEATURE_INVESTMENTS}),
+        monthly_token_limit=10_000_000,
+        features=frozenset({FEATURE_INVESTMENTS}),
         polar_product_id=None,  # set via configure_product_ids from env
         price_hint="$4.99/mo",
         monthly_price_usd=4.99,
@@ -102,10 +88,9 @@ TIERS: dict[Tier, TierConfig] = {
     Tier.tier2: TierConfig(
         tier=Tier.tier2,
         label="Premium",
-        monthly_message_limit=None,
-        # Fair-use ceiling: messages are unlimited, but model spend is not.
-        monthly_token_limit=5_000_000,
+        monthly_token_limit=100_000_000,
         features=frozenset(ALL_FEATURES),
+        premium_model=True,
         polar_product_id=None,
         price_hint="$14.99/mo",
         monthly_price_usd=14.99,
@@ -119,25 +104,11 @@ def configure_product_ids(mapping: dict[str, str | None]) -> None:
     `mapping` is {"tier1": "<product_id>", ...}. Unknown tiers are ignored.
     Rebuilds the internal product->tier index afterwards.
     """
-    import copy
-
     global TIERS, _PRODUCT_INDEX
     new: dict[Tier, TierConfig] = {}
     for t, cfg in TIERS.items():
         pid = mapping.get(t.value) or mapping.get(t.name)
-        if pid:
-            new[t] = TierConfig(
-                tier=cfg.tier,
-                label=cfg.label,
-                monthly_message_limit=cfg.monthly_message_limit,
-                monthly_token_limit=cfg.monthly_token_limit,
-                features=cfg.features,
-                polar_product_id=pid,
-                price_hint=cfg.price_hint,
-                monthly_price_usd=cfg.monthly_price_usd,
-            )
-        else:
-            new[t] = copy.copy(cfg)
+        new[t] = dataclasses.replace(cfg, polar_product_id=pid) if pid else cfg
     TIERS = new
     _PRODUCT_INDEX = _product_index()
 
@@ -155,6 +126,16 @@ def get_tier_config(tier: Tier) -> TierConfig:
 
 def has_feature(tier: Tier, feature: str) -> bool:
     return feature in TIERS[tier].features
+
+
+def chat_model_for_tier(tier: Tier) -> str:
+    """OpenRouter model id the chat agent uses for this tier."""
+    from app.core.config import settings
+
+    default = settings.CHAT_MODEL or settings.OPENROUTER_MODEL
+    if TIERS[tier].premium_model:
+        return settings.CHAT_PREMIUM_MODEL or default
+    return default
 
 
 def paying_tiers() -> list[TierConfig]:

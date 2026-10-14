@@ -1,8 +1,8 @@
 # Polar Subscriptions
 
-Operator guide for the [Polar.sh](https://polar.sh) billing integration that powers Toston Chat tiers, usage quotas, and feature gates.
+Operator guide for the [Polar.sh](https://polar.sh) billing integration that powers Toston Chat tiers, token quotas, per-tier chat models, and the investments feature gate.
 
-Polar is the **billing provider**. Lake owns **entitlements**, **usage counting**, and **tool/feature gating**. A successful checkout alone does not upgrade a user — Polar **webhooks** are the source of truth for paid state.
+Polar is the **billing provider**. Lake owns **entitlements**, **usage counting**, the **chat model per tier**, and **feature gating** (investments). A successful checkout alone does not upgrade a user — Polar **webhooks** are the source of truth for paid state.
 
 For chat API behavior (including HTTP **402** when over quota), see [CHAT_API.md](./CHAT_API.md).
 
@@ -21,7 +21,7 @@ For chat API behavior (including HTTP **402** when over quota), see [CHAT_API.md
 | Success redirect | `{POLAR_SUCCESS_URL_BASE or SERVER_HOST}/account?checkout=success` |
 | Servers | `sandbox` → Polar sandbox API; `production` → live API |
 
-When subscriptions are **disabled**, every user gets `SUBSCRIPTIONS_DEV_DEFAULT_TIER` (default `tier2` for local full-chat). When `POLAR_SERVER=production`, that default is forced to **`free`** so a misconfigured production deploy never grants a paid tier without Polar.
+When subscriptions are **disabled**, every user gets `SUBSCRIPTIONS_DEV_DEFAULT_TIER` (default `tier2`: Premium model and investments locally). When `POLAR_SERVER=production`, that default is forced to **`free`** so a misconfigured production deploy never grants a paid tier without Polar.
 
 ### Code map
 
@@ -36,7 +36,8 @@ When subscriptions are **disabled**, every user gets `SUBSCRIPTIONS_DEV_DEFAULT_
 | CRUD / idempotency | `backend/app/app/crud/crud_subscription.py` |
 | Models | `backend/app/app/models/subscription.py`, `polar_webhook_event.py` |
 | Entitlement cache | `backend/app/app/utilities/redis.py` (`chat:ent:{user_id}`) |
-| Feature gating in agent | `backend/app/app/ai/chat_tools.py` |
+| Chat model per tier | `backend/app/app/core/tiers.py` (`chat_model_for_tier`) |
+| Investments gate | `backend/app/app/api/deps.py` (`require_investments_access`) |
 
 ---
 
@@ -59,6 +60,8 @@ Copy the Polar block from `.env.develop` into `.env` and fill values for the env
 | `POLAR_WEBHOOK_MAX_BYTES` | no | `262144` | Maximum raw webhook body size |
 | `CLERK_SECRET_KEY` | for UUID-only Clerk users | — | Clerk Backend API secret used to retrieve the user's primary email/name before creating a Polar customer |
 | `CHAT_TURN_RESERVATION_TTL_SECONDS` | no | `900` | Maximum age of an in-progress quota reservation |
+| `CHAT_MODEL` | no | `openai/gpt-5.6-luna` | OpenRouter `provider/model` id for Free and Basic chat |
+| `CHAT_PREMIUM_MODEL` | no | — (falls back to `CHAT_MODEL`) | OpenRouter `provider/model` id for Premium chat |
 | `SUBSCRIPTION_RENEWAL_GRACE_HOURS` | no | `72` | Paid access lapses this long after `current_period_end` unless a renewal webhook moved the period |
 | `SUBSCRIPTIONS_DEV_DEFAULT_TIER` | no | `tier2` | Tier when subscriptions are disabled. Forced to `free` if `POLAR_SERVER=production` or `ENVIRONMENT=production` |
 | `ENVIRONMENT` | no | `production` | Anything other than `production`/`prod` (e.g. `development`, `staging`, `test`) is non-production. See [Production fail-closed](#production-fail-closed) |
@@ -154,7 +157,7 @@ $ alembic upgrade head
 
 ```bash
 SUBSCRIPTIONS_ENABLED=false
-SUBSCRIPTIONS_DEV_DEFAULT_TIER=tier2   # full features locally
+SUBSCRIPTIONS_DEV_DEFAULT_TIER=tier2   # Premium model + investments locally
 POLAR_SERVER=sandbox
 ```
 
@@ -196,17 +199,20 @@ If Polar is off in production, everyone is **free** (`SUBSCRIPTIONS_DEV_DEFAULT_
 
 Defined in `backend/app/app/core/tiers.py` (numbers are tunable starting defaults):
 
-| Tier | Message limit / mo | Token limit / mo | Features (examples) |
-|------|--------------------|------------------|---------------------|
-| `free` | 10 | 20_000 | none |
-| `tier1` (Basic, $4.99/mo) | 100 | 600_000 | `charts`, `investments` |
-| `tier2` (Premium, $14.99/mo) | unlimited | 5_000_000 (fair use) | all (`search_web`, `charts`, `advanced_analytics`, `bulk_operations`, `priority_support`, `investments`, …) |
+| Tier | Token limit / mo | Chat model | Features |
+|------|------------------|------------|----------|
+| `free` | 20_000 | `CHAT_MODEL` | none |
+| `tier1` (Basic, $4.99/mo) | 10_000_000 | `CHAT_MODEL` | `investments` |
+| `tier2` (Premium, $14.99/mo) | 100_000_000 | `CHAT_PREMIUM_MODEL` (falls back to `CHAT_MODEL` when unset) | `investments` |
+
+- Every tier gets the same chat tools (summaries, charts, bulk operations, and web search when `TAVILY_API_KEY` is set). Tiers differ only in token allowance and model.
+- Messages are counted but not limited.
 
 - `polar_product_id` is injected from env via `configure_product_ids`.
 - Checkout uses product id → Polar.
 - Webhooks reverse-map product id → tier via `tier_for_product`. An unknown product never grants or changes a tier. Snapshots that end or suspend access (cancellation, revocation, `past_due`, any `ends_at`/`ended_at`) are still applied to the row when it tracks the same `polar_subscription_id`, keeping the row's tier. Otherwise retiring or rotating a product id would leave its subscribers paid forever.
 
-Feature keys gate tools and system-prompt sections in `ai/chat_tools.py` (`has_feature`). The `investments` key gates `/api/v1/investments/**` (`deps.require_investments_access`): never-subscribed users get **402**, and users whose subscription lapsed keep read-only access (writes get **402**).
+Feature keys no longer gate chat: every tier gets the same tools and system prompt. The only feature key is `investments`, which gates `/api/v1/investments/**` (`deps.require_investments_access`): never-subscribed users get **402**, and users whose subscription lapsed keep read-only access (writes get **402**, except `POST /assets/refresh-prices`, allowed once every 24 hours).
 
 ### Customer identity
 
@@ -377,12 +383,9 @@ Usage window:
 - Paying active sub with `current_period_start` → that timestamp to `current_period_end`.
 - Free / inactive → first day of current UTC calendar month.
 
-Usage sources: aggregate `chat_obs_turns` for the user since period start. Messages exclude server errors and expired `in_progress` reservations; a turn whose client disconnected mid-stream is stored as `interrupted` and counts. Tokens count for every turn, including errors, because the model usage was paid for. A failed turn is billed from Pydantic AI's run usage, which includes a model call abandoned mid-stream. A failed confirmation never refunds the turn that proposed it. Before model execution, the backend holds a per-user PostgreSQL advisory lock, checks usage, and inserts an `in_progress` reservation atomically. Billing reservations remain enabled even when optional observability is disabled.
+Usage sources: aggregate `chat_obs_turns` for the user since period start. Message counts (reporting only) exclude server errors and expired `in_progress` reservations; a turn whose client disconnected mid-stream is stored as `interrupted` and counts. Tokens count for every turn, including errors, because the model usage was paid for. A failed turn is billed from Pydantic AI's run usage, which includes a model call abandoned mid-stream. A failed confirmation never refunds the turn that proposed it. Before model execution, the backend holds a per-user PostgreSQL advisory lock, checks usage, and inserts an `in_progress` reservation atomically. Billing reservations remain enabled even when optional observability is disabled.
 
-Limits from the tier config:
-
-- `messages_used >= monthly_message_limit` → deny (`message_limit_reached`)
-- `tokens_used >= monthly_token_limit` → deny (`token_limit_reached`)
+Only tokens are limited: `tokens_used >= monthly_token_limit` → deny (`token_limit_reached`). Usage is reported to the user as `percent_used` of the token limit.
 
 Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when billing usage cannot be recorded safely. Independently of tiers, `POST /chat` is rate limited per user (`CHAT_RATE_LIMIT_PER_MINUTE`, `CHAT_RATE_LIMIT_PER_DAY`, **429** with `Retry-After`).
 
@@ -408,7 +411,7 @@ Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repai
 
 | UI | Behavior |
 |----|----------|
-| Usage indicator | Shows tier + remaining; upgrade opens account |
+| Usage indicator | Shows tier + % of the token limit used; upgrade opens account |
 | Upgrade banner | When over quota |
 | Account / pricing | New subscriptions use checkout; active subscriptions use the change-plan API |
 | Manage | Portal session whenever a Polar customer is bound, including `past_due` recovery |
@@ -426,7 +429,7 @@ Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repai
 7. **Production fail-closed.** With Polar off and `POLAR_SERVER=production` or `ENVIRONMENT=production` (the default), everyone is free. Production refuses to start against the sandbox server.
 8. **Secrets.** Never commit real OATs or webhook secrets. Use placeholders in docs and sample env.
 9. **Observability.** Webhook and Polar ops attach to wide events (Axiom). Monitor `handler_error`, `unresolved_customer`, `unknown_product`, `stale_event`, webhook latency, quota reservation failures, and stale reservations.
-10. **Tier numbers are product decisions.** Change limits/features in `tiers.py`; change prices in Polar (and optionally `price_hint`).
+10. **Tier numbers are product decisions.** Change token limits, `premium_model` and features in `tiers.py`; pick models with `CHAT_MODEL` / `CHAT_PREMIUM_MODEL`; change prices in Polar (and optionally `price_hint`).
 
 ---
 
@@ -434,7 +437,7 @@ Review `unresolved_user_ids` and `unknown_product_subscription_ids` before repai
 
 ### Local dev without Polar
 
-**Goal:** Full chat features without billing.
+**Goal:** Premium tier (model and investments) without billing.
 
 ```bash
 SUBSCRIPTIONS_ENABLED=false
@@ -450,7 +453,7 @@ Checkout/portal return **503**. No webhook needed.
 3. Open Account → Choose a tier → complete Polar sandbox checkout.
 4. Confirm Polar dashboard shows a successful delivery to `/api/v1/polar/webhook`.
 5. Call `GET /api/v1/subscriptions/me` (or refresh account UI) — tier/status should be paid/`active` (or `trialing`).
-6. Send a chat message — tools for that tier should appear.
+6. Send a chat message — the turn's `model` in `chat_obs_turns` should match the tier.
 
 ### Checkout succeeds but tier stays free
 
@@ -516,7 +519,7 @@ Chat `POST /messages` (or stream) → **402** with:
 
 ```json
 {
-  "reason": "message_limit_reached",
+  "reason": "token_limit_reached",
   "usage": { "...": "..." },
   "tier": "free",
   "upgrade_url": "/account"
@@ -564,15 +567,15 @@ List tier configs for the pricing UI.
 |-------|--------|
 | `tier` | `free` \| `tier1` \| `tier2` |
 | `label` | Display name |
-| `monthly_message_limit` | `null` = unlimited |
 | `monthly_token_limit` | `null` = unlimited |
-| `features` | Sorted feature keys |
+| `features` | Sorted non-chat feature keys (`investments`) |
+| `premium_model` | Chat runs on `CHAT_PREMIUM_MODEL` |
 | `price_hint` | Cosmetic string |
 | `available` | Purchasable: has product id, **or** subscriptions disabled (all shown available in dev) |
 
 ### `GET /subscriptions/me`
 
-Current subscription, usage, and active tier config.
+Only what the chat client renders: the subscription, the share of this period's token limit used, and how the current tier is shown. Raw token and message counts aren't exposed; the 402 quota error returns the same `usage` shape.
 
 **Response:**
 
@@ -590,15 +593,18 @@ Current subscription, usage, and active tier config.
   "usage": {
     "period_start": "...",
     "period_end": "...",
-    "messages_used": 12,
-    "messages_limit": 100,
-    "tokens_used": 4000,
-    "tokens_limit": 200000,
-    "remaining": 88
+    "percent_used": 25.0
   },
-  "tier_config": { "...": "TierOut" }
+  "tier_config": {
+    "tier": "tier1",
+    "label": "Basic",
+    "premium_model": false,
+    "available": true
+  }
 }
 ```
+
+`percent_used` is rounded down to one decimal, so it reads `100.0` only once chat is blocked. It is `null` for an unlimited tier. `pending_tier` / `pending_effective_at` describe a plan change scheduled for the next period.
 
 When subscriptions are disabled, synthesizes an active sub from the dev default tier and `can_manage=false`.
 

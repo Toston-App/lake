@@ -17,14 +17,6 @@ from app.ai.tools import TOOL_ARG_MODELS
 from app.ai.web_search import search_web
 from app.api.deps import DateFilterType
 from app.core.config import settings
-from app.core.tiers import (
-    FEATURE_ADVANCED_ANALYTICS,
-    FEATURE_BULK_OPERATIONS,
-    FEATURE_CHARTS,
-    FEATURE_SEARCH_WEB,
-    Tier,
-    has_feature,
-)
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 from app.services import accounts as account_service
 from app.services import balance_adjustments as balance_adjustment_service
@@ -1111,12 +1103,11 @@ async def _execute_no_arg_tool(
 
 def build_system_prompt(
     bootstrap: dict,
-    tier: Tier = Tier.tier2,
     *,
     local_date: date | None = None,
     time_zone: str = "UTC",
 ) -> str:
-    if settings.TAVILY_API_KEY and has_feature(tier, FEATURE_SEARCH_WEB):
+    if settings.TAVILY_API_KEY:
         web_search_rule = (
             "- Use `search_web` for finance facts that may have changed, such as "
             "markets, rates, news, and regulations. Answer stable concepts directly."
@@ -1126,33 +1117,15 @@ def build_system_prompt(
             "- Web search is unavailable; answer general finance questions from "
             "knowledge and note when data may be outdated."
         )
-
-    if has_feature(tier, FEATURE_CHARTS):
-        charts_rule = (
-            "- Use `get_period_charts` for requested trends or distributions; "
-            "set `presentation` to `user_visible` when the chart itself helps."
-        )
-    else:
-        charts_rule = (
-            "- Chart tools are unavailable on this plan. Use `render_data` only "
-            "for a useful table or stat cards when available data supports it."
-        )
-
-    if has_feature(tier, FEATURE_ADVANCED_ANALYTICS):
-        analytics_rule = (
-            "- Use `get_period_summary` and `get_period_charts` for the user's "
-            "personal finance summaries and trends over a date period."
-        )
-    else:
-        analytics_rule = (
-            "- Period summaries and charts tools are not available on this plan; "
-            "answer summary questions from listed transactions where possible."
-        )
-
-    if has_feature(tier, FEATURE_BULK_OPERATIONS):
-        bulk_rule = "- Use bulk tools (`bulk_create_transactions`, `bulk_delete_transactions`) for multi-item operations."
-    else:
-        bulk_rule = "- Bulk operations tools are not available on this plan."
+    charts_rule = (
+        "- Use `get_period_charts` for requested trends or distributions; "
+        "set `presentation` to `user_visible` when the chart itself helps."
+    )
+    analytics_rule = (
+        "- Use `get_period_summary` and `get_period_charts` for the user's "
+        "personal finance summaries and trends over a date period."
+    )
+    bulk_rule = "- Use bulk tools (`bulk_create_transactions`, `bulk_delete_transactions`) for multi-item operations."
 
     today = local_date or date.today()
     return f"""You are Toston, a concise and friendly finance assistant.

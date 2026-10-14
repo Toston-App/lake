@@ -36,7 +36,7 @@ def obs_session(
 
 
 def test_build_model_requests_openrouter_usage_accounting() -> None:
-    model = agent.build_model()
+    model = agent.build_model("openai/test-model")
     assert model.settings is not None
     assert model.settings["openrouter_usage"]["include"] is True
 

@@ -89,13 +89,7 @@ from app.ai.tools import (
 from app.ai.web_search import search_web as _search_web
 from app.api.deps import DateFilterType
 from app.core.config import settings
-from app.core.tiers import (
-    FEATURE_ADVANCED_ANALYTICS,
-    FEATURE_BULK_OPERATIONS,
-    FEATURE_SEARCH_WEB,
-    Tier,
-    has_feature,
-)
+from app.core.tiers import Tier, chat_model_for_tier
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 from app.services import accounts as account_service
 from app.services import balance_adjustments as balance_adjustment_service
@@ -139,9 +133,9 @@ class ChatDeps:
     pending_question_id: str | None = None
 
 
-def build_model() -> OpenRouterModel:
+def build_model(model_name: str) -> OpenRouterModel:
     return OpenRouterModel(
-        settings.CHAT_MODEL or settings.OPENROUTER_MODEL,
+        model_name,
         provider=OpenRouterProvider(
             api_key=settings.OPENROUTER_API_KEY,
             app_url=settings.OPENROUTER_SITE_URL,
@@ -191,7 +185,6 @@ async def chat_instructions(ctx: RunContext[ChatDeps]) -> str:
     bootstrap = await load_bootstrap_context(ctx.deps.db, ctx.deps.user)
     prompt = build_system_prompt(
         bootstrap,
-        ctx.deps.tier,
         local_date=ctx.deps.local_date,
         time_zone=ctx.deps.time_zone,
     )
@@ -201,7 +194,7 @@ async def chat_instructions(ctx: RunContext[ChatDeps]) -> str:
 
 
 agent = Agent(
-    build_model(),
+    build_model(chat_model_for_tier(Tier.free)),
     deps_type=ChatDeps,
     output_type=str,
     instructions=chat_instructions,
@@ -778,7 +771,7 @@ async def render_data(
 
 
 # --------------------------------------------------------------------------- #
-# Tier-gated toolset
+# Toolset
 # --------------------------------------------------------------------------- #
 # Write/destructive tools don't execute during the run; they emit a
 # ``data-pending-confirmation`` DataChunk (see ``_defer_for_confirmation``) and
@@ -814,18 +807,16 @@ _CORE_TOOLS = (
 )
 
 
-def build_toolset(tier: Tier) -> FunctionToolset[ChatDeps]:
-    """Build the tier-gated toolset for a run."""
+def build_toolset() -> FunctionToolset[ChatDeps]:
+    """Build the toolset for a run. Every tier gets the same tools."""
     ts: FunctionToolset[ChatDeps] = FunctionToolset()
     for fn in _CORE_TOOLS:
         ts.add_function(fn, takes_ctx=True)
-    if has_feature(tier, FEATURE_ADVANCED_ANALYTICS):
-        ts.add_function(get_period_summary, takes_ctx=True)
-        ts.add_function(get_period_charts, takes_ctx=True)
-    if has_feature(tier, FEATURE_BULK_OPERATIONS):
-        ts.add_function(bulk_create_transactions, takes_ctx=True)
-        ts.add_function(bulk_delete_transactions, takes_ctx=True)
-    if settings.TAVILY_API_KEY and has_feature(tier, FEATURE_SEARCH_WEB):
+    ts.add_function(get_period_summary, takes_ctx=True)
+    ts.add_function(get_period_charts, takes_ctx=True)
+    ts.add_function(bulk_create_transactions, takes_ctx=True)
+    ts.add_function(bulk_delete_transactions, takes_ctx=True)
+    if settings.TAVILY_API_KEY:
         ts.add_function(search_web, takes_ctx=True)
     return ts
 
@@ -911,7 +902,7 @@ async def _obs_after_model(
     await record_llm_call(
         turn_id=ctx.deps.turn_id,
         round_index=ctx.run_step,
-        model=response.model_name or (settings.CHAT_MODEL or settings.OPENROUTER_MODEL),
+        model=response.model_name or chat_model_for_tier(ctx.deps.tier),
         prompt_tokens=usage.input_tokens,
         completion_tokens=usage.output_tokens,
         total_tokens=usage.input_tokens + usage.output_tokens,

@@ -79,11 +79,7 @@ export function useSubscription(authenticated: boolean): SubscriptionState {
   }, [])
 
   const usage = data?.usage
-  const isOverQuota =
-    usage != null &&
-    ((usage.messages_limit != null &&
-      usage.messages_used >= usage.messages_limit) ||
-      (usage.tokens_limit != null && usage.tokens_used >= usage.tokens_limit))
+  const isOverQuota = usage?.percent_used != null && usage.percent_used >= 100
 
   return {
     loading,

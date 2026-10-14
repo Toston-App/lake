@@ -119,7 +119,6 @@ class EconomicsUserRow(BaseModel):
     is_paid: bool
     turns: int
     tokens: int
-    messages_limit: int | None = None
     tokens_limit: int | None = None
     ai_cost_usd: float
     monthly_price_usd: float

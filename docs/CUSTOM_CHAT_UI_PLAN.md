@@ -591,7 +591,7 @@ Do not assume one `ReadableStream` chunk equals one SSE event.
 |---|---|---|
 | `400` from `/confirm` | Action belongs to a different conversation | Keep card visible and show the server detail. |
 | `401` | Missing/expired authentication | Clear local auth and return to login. |
-| `402` | Message quota exceeded | Parse `detail`, show upgrade UI, do not start an assistant stream. |
+| `402` | Token limit reached (`reason: "token_limit_reached"`) | Parse `detail`, show upgrade UI, do not start an assistant stream. |
 | `404` conversation | Missing/expired conversation | Remove stale sidebar item or return to a new chat. |
 | `404` pending action | Action missing or expired | Dismiss the approval card and explain that it must be requested again. |
 | `422` | Invalid request shape | Show a client/version error and log the validation detail. |
@@ -607,7 +607,7 @@ Quota response shape:
 type QuotaError = {
   detail: {
     reason: string
-    usage: Record<string, unknown>
+    usage: { period_start: string; period_end: string | null; percent_used: number | null }
     tier: string
     upgrade_url: string
   }

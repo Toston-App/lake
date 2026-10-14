@@ -5,19 +5,13 @@ type UsageIndicatorProps = {
   onUpgrade: () => void
 }
 
-function formatLimit(limit: number | null): string {
-  return limit == null ? '∞' : String(limit)
-}
-
 export function UsageIndicator({ data, onUpgrade }: UsageIndicatorProps) {
   if (!data) return null
 
   const { usage, subscription } = data
   const isFree = subscription.tier === 'free'
-  const limit = usage.messages_limit
-  const used = usage.messages_used
-  const over = limit != null && used >= limit
-  const pct = limit != null ? Math.min(100, Math.round((used / limit) * 100)) : 0
+  const pct = usage.percent_used
+  const over = pct != null && pct >= 100
 
   return (
     <div className={`usage-indicator ${over ? 'is-over' : ''}`}>
@@ -25,9 +19,9 @@ export function UsageIndicator({ data, onUpgrade }: UsageIndicatorProps) {
         {subscription.tier}
       </span>
       <span className="usage-text">
-        ⚡ {used}/{formatLimit(limit)} messages
+        ⚡ {pct == null ? 'Unlimited' : `${Math.floor(pct)}% used`}
       </span>
-      {limit != null && (
+      {pct != null && (
         <span className="usage-bar">
           <span className="usage-bar-fill" style={{ width: `${pct}%` }} />
         </span>

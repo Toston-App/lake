@@ -2,13 +2,14 @@ import { useState } from 'react'
 import type {
   ChangePlanOut,
   SubscriptionMeOut,
+  TierOut,
   TierSlug,
 } from '../types/subscription'
 import { PricingPlans } from './PricingPlans'
 
 type AccountViewProps = {
   data: SubscriptionMeOut | null
-  tiers: SubscriptionMeOut['tier_config'][]
+  tiers: TierOut[]
   loading: boolean
   onChooseTier: (tier: TierSlug) => Promise<ChangePlanOut | void>
   onManage: () => Promise<void>
@@ -104,12 +105,13 @@ export function AccountView({
               {usage && (
                 <div className="account-usage">
                   <span>
-                    Messages: <strong>{usage.messages_used}</strong> /{' '}
-                    {usage.messages_limit ?? '∞'}
-                  </span>
-                  <span>
-                    Tokens: <strong>{usage.tokens_used.toLocaleString()}</strong> /{' '}
-                    {usage.tokens_limit?.toLocaleString() ?? '∞'}
+                    Usage:{' '}
+                    <strong>
+                      {usage.percent_used == null
+                        ? 'Unlimited'
+                        : `${Math.floor(usage.percent_used)}%`}
+                    </strong>{' '}
+                    of this period&apos;s plan
                   </span>
                 </div>
               )}

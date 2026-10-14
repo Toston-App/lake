@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent import (
     ChatDeps,
+    build_model,
     build_obs_hooks,
     build_toolset,
     build_turn_budget,
@@ -43,7 +44,7 @@ from app.ai.chat_tools import (
 )
 from app.api import deps
 from app.core.config import settings
-from app.core.tiers import Tier
+from app.core.tiers import Tier, chat_model_for_tier
 from app.models.user import User
 from app.schemas.chat import (
     ChatAction,
@@ -54,9 +55,11 @@ from app.schemas.chat import (
     ConversationSummary,
     chat_action_detail,
 )
+from app.schemas.subscription import UsageSummaryOut
 from app.services.entitlements import (
     TURN_STATUS_INTERRUPTED,
     QuotaReservationError,
+    QuotaResult,
     check_quota,
     reserve_chat_turn,
 )
@@ -185,13 +188,18 @@ async def _enforce_chat_rate_limit(user_id: int) -> None:
             )
 
 
+def _usage_payload(quota: QuotaResult) -> dict[str, Any]:
+    """Client-facing usage: the share of the token limit used, not raw counts."""
+    return UsageSummaryOut.model_validate(quota.usage).model_dump(mode="json")
+
+
 async def _enforce_quota(
     db: AsyncSession, user: User
 ) -> tuple[bool, Tier, dict[str, Any]]:
     """Check the user's subscription quota before a chat turn.
 
     Returns (allowed, tier, usage_dict). Raises HTTPException(402) when over
-    the message/token cap so the client can prompt an upgrade.
+    the token cap so the client can prompt an upgrade.
     """
     quota = await check_quota(db, user)
     if not quota.allowed:
@@ -199,12 +207,12 @@ async def _enforce_quota(
             status_code=402,
             detail={
                 "reason": quota.reason or "quota_exceeded",
-                "usage": quota.usage.model_dump(mode="json"),
+                "usage": _usage_payload(quota),
                 "tier": quota.tier.value,
                 "upgrade_url": "/account",
             },
         )
-    return True, quota.tier, quota.usage.model_dump(mode="json")
+    return True, quota.tier, _usage_payload(quota)
 
 
 def _conversation_title(message: str) -> str:
@@ -302,7 +310,6 @@ async def chat_vercel(
             current_user,
             conversation_id=conversation_id,
             user_message=user_msg,
-            model=settings.CHAT_MODEL or settings.OPENROUTER_MODEL,
             trace_id=trace_id,
             request_id=request_id,
         )
@@ -316,7 +323,7 @@ async def chat_vercel(
             status_code=402,
             detail={
                 "reason": quota.reason or "quota_exceeded",
-                "usage": quota.usage.model_dump(mode="json"),
+                "usage": _usage_payload(quota),
                 "tier": quota.tier.value,
                 "upgrade_url": "/account",
             },
@@ -454,7 +461,8 @@ async def chat_vercel(
         deferred_tool_results=deferred_results,
         usage_limits=build_usage_limits(),
         usage=run_usage,
-        toolsets=[build_toolset(tier)],
+        model=build_model(chat_model_for_tier(tier)),
+        toolsets=[build_toolset()],
         capabilities=[build_obs_hooks(), build_turn_budget()],
         on_complete=on_complete,
     )

@@ -409,9 +409,7 @@ function UserRows({
             <div className="expand-grid">
               <span>Paid entitlement: {user.is_paid ? 'yes' : 'no'}</span>
               <span>Catalog price: {fmtUsd(user.monthly_price_usd)}/mo</span>
-              <span>
-                Message quota: {fmtInt(user.turns)} / {fmtLimit(user.messages_limit)}
-              </span>
+              <span>Messages: {fmtInt(user.turns)}</span>
               <span>
                 Token quota: {fmtInt(user.tokens)} / {fmtLimit(user.tokens_limit)}
               </span>

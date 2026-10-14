@@ -18,10 +18,12 @@ from app.schemas.subscription import (
     ChangePlanOut,
     CheckoutOut,
     CheckoutRequest,
+    CurrentTierOut,
     PortalOut,
     SubscriptionMeOut,
     SubscriptionOut,
     TierOut,
+    UsageSummaryOut,
 )
 from app.services.entitlements import check_quota
 from app.services.polar import change_plan, create_checkout, create_portal_session
@@ -34,9 +36,9 @@ def _tier_to_out(cfg: TierConfig) -> TierOut:
     return TierOut(
         tier=cfg.tier.value,
         label=cfg.label,
-        monthly_message_limit=cfg.monthly_message_limit,
         monthly_token_limit=cfg.monthly_token_limit,
         features=sorted(cfg.features),
+        premium_model=cfg.premium_model,
         price_hint=cfg.price_hint,
         available=bool(cfg.polar_product_id) or not settings.SUBSCRIPTIONS_ENABLED,
     )
@@ -61,8 +63,8 @@ async def get_my_subscription(
     db: AsyncSession = Depends(deps.async_get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """Return the caller's current tier, usage for the billing period, and
-    the tier's feature/limit configuration."""
+    """Return the caller's subscription, the share of this period's token
+    limit used, and how their tier is shown."""
     quota = await check_quota(db, current_user)
 
     # Build the subscription summary. When subscriptions are disabled (dev
@@ -89,9 +91,6 @@ async def get_my_subscription(
             if row
             else quota.period_start,
             current_period_end=row.current_period_end if row else None,
-            cancel_at_period_end=bool(row and row.cancel_at_period_end),
-            ends_at=row.ends_at if row else None,
-            ended_at=row.ended_at if row else None,
             pending_tier=row.pending_tier if row else None,
             pending_effective_at=row.pending_effective_at if row else None,
             can_manage=can_manage,
@@ -107,10 +106,11 @@ async def get_my_subscription(
         operation={"type": "subscription_me"},
     )
 
+    tier_out = _tier_to_out(get_tier_config(quota.tier))
     return SubscriptionMeOut(
         subscription=sub,
-        usage=quota.usage,
-        tier_config=_tier_to_out(get_tier_config(quota.tier)),
+        usage=UsageSummaryOut.model_validate(quota.usage),
+        tier_config=CurrentTierOut.model_validate(tier_out, from_attributes=True),
     )
 
 

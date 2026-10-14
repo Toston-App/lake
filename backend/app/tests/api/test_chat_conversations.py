@@ -528,4 +528,4 @@ async def test_stream_runs_with_turn_budget_and_fresh_run_usage(
 def test_chat_model_caps_output_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent.settings, "CHAT_MAX_OUTPUT_TOKENS", 1234)
 
-    assert agent.build_model().settings["max_tokens"] == 1234
+    assert agent.build_model("openai/test-model").settings["max_tokens"] == 1234
