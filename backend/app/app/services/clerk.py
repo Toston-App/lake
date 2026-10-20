@@ -65,5 +65,4 @@ async def get_clerk_profile(user_id: str) -> ClerkProfile:
     except Exception as exc:
         raise ClerkProfileError("Failed to retrieve Clerk user") from exc
 
-    print(f"Clerk user: {clerk_user}")
     return _profile_from_user(clerk_user)

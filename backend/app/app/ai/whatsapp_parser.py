@@ -153,13 +153,11 @@ CRITICAL REQUIREMENTS:
             if self.client:
                 ai_result = await self.analyze_with_ai(message, categories, places, accounts)
 
-                print("🚀 ~ AI Result:", ai_result)
                 if not ai_result:
                     logger.warning(f"AI analysis produced empty result for message: {message}")
                     return {}
 
                 transaction = self.convert_ai_result_to_transaction(ai_result, default_account)
-                print("🚀 ~ Parsed Transaction:", transaction)
 
                 # Validate the transaction has minimal required data
                 if not self.validate_transaction(transaction):
