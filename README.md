@@ -23,7 +23,7 @@
 - 📊 Advanced filtering
 - 🏷️ Customizable categories and subcategories
 - 📥 Import capabilities
-- 📤 Export capabilities // Soon
+- 📤 Export capabilities
 - 🤖 AI-powered insights // soon
 
 ## 🚀 Getting Started
@@ -62,7 +62,6 @@ Now you can open your browser and interact with these URLs:
   - Default credentials: `admin:root`
 - PGAdmin, PostgreSQL web administration: http://localhost:5050
 - Observability dashboard (usage / P&L, Tailscale-only in production): http://localhost:5174
-- WAHA WhatsApp integration (In case you're using it): http://localhost:3000
 
 ### DB Migrations
 

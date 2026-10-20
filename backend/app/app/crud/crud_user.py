@@ -1,4 +1,4 @@
-from typing import Any, Optional, Union
+from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 
@@ -10,9 +10,9 @@ from app import crud, schemas
 from app.categories_and_sub import categories_and_sub
 from app.core.security import get_password_hash, verify_password
 from app.crud.base import CRUDBase
+from app.models.account import Account
 from app.models.user import User
 from app.schemas.user import UserCreate, UserCreateUuid, UserUpdate
-from app.models.account import Account
 
 
 async def add_categories_to_db(db, owner_id):
@@ -44,15 +44,24 @@ async def add_categories_to_db(db, owner_id):
 
 
 class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
-    async def get_by_email(self, db: AsyncSession, *, email: str) -> Optional[User]:
+    async def get_for_update(self, db: AsyncSession, *, user_id: int) -> User | None:
+        result = await db.execute(
+            select(User)
+            .filter(User.id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalars().first()
+
+    async def get_by_email(self, db: AsyncSession, *, email: str) -> User | None:
         result = await db.execute(select(User).filter(User.email == email))
         return result.scalars().first()
 
-    async def get_by_uuid(self, db: AsyncSession, *, uuid: str) -> Optional[User]:
+    async def get_by_uuid(self, db: AsyncSession, *, uuid: str) -> User | None:
         result = await db.execute(select(User).filter(User.uuid == uuid))
         return result.scalars().first()
 
-    async def get_by_phone(self, db: AsyncSession, *, phone: str) -> Optional[User]:
+    async def get_by_phone(self, db: AsyncSession, *, phone: str) -> User | None:
         result = await db.execute(select(User).filter(User.phone == phone))
         return result.scalars().first()
 
@@ -95,7 +104,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         db: AsyncSession,
         *,
         db_obj: User,
-        obj_in: Union[UserUpdate, dict[str, Any]],
+        obj_in: UserUpdate | dict[str, Any],
     ) -> User:
         if isinstance(obj_in, dict):
             update_data = obj_in
@@ -112,7 +121,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
 
     async def authenticate(
         self, db: AsyncSession, *, email: str, password: str
-    ) -> Optional[User]:
+    ) -> User | None:
         user = await self.get_by_email(db, email=email)
         if not user:
             return None
@@ -164,7 +173,7 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
 
     async def get_default_account(
         self, db: AsyncSession, *, user_id: int
-    ) -> Optional[Account]:
+    ) -> Account | None:
         """Get the default account for WhatsApp transactions for a user"""
         user = await self.get(db, id=user_id)
         if not user or not user.default_account_id:

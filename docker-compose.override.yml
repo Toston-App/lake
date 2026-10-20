@@ -19,10 +19,22 @@ services:
       - JUPYTER=jupyter lab --ip=0.0.0.0 --allow-root --NotebookApp.custom_display_url=http://127.0.0.1:8888
       - SERVER_HOST=http://${DOMAIN?Variable not set}
     command:
-      - fastapi
+      - /opt/venv/bin/fastapi
       - run
       - --reload
       - "app/main.py"
+
+  export-worker:
+    volumes:
+      - ./backend/app:/app
+    environment:
+      - WATCHFILES_FORCE_POLLING=true
+    command:
+      - /opt/venv/bin/watchfiles
+      - --filter
+      - python
+      - python -m app.worker.export_worker
+      - /app
     develop:
       watch:
         - path: ./backend

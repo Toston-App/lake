@@ -6,10 +6,10 @@ WORKDIR /app/
 
 # Install uv
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
-COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/
 
-# Keep the virtual environment outside /app so development bind mounts do not
-# hide it.
+# Keep the virtual environment outside /app because development Compose mounts
+# the source tree over /app.
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#using-the-environment
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"

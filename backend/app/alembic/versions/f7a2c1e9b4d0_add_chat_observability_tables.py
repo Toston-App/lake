@@ -143,7 +143,8 @@ def upgrade():
 
     # Migrate data from the deprecated chatturnlog table (created by the
     # recovered orphan revision c4f8a2b91e03) into the new normalized
-    # chat_obs_* tables, then drop it. Guarded so fresh databases skip it.
+    # chat_obs_* tables, keeping it as an archive. Guarded so fresh databases
+    # skip it.
     op.execute(
         """
         DO $$
@@ -233,7 +234,9 @@ def upgrade():
                 WHERE c.tool_steps IS NOT NULL
                   AND jsonb_typeof(c.tool_steps) = 'array';
 
-                DROP TABLE chatturnlog;
+                -- chatturnlog is kept: the copy above is lossy, so the
+                -- original rows stay as an archive. Drop it manually once
+                -- the chat_obs_* data has been checked.
             END IF;
         END $$;
         """

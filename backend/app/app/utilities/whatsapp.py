@@ -1,9 +1,11 @@
-from typing import Any
 import math
+import time
+from typing import Any
 
 import httpx
 
 from app.core.config import settings
+from app.utilities.whatsapp_telemetry import record_outgoing
 
 
 def format_currency(
@@ -84,23 +86,37 @@ async def send_whatsapp_message(
         "type": message_type,
         message_type: message_content
     }
-    print("🚀 ~ payload:", payload)
 
-    async with httpx.AsyncClient() as client:
-        res = await client.post(
-            f"https://graph.facebook.com/{settings.WHATSAPP_API_VERSION}/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {settings.WHATSAPP_ACCESS_TOKEN}"
-            },
-            json=payload
-        )
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(
+                f"https://graph.facebook.com/{settings.WHATSAPP_API_VERSION}/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {settings.WHATSAPP_ACCESS_TOKEN}"
+                },
+                json=payload
+            )
+        try:
+            body = res.json()
+        except ValueError:
+            body = {"error": {"message": res.text}}
+        result = {
+            "status": "success" if res.status_code == 200 else "error",
+            "status_code": res.status_code,
+            "response": body,
+        }
+    except httpx.HTTPError as e:
+        result = {"status": "error", "response": {"error": {"type": type(e).__name__, "message": str(e)}}}
 
-        if res.status_code != 200:
-            print("rip", res.json())
-            return {"status": "error", "response": res.json()}
-
-        return {"status": "success", "response": res.json()}
+    record_outgoing(
+        message_type,
+        message_content,
+        result,
+        duration_ms=round((time.monotonic() - start) * 1000, 2),
+    )
+    return result
 
 
 async def send_text_message(

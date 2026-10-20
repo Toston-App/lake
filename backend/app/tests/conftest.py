@@ -40,11 +40,15 @@ os.environ.setdefault("OPENROUTER_API_KEY", "test-key")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "bot:test-token")
 os.environ.setdefault("TELEGRAM_OWNER_ID", "123456")
 os.environ.setdefault("WHATSAPP_ACCESS_TOKEN", "test-token")
-os.environ.setdefault("WAHA_SESSION", "default")
-os.environ.setdefault("WAHA_URL", "http://localhost:3000")
-os.environ.setdefault("WHATSAPP_API_KEY", "test-key")
+os.environ.setdefault("WHATSAPP_APP_SECRET", "test-app-secret")
 os.environ.setdefault("REDIS_URL", "https://fake-redis.upstash.io")
 os.environ.setdefault("REDIS_TOKEN", "fake-token")
+os.environ.setdefault("R2_ACCESS_KEY_ID", "test-r2-key")
+os.environ.setdefault("R2_SECRET_ACCESS_KEY", "test-r2-secret")
+os.environ.setdefault("R2_ENDPOINT", "https://example.r2.cloudflarestorage.com")
+os.environ.setdefault("R2_BUCKET_NAME", "toston-user-exports-test")
+os.environ.setdefault("R2_PATH", "toston-user-exports")
+os.environ.setdefault("R2_REGION", "auto")
 os.environ.setdefault("DOCS_USER", "admin")
 os.environ.setdefault("DOCS_PASSWORD", "password")
 # Authentication settings are required at application import time. These values
@@ -54,7 +58,6 @@ os.environ.setdefault("LOCAL_JWT_SECRET", "foo")
 os.environ.setdefault("CLERK_JWT_PUBLIC_KEY", "dGVzdC1jbGVyay1wdWJsaWMta2V5")
 os.environ.setdefault("CLERK_ISSUER", "https://test.clerk.accounts.dev")
 os.environ.setdefault("PROFILE_QUERY_MODE", "False")
-os.environ.setdefault("SENTRY_DSN", "")
 # Settings default to production (fail closed); tests are not production.
 os.environ.setdefault("ENVIRONMENT", "test")
 
@@ -72,6 +75,7 @@ from app.models import (  # noqa: E402, F401
     Account,
     BalanceAdjustment,
     Category,
+    DataExport,
     Expense,
     Import,
     Income,
@@ -275,6 +279,10 @@ def enable_investments(monkeypatch: pytest.MonkeyPatch) -> None:
             f"{module}.enforce_investment_rate_limit",
             AsyncMock(return_value=None),
         )
+    monkeypatch.setattr(
+        "app.api.api_v1.endpoints.investment_transactions.invalidate_user_cache",
+        AsyncMock(return_value=True),
+    )
 
 
 @pytest.fixture

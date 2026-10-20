@@ -628,6 +628,8 @@ async function showAddTransactionModal() {
     document.getElementById('asset-search-results').innerHTML = '';
     document.getElementById('tx-manual-entry').checked = false;
     document.getElementById('manual-asset-fields').style.display = 'none';
+    document.getElementById('tx-affects-cash-balance').checked = true;
+    updateCashBalanceOption();
     
     // Re-populate account dropdown
     populateAccountSelects();
@@ -828,6 +830,22 @@ function updateCurrencyFromMarket() {
     }
 }
 
+function updateCashBalanceOption() {
+    const transactionType = document.getElementById('tx-type').value;
+    const option = document.getElementById('tx-cash-balance-option');
+    const help = document.getElementById('tx-cash-balance-help');
+    const isTrade = transactionType === 'buy' || transactionType === 'sell';
+
+    option.style.display = isTrade ? 'block' : 'none';
+    if (!isTrade) {
+        return;
+    }
+
+    help.textContent = transactionType === 'buy'
+        ? 'Subtract quantity × price + fees from this account.'
+        : 'Add quantity × price − fees to this account.';
+}
+
 function openModal(modalId) {
     document.getElementById('modal-overlay').classList.add('active');
     document.getElementById(modalId).classList.add('active');
@@ -995,6 +1013,8 @@ async function submitTransaction(event) {
         quantity: parseFloat(document.getElementById('tx-quantity').value),
         price_per_unit: parseFloat(document.getElementById('tx-price').value),
         fees: parseFloat(document.getElementById('tx-fees').value) || 0,
+        affects_cash_balance: ['buy', 'sell'].includes(document.getElementById('tx-type').value)
+            && document.getElementById('tx-affects-cash-balance').checked,
         executed_at: new Date(document.getElementById('tx-date').value).toISOString(),
         account_id: accountId,
         notes: document.getElementById('tx-notes').value || null,
@@ -1030,6 +1050,10 @@ async function submitTransaction(event) {
         loadHoldings();
         loadAssets();
         loadDashboard();
+        if (data.affects_cash_balance) {
+            loadAccounts();
+            loadAccountsList();
+        }
     } catch (error) {
         showToast(`Failed to record transaction: ${error.message}`, 'error');
     }

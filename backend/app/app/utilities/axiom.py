@@ -122,9 +122,11 @@ class AxiomClient:
         self._buffer.clear()
 
         try:
+            # default=str so one non-JSON value (date, Decimal, enum) can't
+            # make the whole batch fail to serialize and get dropped.
             response = await self._client.post(
                 self.ingest_url,
-                json=events,
+                content=json.dumps(events, default=str),
             )
 
             if response.status_code == 200:

@@ -47,6 +47,11 @@ from .category import (
     DeletionResponse,
 )
 from .data import Data, DataCreate, DataInDB, DataUpdate, DeletionResponse
+from .data_export import (
+    DataExportDownloadResponse,
+    DataExportStatus,
+    DataExportStatusResponse,
+)
 from .expense import (
     BulkDeletionResponse,
     DeletionResponse,

@@ -12,6 +12,7 @@ from .chat_observability import (
     ChatObsToolCall,
     ChatObsTurn,
 )
+from .data_export import DataExport, DataExportStatus
 from .expense import Expense
 from .holding import Holding
 from .imports import Import
