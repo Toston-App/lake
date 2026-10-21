@@ -138,9 +138,6 @@ class Settings(BaseSettings):
 
     # Chat agent
     CHAT_ENABLED: bool = True
-    # Comma-separated user UUID allowlist. Empty means no user can access chat;
-    # "*" opens chat to every active user, including email/password accounts.
-    CHAT_ALLOWED_USER_UUIDS: str = ""
     CHAT_MAX_TOOL_ROUNDS: int = 8
     # Per-turn ceilings so one request can't run up an unbounded model bill.
     # Once a turn has used its tool rounds or CHAT_MAX_TOKENS_PER_TURN tokens
@@ -162,14 +159,6 @@ class Settings(BaseSettings):
     CHAT_OBSERVABILITY_ENABLED: bool = True
     # In-progress billing reservations older than this stop consuming quota.
     CHAT_TURN_RESERVATION_TTL_SECONDS: int = 900
-
-    @property
-    def chat_allowed_user_uuids(self) -> set[str]:
-        return {
-            raw_uuid.strip()
-            for raw_uuid in self.CHAT_ALLOWED_USER_UUIDS.split(",")
-            if raw_uuid.strip()
-        }
 
     # Feedback
     TELEGRAM_BOT_TOKEN: str

@@ -9,45 +9,17 @@ from app.api.api_v1.endpoints.chat import router
 from app.core.config import settings
 
 
-def test_chat_access_requires_allowlisted_uuid(monkeypatch):
-    user = SimpleNamespace(uuid="user_allowed")
+@pytest.mark.parametrize("uuid", [None, "", "user_any"])
+def test_chat_access_allows_every_user(monkeypatch, uuid):
+    user = SimpleNamespace(uuid=uuid)
     monkeypatch.setattr(settings, "CHAT_ENABLED", True)
-    monkeypatch.setattr(
-        settings,
-        "CHAT_ALLOWED_USER_UUIDS",
-        "user_other, user_allowed",
-    )
 
     assert deps.require_chat_access(user) is user
 
 
-@pytest.mark.parametrize("uuid", [None, "", "user_denied", "USER_ALLOWED"])
-def test_chat_access_rejects_uuid_not_in_allowlist(monkeypatch, uuid):
-    user = SimpleNamespace(uuid=uuid)
-    monkeypatch.setattr(settings, "CHAT_ENABLED", True)
-    monkeypatch.setattr(settings, "CHAT_ALLOWED_USER_UUIDS", "user_allowed")
-
-    with pytest.raises(HTTPException) as exc_info:
-        deps.require_chat_access(user)
-
-    assert exc_info.value.status_code == 403
-
-
-def test_chat_access_rejects_everyone_when_allowlist_is_empty(monkeypatch):
-    user = SimpleNamespace(uuid="user_allowed")
-    monkeypatch.setattr(settings, "CHAT_ENABLED", True)
-    monkeypatch.setattr(settings, "CHAT_ALLOWED_USER_UUIDS", "")
-
-    with pytest.raises(HTTPException) as exc_info:
-        deps.require_chat_access(user)
-
-    assert exc_info.value.status_code == 403
-
-
 def test_chat_access_preserves_global_kill_switch(monkeypatch):
-    user = SimpleNamespace(uuid="user_allowed")
+    user = SimpleNamespace(uuid="user_any")
     monkeypatch.setattr(settings, "CHAT_ENABLED", False)
-    monkeypatch.setattr(settings, "CHAT_ALLOWED_USER_UUIDS", "user_allowed")
 
     with pytest.raises(HTTPException) as exc_info:
         deps.require_chat_access(user)
@@ -55,7 +27,7 @@ def test_chat_access_preserves_global_kill_switch(monkeypatch):
     assert exc_info.value.status_code == 503
 
 
-def test_every_chat_route_requires_uuid_access():
+def test_every_chat_route_requires_chat_access():
     chat_routes = [route for route in router.routes if isinstance(route, APIRoute)]
 
     assert chat_routes
