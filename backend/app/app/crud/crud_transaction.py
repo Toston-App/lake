@@ -14,6 +14,7 @@ from app.models.subcategory import Subcategory
 from app.models.transfer import Transfer
 from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
 from fastapi_pagination import Page
+from fastapi_pagination.bases import AbstractParams
 from fastapi_pagination.ext.sqlalchemy import paginate
 
 async def get_multi_by_owner_with_filters(
@@ -30,6 +31,7 @@ async def get_multi_by_owner_with_filters(
     categories: Optional[List[int]] = None,
     places: Optional[List[int]] = None,
     transaction_type: Optional[List[TransactionType]] = None,
+    params: AbstractParams | None = None,
 ) -> Page[Union[Expense, Income, Transfer]]:
     # =========================================================================
     # PHASE 1: Build a UNION query to get the correct IDs for the page
@@ -203,4 +205,4 @@ async def get_multi_by_owner_with_filters(
         # Sort the final hydrated objects based on the order from our paginated query
         return [final_results[(r.type, r.id)] for r in paginated_results]
 
-    return await paginate(db, paginated_ids_query, transformer=_hydrate_transactions)
+    return await paginate(db, paginated_ids_query, params=params, transformer=_hydrate_transactions)

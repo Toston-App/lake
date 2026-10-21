@@ -3,6 +3,13 @@ services:
     ports:
       - "5050:5050"
 
+  usage_dashboard:
+    ports:
+      - "5174:5174"
+    environment:
+      - BACKEND_UPSTREAM=http://backend:8000
+      - NGINX_ENVSUBST_FILTER=BACKEND_UPSTREAM
+
   backend:
     ports:
       - "8888:8000"

@@ -1,13 +1,13 @@
-from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, Body, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud, models, schemas
+from app import models, schemas
 from app.api import deps
 from app.models.account import AccountType
+from app.services import accounts as account_service
+from app.services.errors import ServiceError, raise_http
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -35,12 +35,9 @@ async def read_accounts(
     )
 
     with timed() as t:
-        if crud.user.is_superuser(current_user):
-            accounts = await crud.account.get_multi(db, skip=skip, limit=limit)
-        else:
-            accounts = await crud.account.get_multi_by_owner(
-                db=db, owner_id=current_user.id, skip=skip, limit=limit
-            )
+        accounts = await account_service.list_accounts(
+            db, current_user, skip=skip, limit=limit
+        )
 
     enrich_event(
         request,
@@ -77,9 +74,7 @@ async def create_account(
     )
 
     with timed() as t:
-        account = await crud.account.create_with_owner(
-            db=db, obj_in=account_in, owner_id=current_user.id
-        )
+        account = await account_service.create_account(db, current_user, account_in)
 
     enrich_event(
         request,
@@ -117,14 +112,10 @@ async def read_account(
         query={"type": "get_account_by_id", "account_id": id},
     )
 
-    account = await crud.account.get(db=db, id=id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    if not crud.user.is_superuser(current_user) and (
-        account.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-    return account
+    try:
+        return await account_service.get_account(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.put("/{id}", response_model=schemas.Account)
@@ -149,47 +140,39 @@ async def update_account(
         operation={"type": "update_account", "account_id": id},
     )
 
-    account = await read_account(
-        db=db, id=id, current_user=current_user, request=request
-    )
-
-    current_account_data = jsonable_encoder(account)
-    account_in = schemas.AccountUpdate(**current_account_data)
-
     changes = {}
     if name is not None:
-        account_in.name = name
         changes["name"] = True
     if initial_balance is not None:
-        balance_difference = initial_balance - account.initial_balance
-        account_in.initial_balance = initial_balance
-        account_in.current_balance += balance_difference
-
-        current_user_data = jsonable_encoder(current_user)
-        user_in = schemas.UserUpdate(**current_user_data)
-        user_in.balance_total = current_user.balance_total + balance_difference
-        await crud.user.update(db=db, db_obj=current_user, obj_in=user_in)
-
-        changes["initial_balance"] = {
-            "from": float(account.initial_balance),
-            "to": initial_balance,
-        }
+        existing = await read_account(db=db, id=id, current_user=current_user, request=request)
+        changes["initial_balance"] = {"from": float(existing.initial_balance), "to": initial_balance}
     if color is not None:
-        account_in.color = color
         changes["color"] = True
     if type is not None:
-        account_in.type = type
-        changes["type"] = {
-            "from": account.type.value if account.type else None,
-            "to": type.value,
-        }
+        existing = await read_account(db=db, id=id, current_user=current_user, request=request)
+        changes["type"] = {"from": existing.type.value if existing.type else None, "to": type.value}
     if logo is not None:
-        account_in.logo = logo
+        changes["logo"] = logo
 
-    account_in.updated_at = datetime.now(timezone.utc)
+    try:
+        with timed() as t:
+            account = await account_service.update_account(
+                db,
+                current_user,
+                id,
+                name=name,
+                initial_balance=initial_balance,
+                color=color,
+                type=type,
+                logo=logo,
+            )
+    except ServiceError as exc:
+        raise_http(exc)
 
-    with timed() as t:
-        account = await crud.account.update(db=db, db_obj=account, obj_in=account_in)
+    changes["initial_balance"] = {
+        "from": float(account.initial_balance),
+        "to": initial_balance,
+    }
 
     enrich_event(
         request,
@@ -229,13 +212,11 @@ async def delete_account(
         },
     )
 
-    await read_account(db=db, id=id, current_user=current_user, request=request)
-
-    if current_user.default_account_id == id:
-        await crud.user.clear_default_account(db=db, user_id=current_user.id)
-
-    with timed() as t:
-        await crud.account.remove(db=db, id=id)
+    try:
+        with timed() as t:
+            await account_service.delete_account(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,

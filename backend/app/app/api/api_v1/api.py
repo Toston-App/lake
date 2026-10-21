@@ -3,8 +3,10 @@ from fastapi import APIRouter
 from app.api.api_v1.endpoints import (
     accounts,
     # ai, # Disabled OCR AI endpoint
+    admin_observability,
     balance_adjustments,
     categories,
+    chat,
     demo_data,
     expenses,
     exports,
@@ -14,12 +16,13 @@ from app.api.api_v1.endpoints import (
     investments,
     login,
     places,
+    polar,
     recap,
     subcategories,
+    subscriptions,
     transactions,
     transfers,
     users,
-    utils,
     whatsapp,
 )
 
@@ -27,7 +30,6 @@ api_router = APIRouter()
 api_router.include_router(login.router, tags=["login"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(exports.router, prefix="/exports", tags=["exports"])
-api_router.include_router(utils.router, prefix="/utils", tags=["utils"])
 api_router.include_router(demo_data.router, prefix="/demo-data", tags=["demo-data"])
 api_router.include_router(places.router, prefix="/places", tags=["places"])
 api_router.include_router(expenses.router, prefix="/expenses", tags=["expenses"])
@@ -53,4 +55,16 @@ api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"]
 api_router.include_router(recap.router, prefix="/recap", tags=["recap"])
 api_router.include_router(
     investments.router, prefix="/investments", tags=["investments"]
+)
+api_router.include_router(chat.router, prefix="/chat", tags=["chat"])
+api_router.include_router(
+    subscriptions.router,
+    prefix="/subscriptions",
+    tags=["subscriptions"],
+)
+api_router.include_router(polar.router, prefix="/polar", tags=["polar"])
+api_router.include_router(
+    admin_observability.router,
+    prefix="/admin/observability",
+    tags=["admin", "observability"],
 )

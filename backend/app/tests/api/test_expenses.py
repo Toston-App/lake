@@ -11,9 +11,6 @@ Covers:
   - DELETE /expenses/{id}     (delete single)
   - DELETE /expenses/bulk/{ids} (bulk delete)
 """
-from datetime import date
-
-import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -125,7 +122,7 @@ class TestGetExpenses:
     async def test_get_all_with_pagination(
         self, client: AsyncClient, db_session: AsyncSession, test_user
     ):
-        for i in range(5):
+        for _i in range(5):
             await create_test_expense(db_session, owner_id=test_user.id, amount=1.0)
         resp = await client.get(f"{PREFIX}/getAll", params={"skip": 0, "limit": 2})
         assert resp.status_code == 200
@@ -156,7 +153,7 @@ class TestGetExpenses:
             db_session, owner_id=other_user.id, amount=50.0
         )
         resp = await client.get(f"{PREFIX}/{expense.id}")
-        assert resp.status_code == 400
+        assert resp.status_code == 403
         assert "permissions" in resp.json()["detail"].lower()
 
 
@@ -246,4 +243,4 @@ class TestBulkDeleteExpenses:
             db_session, owner_id=other_user.id, amount=50.0
         )
         resp = await client.delete(f"{PREFIX}/bulk/{expense.id}")
-        assert resp.status_code == 400
+        assert resp.status_code == 403

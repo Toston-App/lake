@@ -93,7 +93,7 @@ class WhatsAppParser:
     def __init__(
         self,
         api_key: str = None,
-        model: str = "openai/gpt-4o-mini",
+        model: str = "openai/gpt-5.6-luna",
         fallback_models: list[str] = None,
         site_url: str = None,
         app_name: str = None,

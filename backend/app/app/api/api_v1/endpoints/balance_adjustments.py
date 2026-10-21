@@ -1,11 +1,12 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.encoders import jsonable_encoder
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud, models, schemas
+from app import models, schemas
 from app.api import deps
+from app.services import balance_adjustments as balance_adjustment_service
+from app.services.errors import ServiceError, raise_http
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -39,44 +40,21 @@ async def create_balance_adjustment(
         },
     )
 
-    account = await crud.account.get(db=db, id=adjustment_in.account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    if not crud.user.is_superuser(current_user) and (
-        account.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    old_balance = account.current_balance
-
-    with timed() as t:
-        adjustment = await crud.balance_adjustment.create_with_user(
-            db=db,
-            obj_in=adjustment_in,
-            owner_id=current_user.id,
-            old_balance=old_balance,
-        )
-        # Update the account's current_balance
-        current_account_data = jsonable_encoder(account)
-        account_update = schemas.AccountUpdate(**current_account_data)
-        account_update.current_balance = adjustment_in.new_balance
-
-        await crud.account.update(db=db, db_obj=account, obj_in=account_update)
-        # Update the user's balance_total by the adjustment amount
-        adjustment_amount = adjustment_in.new_balance - old_balance
-        current_user_data = jsonable_encoder(current_user)
-        user_update = schemas.UserUpdate(**current_user_data)
-        user_update.balance_total = current_user.balance_total + adjustment_amount
-
-        await crud.user.update(db=db, db_obj=current_user, obj_in=user_update)
+    try:
+        with timed() as t:
+            adjustment = await balance_adjustment_service.create_balance_adjustment(
+                db, current_user, adjustment_in
+            )
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,
         database={"operation": "create_balance_adjustment", "duration_ms": t.ms, "success": True},
         transaction={
-            "old_balance": float(old_balance),
+            "old_balance": float(adjustment.old_balance),
             "new_balance": float(adjustment_in.new_balance),
-            "adjustment_amount": float(adjustment_in.new_balance - old_balance),
+            "adjustment_amount": float(adjustment.adjustment_amount),
         },
     )
 
@@ -103,17 +81,12 @@ async def read_balance_adjustments_by_account(
         query={"type": "list_adjustments_by_account", "account_id": account_id, "skip": skip, "limit": limit},
     )
 
-    account = await crud.account.get(db=db, id=account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    if not crud.user.is_superuser(current_user) and (
-        account.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    adjustments = await crud.balance_adjustment.get_by_account(
-        db=db, account_id=account_id, skip=skip, limit=limit
-    )
+    try:
+        adjustments = await balance_adjustment_service.list_balance_adjustments_by_account(
+            db, current_user, account_id, skip=skip, limit=limit
+        )
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(request, database={"operation": "list_adjustments_by_account", "results_count": len(adjustments)})
     return adjustments
@@ -136,15 +109,12 @@ async def read_balance_adjustment(
         query={"type": "get_adjustment_by_id", "adjustment_id": id},
     )
 
-    adjustment = await crud.balance_adjustment.get(db=db, id=id)
-    if not adjustment:
-        raise HTTPException(status_code=404, detail="Balance adjustment not found")
-    if not crud.user.is_superuser(current_user) and (
-        adjustment.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-
-    return adjustment
+    try:
+        return await balance_adjustment_service.get_balance_adjustment(
+            db, current_user, id
+        )
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.get("", response_model=list[schemas.BalanceAdjustment])
@@ -165,14 +135,9 @@ async def read_balance_adjustments(
         query={"type": "list_all_adjustments", "skip": skip, "limit": limit},
     )
 
-    if crud.user.is_superuser(current_user):
-        adjustments = await crud.balance_adjustment.get_multi(
-            db, skip=skip, limit=limit
-        )
-    else:
-        adjustments = await crud.balance_adjustment.get_by_user(
-            db=db, owner_id=current_user.id, skip=skip, limit=limit
-        )
+    adjustments = await balance_adjustment_service.list_balance_adjustments(
+        db, current_user, skip=skip, limit=limit
+    )
 
     enrich_event(request, database={"operation": "list_all_adjustments", "results_count": len(adjustments)})
     return adjustments

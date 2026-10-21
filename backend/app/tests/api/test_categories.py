@@ -8,7 +8,6 @@ Covers:
   - PUT    /categories/{id}     (update)
   - DELETE /categories/{id}     (delete, blocked if is_income=True)
 """
-import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -140,10 +139,10 @@ class TestGetCategoryById:
         category = await create_test_category(
             db_session, owner_id=test_user.id, name="Home"
         )
-        sub1 = await create_test_subcategory(
+        await create_test_subcategory(
             db_session, owner_id=test_user.id, category_id=category.id, name="Rent"
         )
-        sub2 = await create_test_subcategory(
+        await create_test_subcategory(
             db_session, owner_id=test_user.id, category_id=category.id, name="Utilities"
         )
 

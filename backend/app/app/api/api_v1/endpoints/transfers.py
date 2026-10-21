@@ -1,6 +1,6 @@
 import calendar
 from datetime import date as Date
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
-from app.utilities.redis import invalidate_user_cache
+from app.services import transactions as transaction_service
+from app.services.errors import ServiceError, raise_http
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -204,13 +205,13 @@ async def create_transfer(
         },
     )
 
-    with timed() as t:
-        transfer = await crud.transfer.create_with_owner(
-            db=db, obj_in=transfer_in, owner_id=current_user.id
-        )
-
-    if transfer is None:
-        raise HTTPException(status_code=400, detail="Account not found")
+    try:
+        with timed() as t:
+            transfer = await transaction_service.create_transfer(
+                db, current_user, transfer_in
+            )
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,
@@ -227,9 +228,6 @@ async def create_transfer(
             "to_account": transfer_in.to_acc,
         },
     )
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
 
     return transfer
 
@@ -251,14 +249,10 @@ async def read_transfer(
         query={"type": "get_transfer_by_id", "transfer_id": id},
     )
 
-    transfer = await crud.transfer.get(db=db, id=id)
-    if not transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found")
-    if not crud.user.is_superuser(current_user) and (
-        transfer.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-    return transfer
+    try:
+        return await transaction_service.get_transfer(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.put("/{id}", response_model=schemas.Transfer)
@@ -286,13 +280,12 @@ async def update_transfer(
     original_amount = existing_transfer.amount
 
     try:
-        transfer_in.updated_at = datetime.now(timezone.utc)
         with timed() as t:
-            updated_transfer = await crud.transfer.update(
-                db=db, db_obj=existing_transfer, obj_in=transfer_in
+            updated_transfer = await transaction_service.update_transfer(
+                db, current_user, id, transfer_in
             )
-    except Exception:
-        raise HTTPException(status_code=400, detail="Error updating transfer.")
+    except ServiceError as exc:
+        raise_http(exc)
 
     changes = {}
     if transfer_in.amount is not None and original_amount != transfer_in.amount:
@@ -316,73 +309,6 @@ async def update_transfer(
         },
     )
 
-    # Handle source account change
-    if transfer_in.from_acc is not None and original_from_acc != transfer_in.from_acc:
-        # Remove amount from old source account
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=original_from_acc,
-            column="total_transfers_out",
-            amount=-original_amount,
-        )
-        # Add amount to new source account
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=transfer_in.from_acc,
-            column="total_transfers_out",
-            amount=updated_transfer.amount,
-        )
-
-    # Handle destination account change
-    if transfer_in.to_acc is not None and original_to_acc != transfer_in.to_acc:
-        # Remove amount from old destination account
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=original_to_acc,
-            column="total_transfers_in",
-            amount=-original_amount,
-        )
-        # Add amount to new destination account
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=transfer_in.to_acc,
-            column="total_transfers_in",
-            amount=updated_transfer.amount,
-        )
-
-    # Handle amount change (when accounts remain the same)
-    if (transfer_in.amount is not None and
-        original_amount != transfer_in.amount and
-        (transfer_in.from_acc is None or original_from_acc == transfer_in.from_acc) and
-        (transfer_in.to_acc is None or original_to_acc == transfer_in.to_acc)):
-
-        amount_difference = transfer_in.amount - original_amount
-
-        # Adjust source account balance
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=updated_transfer.from_acc,
-            column="total_transfers_out",
-            amount=amount_difference,
-        )
-
-        # Adjust destination account balance
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=updated_transfer.to_acc,
-            column="total_transfers_in",
-            amount=amount_difference,
-        )
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
-
     return updated_transfer
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
@@ -402,25 +328,11 @@ async def delete_transfer(
         operation={"type": "delete_transfer", "transfer_id": id},
     )
 
-    transfer = await read_transfer(db=db, id=id, current_user=current_user, request=request)
-
-    with timed() as t:
-        transfer = await crud.transfer.remove(db=db, id=id)
-    # TODO: Do it in a single query or concurrently with asyncio
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=transfer.from_acc,
-            column="total_transfers_out",
-            amount=-transfer.amount,
-        )
-        await crud.account.update_by_id_and_field(
-            db=db,
-            owner_id=current_user.id,
-            id=transfer.to_acc,
-            column="total_transfers_in",
-            amount=-transfer.amount
-        )
+    try:
+        with timed() as t:
+            transfer = await transaction_service.delete_transfer(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,
@@ -436,8 +348,5 @@ async def delete_transfer(
             "to_account": transfer.to_acc,
         },
     )
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")

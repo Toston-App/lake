@@ -33,8 +33,8 @@ class ExpenseBase(BaseModel):
 
     @validator("made_from")
     def validate_made_from(cls, v):
-        if v not in ["Web", "WhatsApp", "OCR"]:
-            raise ValueError("made_from must be one of: Web, WhatsApp, OCR")
+        if v not in ["Web", "WhatsApp", "OCR", "Chat"]:
+            raise ValueError("made_from must be one of: Web, WhatsApp, OCR, Chat")
         return v
 
 # Properties to receive on Expense creation

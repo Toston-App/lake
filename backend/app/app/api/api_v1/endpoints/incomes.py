@@ -1,16 +1,16 @@
 import calendar
 from datetime import date as Date
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import update as updateDb
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
 from app.api.deps import DateFilterType
-from app.utilities.redis import invalidate_user_cache
+from app.services import transactions as transaction_service
+from app.services.errors import ServiceError, raise_http
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -204,10 +204,13 @@ async def create_income(
         },
     )
 
-    with timed() as t:
-        income = await crud.income.create_with_owner(
-            db=db, obj_in=income_in, owner_id=current_user.id
-        )
+    try:
+        with timed() as t:
+            income = await transaction_service.create_income(
+                db, current_user, income_in
+            )
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,
@@ -226,9 +229,6 @@ async def create_income(
             "has_account": income_in.account_id is not None,
         },
     )
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
 
     return income
 
@@ -254,10 +254,13 @@ async def create_incomes_bulk(
         },
     )
 
-    with timed() as t:
-        incomes = await crud.income.create_multi_with_owner(
-            db=db, obj_list=incomes_in, owner_id=current_user.id
-        )
+    try:
+        with timed() as t:
+            incomes = await transaction_service.create_incomes_bulk(
+                db, current_user, incomes_in
+            )
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,
@@ -268,9 +271,6 @@ async def create_incomes_bulk(
             "avg_duration_per_item_ms": round(t.ms / len(incomes_in), 2) if incomes_in else 0,
         },
     )
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
 
     return incomes
 
@@ -292,14 +292,10 @@ async def read_income(
         query={"type": "get_income_by_id", "income_id": id},
     )
 
-    income = await crud.income.get(db=db, id=id)
-    if not income:
-        raise HTTPException(status_code=404, detail="Income not found")
-    if not crud.user.is_superuser(current_user) and (
-        income.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-    return income
+    try:
+        return await transaction_service.get_income(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.put("/{id}", response_model=schemas.Income)
@@ -320,43 +316,20 @@ async def update_income(
         operation={"type": "update_income", "income_id": id},
     )
 
-    income = await read_income(db=db, id=id, current_user=current_user, request=request)
-
-    original_amount = income.amount
-    original_account_id = income.account_id
-    original_subcategory_id = income.subcategory_id
-
-    if income_in.place_id:
-        place = await crud.place.get(db=db, id=income_in.place_id)
-        if not place:
-            income_in.place_id = income.place_id
-
-    if income_in.subcategory_id:
-        subcategory = await crud.subcategory.get(db=db, id=income_in.subcategory_id)
-        if not subcategory:
-            income_in.subcategory_id = income.subcategory_id
-
-    if income_in.date:
-        try:
-            income_in.date = datetime.strptime(income_in.date, "%Y-%m-%d").date()
-        except:
-            income.date = income.date
-
-    if income_in.account_id:
-        account = await crud.account.get(db=db, id=income_in.account_id)
-        if not account:
-            income_in.account_id = income.account_id
-
-    income_in.updated_at = datetime.now(timezone.utc)
-
+    original = await read_income(db=db, id=id, current_user=current_user, request=request)
     changes = {}
-    if income_in.amount and income_in.amount != original_amount:
-        changes["amount"] = {"from": float(original_amount), "to": float(income_in.amount)}
-    if income_in.account_id and income_in.account_id != original_account_id:
-        changes["account_id"] = {"from": original_account_id, "to": income_in.account_id}
+    if income_in.amount and income_in.amount != original.amount:
+        changes["amount"] = {"from": float(original.amount), "to": float(income_in.amount)}
+    if income_in.account_id and income_in.account_id != original.account_id:
+        changes["account_id"] = {"from": original.account_id, "to": income_in.account_id}
 
-    with timed() as t:
-        updated_income = await crud.income.update(db=db, db_obj=income, obj_in=income_in)
+    try:
+        with timed() as t:
+            updated_income = await transaction_service.update_income(
+                db, current_user, id, income_in
+            )
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,
@@ -371,95 +344,6 @@ async def update_income(
             "fields_changed": len(changes),
         },
     )
-
-    # Update subcategory and category totals if amount or subcategory_id has changed
-    if updated_income.amount != original_amount or updated_income.subcategory_id != original_subcategory_id:
-        # Update original subcategory total and its category if it exists
-        if original_subcategory_id:
-            original_subcategory = await crud.subcategory.get(db=db, id=original_subcategory_id)
-            if original_subcategory:
-                # Update original subcategory total
-                await db.execute(
-                    updateDb(original_subcategory.__class__)
-                    .where(original_subcategory.__class__.id == original_subcategory.id)
-                    .values(total=original_subcategory.total - original_amount)
-                    .execution_options(synchronize_session="fetch")
-                )
-                await db.commit()
-
-                # Update original category total if it exists
-                if original_subcategory.category_id:
-                    original_category = await crud.category.get(db=db, id=original_subcategory.category_id)
-                    if original_category:
-                        await db.execute(
-                            updateDb(original_category.__class__)
-                            .where(original_category.__class__.id == original_category.id)
-                            .execution_options(synchronize_session="fetch")
-                            .values(total=original_category.total - original_amount)
-                        )
-                        await db.commit()
-
-        # Update new subcategory total and its category if it exists
-        if updated_income.subcategory_id:
-            new_subcategory = await crud.subcategory.get(db=db, id=updated_income.subcategory_id)
-            if new_subcategory:
-                # Update new subcategory total
-                await db.execute(
-                    updateDb(new_subcategory.__class__)
-                    .where(new_subcategory.__class__.id == new_subcategory.id)
-                    .values(total=new_subcategory.total + updated_income.amount)
-                    .execution_options(synchronize_session="fetch")
-                )
-                await db.commit()
-
-                # Update new category total if it exists
-                if new_subcategory.category_id:
-                    new_category = await crud.category.get(db=db, id=new_subcategory.category_id)
-                    if new_category:
-                        await db.execute(
-                            updateDb(new_category.__class__)
-                            .where(new_category.__class__.id == new_category.id)
-                            .values(total=new_category.total + updated_income.amount)
-                            .execution_options(synchronize_session="fetch")
-                        )
-                        await db.commit()
-
-    if (
-        updated_income.amount != original_amount
-        or updated_income.account_id != original_account_id
-    ):
-        # Update original account
-        if original_account_id:
-            await crud.account.update_by_id_and_field(
-                db=db,
-                owner_id=current_user.id,
-                id=original_account_id,
-                column="total_incomes",
-                amount=-original_amount,
-            )
-
-        # Update new account
-        if updated_income.account_id:
-            await crud.account.update_by_id_and_field(
-                db=db,
-                owner_id=current_user.id,
-                id=updated_income.account_id,
-                column="total_incomes",
-                amount=updated_income.amount,
-            )
-
-        # Update user's global balance
-        if updated_income.amount != original_amount:
-            amount_difference = updated_income.amount - original_amount
-            await crud.user.update_balance(
-                db=db,
-                user_id=current_user.id,
-                is_Expense=False,
-                amount=amount_difference,
-            )
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
 
     return updated_income
 
@@ -481,23 +365,11 @@ async def delete_income(
         operation={"type": "delete_income", "income_id": id},
     )
 
-    income = await read_income(db=db, id=id, current_user=current_user, request=request)
-
-    with timed() as t:
-        income = await crud.income.remove(db=db, id=id)
-
-        await crud.user.update_balance(
-            db=db, user_id=current_user.id, is_Expense=False, amount=-income.amount
-        )
-
-        if income.account_id:
-            await crud.account.update_by_id_and_field(
-                db=db,
-                owner_id=current_user.id,
-                id=income.account_id,
-                column="total_incomes",
-                amount=-income.amount
-            )
+    try:
+        with timed() as t:
+            income = await transaction_service.delete_income(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(
         request,
@@ -513,37 +385,6 @@ async def delete_income(
             "had_subcategory": income.subcategory_id is not None,
         },
     )
-
-    # Update subcategory total and its category if they exist
-    if income.subcategory_id:
-        subcategory = await crud.subcategory.get(db=db, id=income.subcategory_id)
-
-        if subcategory:
-            # Update subcategory total
-            await db.execute(
-                updateDb(subcategory.__class__)
-                .where(subcategory.__class__.id == subcategory.id)
-                .values(total=subcategory.total - income.amount)
-                .execution_options(synchronize_session="fetch")
-            )
-            await db.commit()
-
-            # Update category total if it exists
-            if subcategory.category_id:
-                category = await crud.category.get(db=db, id=subcategory.category_id)
-
-                if category:
-                    await db.execute(
-                        updateDb(category.__class__)
-                        .where(category.__class__.id == category.id)
-                        .values(total=category.total - income.amount)
-                        .execution_options(synchronize_session="fetch")
-                    )
-                    await db.commit()
-
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")
 
@@ -581,68 +422,14 @@ async def delete_incomes_bulk(
         },
     )
 
-    # Collect valid incomes first
-    valid_incomes = []
-    for id in id_list:
-        income = await crud.income.get(db=db, id=id)
-        if not income:
-            continue
-        if not crud.user.is_superuser(current_user) and (
-            income.owner_id != current_user.id
-        ):
-            raise HTTPException(
-                status_code=400, detail=f"Not enough permissions for income {id}"
+    try:
+        with timed() as t:
+            removed_incomes = await transaction_service.delete_incomes_bulk(
+                db, current_user, id_list
             )
-        valid_incomes.append(income)
-
-    if not valid_incomes:
-        raise HTTPException(status_code=404, detail="No valid incomes found")
-
-    # Update subcategory and category totals before deleting
-    for income in valid_incomes:
-        if income.subcategory_id:
-            subcategory = await crud.subcategory.get(db=db, id=income.subcategory_id)
-            if subcategory:
-                # Update subcategory total
-                await db.execute(
-                    updateDb(subcategory.__class__)
-                    .where(subcategory.__class__.id == subcategory.id)
-                    .values(total=subcategory.total - income.amount)
-                    .execution_options(synchronize_session="fetch")
-                )
-                await db.commit()
-
-                # Update category total if it exists
-                if subcategory.category_id:
-                    category = await crud.category.get(db=db, id=subcategory.category_id)
-                    if category:
-                        await db.execute(
-                            updateDb(category.__class__)
-                            .where(category.__class__.id == category.id)
-                            .values(total=category.total - income.amount)
-                            .execution_options(synchronize_session="fetch")
-                        )
-                        await db.commit()
-
-    valid_ids = [income.id for income in valid_incomes]
-
-    with timed() as t:
-        removed_incomes = await crud.income.remove_multi(db=db, ids=valid_ids)
-
-        total_amount_deleted = 0.0
-        for income in removed_incomes:
-            total_amount_deleted += float(income.amount)
-            await crud.user.update_balance(
-                db=db, user_id=current_user.id, is_Expense=False, amount=-income.amount
-            )
-            if income.account_id:
-                await crud.account.update_by_id_and_field(
-                    db=db,
-                    owner_id=current_user.id,
-                    id=income.account_id,
-                    column="total_incomes",
-                    amount=-income.amount,
-                )
+    except ServiceError as exc:
+        raise_http(exc)
+    total_amount_deleted = sum(float(income.amount) for income in removed_incomes)
 
     enrich_event(
         request,
@@ -657,9 +444,6 @@ async def delete_incomes_bulk(
             "success_rate": round(len(removed_incomes) / len(id_list) * 100, 2) if id_list else 0,
         },
     )
-
-    # Invalidate user's cached dashboard data
-    await invalidate_user_cache(current_user.id)
 
     return schemas.BulkDeletionResponse(
         message=f"Deleted {len(removed_incomes)} incomes",

@@ -47,14 +47,24 @@ services:
     volumes:
       - pgadmin-data:/var/lib/pgadmin
     environment:
-      - PG_USERNAME=${PG_USERNAME}
-      - PG_HASHED_PASSWORD=${PG_HASHED_PASSWORD}
       - PGADMIN_CONFIG_X_CONTENT_TYPE_OPTIONS=${PGADMIN_CONFIG_X_CONTENT_TYPE_OPTIONS:-""}
       - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=${PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION:-True}
       - PGADMIN_CONFIG_X_XSS_PROTECTION=${PGADMIN_CONFIG_X_XSS_PROTECTION:-1}
-    #labels:
-    # Basic auth for pgadmin using the environment variables PG_USERNAME and PG_HASHED_PASSWORD
-    # - traefik.http.middlewares.mybasicauth.basicauth.users=${PG_USERNAME}:${PG_HASHED_PASSWORD}
+
+  # Internal-only (Tailscale), same bind pattern as pgadmin. Do not attach a
+  # Coolify/Traefik public domain to this service.
+  usage_dashboard:
+    build:
+      context: ./frontend/usage_dashboard
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "${TAILSCALE_IP}:5174:5174"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_UPSTREAM=http://backend:80
+      - NGINX_ENVSUBST_FILTER=BACKEND_UPSTREAM
 
   prestart:
     image: "${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}"

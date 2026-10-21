@@ -58,7 +58,8 @@ os.environ.setdefault("LOCAL_JWT_SECRET", "foo")
 os.environ.setdefault("CLERK_JWT_PUBLIC_KEY", "dGVzdC1jbGVyay1wdWJsaWMta2V5")
 os.environ.setdefault("CLERK_ISSUER", "https://test.clerk.accounts.dev")
 os.environ.setdefault("PROFILE_QUERY_MODE", "False")
-os.environ.setdefault("SENTRY_DSN", "")
+# Settings default to production (fail closed); tests are not production.
+os.environ.setdefault("ENVIRONMENT", "test")
 
 from app.api.deps import (  # noqa: E402
     async_get_db,
@@ -258,11 +259,12 @@ async def client(
 
 
 @pytest.fixture
-def enable_investments(monkeypatch: pytest.MonkeyPatch, test_user: User) -> None:
+def enable_investments(monkeypatch: pytest.MonkeyPatch) -> None:
     """Enable investment endpoints and isolate all common external dependencies."""
     monkeypatch.setattr(settings, "INVESTMENTS_ENABLED", True)
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_IDS", str(test_user.id))
-    monkeypatch.setattr(settings, "INVESTMENTS_ALLOWED_USER_UUIDS", "")
+    # Investments are paid-only; with billing off every user gets this tier.
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", False)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "tier1")
     monkeypatch.setattr(
         CurrencyConverter,
         "get_usd_to_mxn_rate",

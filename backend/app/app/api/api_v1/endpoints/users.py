@@ -14,7 +14,6 @@ from app.api import deps
 from app.core import security
 from app.core.config import settings
 from app.utilities.encryption import hash_sha256
-from app.utils import send_new_account_email
 from app.utilities.wide_events import enrich_event, mark_for_logging, timed
 
 router = APIRouter()
@@ -142,7 +141,23 @@ async def read_user_me(
     """
     Get current user.
     """
-    return current_user
+    # Attach the (cached) subscription tier so the frontend can show usage /
+    # upgrade prompts without a second round-trip.
+    tier_value = "free"
+    try:
+        from app.services.entitlements import get_user_tier
+
+        tier, _ = await get_user_tier(db, current_user.id)
+        tier_value = tier.value
+    except Exception:
+        # Never let entitlement resolution break /users/me.
+        pass
+    return schemas.UserGetMe(
+        id=current_user.id,
+        email=current_user.email,
+        country=current_user.country,
+        subscription_tier=tier_value,
+    )
 
 
 @router.post("/open", response_model=schemas.Msg)

@@ -8,6 +8,8 @@ from .crud_category import category
 from .crud_data_export import data_export
 from .crud_expense import expense
 from .crud_feedback import feedback
+from . import observability
+from . import crud_subscription
 from .crud_holding import holding
 from .crud_import import imports
 from .crud_income import income
