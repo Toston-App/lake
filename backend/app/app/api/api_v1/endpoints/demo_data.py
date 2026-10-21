@@ -16,6 +16,7 @@ from app.api.api_v1.endpoints.incomes import create_incomes_bulk
 from app.api.api_v1.endpoints.places import create_place, read_places
 from app.api.api_v1.endpoints.transfers import create_transfer
 from app.models.account import AccountType
+from app.services import recurring as recurring_service
 from app.utilities.wide_events import enrich_event, mark_for_logging
 
 router = APIRouter()
@@ -84,6 +85,45 @@ async def _get_or_create_base_data_orm(request: Request, db: AsyncSession, from_
     return fetched_data
 
 
+async def _create_demo_recurring(
+    db: AsyncSession,
+    user: models.User,
+    accounts: list[models.Account],
+    income_subcategories: list[models.Subcategory],
+    expense_subcategories: list[models.Subcategory],
+) -> int:
+    """Create a few typical recurring transactions, starting tomorrow."""
+    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+    checking, savings = accounts[0], accounts[1]
+    salary = income_subcategories[0]
+    subscription, rent = expense_subcategories[0], expense_subcategories[-1]
+    templates = [
+        schemas.RecurringTransactionCreate(
+            type="expense", amount=15.99, description="Netflix",
+            frequency="monthly", start_date=tomorrow, account_id=checking.id,
+            category_id=subscription.category_id, subcategory_id=subscription.id,
+        ),
+        schemas.RecurringTransactionCreate(
+            type="expense", amount=850, description="Rent",
+            frequency="monthly", month_days=[1], start_date=tomorrow,
+            account_id=checking.id, category_id=rent.category_id, subcategory_id=rent.id,
+        ),
+        schemas.RecurringTransactionCreate(
+            type="income", amount=1500, description="Salary",
+            frequency="semimonthly", business_day_adjustment="previous",
+            start_date=tomorrow, account_id=checking.id, subcategory_id=salary.id,
+        ),
+        schemas.RecurringTransactionCreate(
+            type="transfer", amount=200, description="Savings",
+            frequency="monthly", month_days=[-1], start_date=tomorrow,
+            account_id=checking.id, to_account_id=savings.id,
+        ),
+    ]
+    for template_in in templates:
+        await recurring_service.create_recurring(db, user, template_in)
+    return len(templates)
+
+
 @router.post("/generate-demo-data", response_model=schemas.Msg, status_code=201)
 async def generate_fake_user_data(
     request: Request,
@@ -92,6 +132,7 @@ async def generate_fake_user_data(
     num_transactions: int = Body(50, ge=1, le=5000, embed=True, description="Number of transactions to generate."),
     start_date_str: Optional[str] = Body(None, embed=True, description="Start date for transactions (YYYY-MM-DD). Defaults to 1 year ago."),
     end_date_str: Optional[str] = Body(None, embed=True, description="End date for transactions (YYYY-MM-DD). Defaults to today."),
+    include_recurring: bool = Body(True, embed=True, description="Also create example recurring transactions starting tomorrow."),
     current_superuser: models.User = Depends(deps.get_current_active_superuser) # needed to access this endpoint
 ) -> Any:
     """
@@ -196,6 +237,12 @@ async def generate_fake_user_data(
     if expenses_to_create_bulk:
         await create_expenses_bulk(request=request, db=db, expenses_in=expenses_to_create_bulk, current_user=user)
 
+    recurring_created_count = 0
+    if include_recurring and expense_subcategories:
+        recurring_created_count = await _create_demo_recurring(
+            db, user, usable_accounts, income_subcategories, expense_subcategories
+        )
+
     total_generated = len(incomes_to_create_bulk) + len(expenses_to_create_bulk) + transfers_created_count
 
     enrich_event(
@@ -205,11 +252,12 @@ async def generate_fake_user_data(
             "incomes": len(incomes_to_create_bulk),
             "expenses": len(expenses_to_create_bulk),
             "transfers": transfers_created_count,
+            "recurring": recurring_created_count,
             "attempted": transactions_attempted,
         },
     )
 
-    return schemas.Msg(msg=f"Successfully generated {total_generated} transactions ({len(incomes_to_create_bulk)} incomes, {len(expenses_to_create_bulk)} expenses, {transfers_created_count} transfers) for user {user_id}. Attempted to generate {transactions_attempted} based on num_transactions param.")
+    return schemas.Msg(msg=f"Successfully generated {total_generated} transactions ({len(incomes_to_create_bulk)} incomes, {len(expenses_to_create_bulk)} expenses, {transfers_created_count} transfers) and {recurring_created_count} recurring transactions for user {user_id}. Attempted to generate {transactions_attempted} based on num_transactions param.")
 
 
 @router.post("/delete-user-financial-data", response_model=schemas.Msg, status_code=200)
@@ -220,7 +268,8 @@ async def delete_user_financial_data(
     current_superuser: models.User = Depends(deps.get_current_active_superuser)
 ) -> Any:
     """
-    Delete all financial data (accounts, places, incomes, expenses, transfers) for a specified user.
+    Delete all financial data (recurring transactions, accounts, places, incomes,
+    expenses, transfers) for a specified user.
     Only accessible by superusers.
     """
     mark_for_logging(request)
@@ -234,6 +283,13 @@ async def delete_user_financial_data(
 
     if not user_to_clear:
         raise HTTPException(status_code=404, detail=f"User with id {user_id} not found.")
+
+    # delete_recurring (first, so the worker stops generating for this user):
+    await db.execute(
+        delete(models.RecurringTransaction).where(
+            models.RecurringTransaction.owner_id == user_id
+        )
+    )
 
     # delete_transfers:
     user_accounts_stmt = select(models.Account.id).where(models.Account.owner_id == user_id)

@@ -136,7 +136,11 @@ async def _require_owned(
 
 
 async def create_expense(
-    db: AsyncSession, user: models.User, expense_in: schemas.ExpenseCreate
+    db: AsyncSession,
+    user: models.User,
+    expense_in: schemas.ExpenseCreate,
+    *,
+    recurring_id: int | None = None,
 ):
     expense_in.account_id = await _ensure_owned_optional(
         db, user, crud.account, expense_in.account_id
@@ -151,7 +155,7 @@ async def create_expense(
         db, user, crud.place, expense_in.place_id
     )
     expense = await crud.expense.create_with_owner(
-        db=db, obj_in=expense_in, owner_id=user.id
+        db=db, obj_in=expense_in, owner_id=user.id, recurring_id=recurring_id
     )
     await invalidate_user_cache(user.id)
     return expense
@@ -292,7 +296,11 @@ async def delete_expenses_bulk(
 
 
 async def create_income(
-    db: AsyncSession, user: models.User, income_in: schemas.IncomeCreate
+    db: AsyncSession,
+    user: models.User,
+    income_in: schemas.IncomeCreate,
+    *,
+    recurring_id: int | None = None,
 ):
     income_in.account_id = await _ensure_owned_optional(
         db, user, crud.account, income_in.account_id
@@ -304,7 +312,7 @@ async def create_income(
         db, user, crud.place, income_in.place_id
     )
     income = await crud.income.create_with_owner(
-        db=db, obj_in=income_in, owner_id=user.id
+        db=db, obj_in=income_in, owner_id=user.id, recurring_id=recurring_id
     )
     await invalidate_user_cache(user.id)
     return income
@@ -430,12 +438,16 @@ async def delete_incomes_bulk(
 
 
 async def create_transfer(
-    db: AsyncSession, user: models.User, transfer_in: schemas.TransferCreate
+    db: AsyncSession,
+    user: models.User,
+    transfer_in: schemas.TransferCreate,
+    *,
+    recurring_id: int | None = None,
 ):
     await _require_owned(db, user, crud.account, transfer_in.from_acc, "Account")
     await _require_owned(db, user, crud.account, transfer_in.to_acc, "Account")
     transfer = await crud.transfer.create_with_owner(
-        db=db, obj_in=transfer_in, owner_id=user.id
+        db=db, obj_in=transfer_in, owner_id=user.id, recurring_id=recurring_id
     )
     if transfer is None:
         raise DomainError("Account not found")

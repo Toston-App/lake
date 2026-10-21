@@ -39,6 +39,7 @@ class ExpenseTransaction(BaseModel):
     category_id: Optional[int]
     subcategory_id: Optional[int]
     place_id: Optional[int]
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -55,6 +56,7 @@ class IncomeTransaction(BaseModel):
     account_id: Optional[int]
     subcategory_id: Optional[int]
     place_id: Optional[int]
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -70,6 +72,7 @@ class TransferTransaction(BaseModel):
     owner_id: int
     from_acc: Optional[int]
     to_acc: Optional[int]
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True

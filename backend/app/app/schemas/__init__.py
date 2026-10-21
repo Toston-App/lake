@@ -61,6 +61,16 @@ from .expense import (
     ExpenseUpdate,
 )
 from .feedback import Feedback, FeedbackCreate
+from .recurring_transaction import (
+    RecurringFromTransaction,
+    RecurringPreview,
+    RecurringPreviewRequest,
+    RecurringTransaction,
+    RecurringTransactionCreate,
+    RecurringTransactionDetail,
+    RecurringTransactionUpdate,
+    UpcomingOccurrence,
+)
 from .holding import (
     Holding,
     HoldingCreate,

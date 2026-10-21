@@ -32,8 +32,10 @@ class IncomeBase(BaseModel):
 
     @validator("made_from")
     def validate_made_from(cls, v):
-        if v not in ["Web", "WhatsApp", "OCR", "Chat"]:
-            raise ValueError("made_from must be one of: Web, WhatsApp, OCR, Chat")
+        if v not in ["Web", "WhatsApp", "OCR", "Chat", "Recurring"]:
+            raise ValueError(
+                "made_from must be one of: Web, WhatsApp, OCR, Chat, Recurring"
+            )
         return v
 
 # Properties to receive on Income creation
@@ -54,6 +56,7 @@ class IncomeInDBBase(IncomeBase):
     id: int
     owner_id: int
     import_id: Optional[int] = None
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True

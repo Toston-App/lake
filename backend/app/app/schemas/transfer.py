@@ -45,6 +45,7 @@ class TransferUpdate(TransferBase):
 class TransferInDBBase(TransferBase):
     id: int
     owner_id: int
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True

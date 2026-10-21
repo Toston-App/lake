@@ -21,6 +21,7 @@ from .investment_transaction import InvestmentTransaction, TransactionType
 from .item import Item
 from .place import Place
 from .polar_webhook_event import PolarWebhookEvent
+from .recurring_transaction import RecurringTransaction
 from .subcategory import Subcategory
 from .subscription import UserSubscription
 from .transfer import Transfer
