@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from pydantic import AnyHttpUrl, EmailStr, PostgresDsn, field_validator
+from pydantic import AnyHttpUrl, EmailStr, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode
 
 
@@ -24,12 +24,15 @@ class Settings(BaseSettings):
     # string from the environment.
     CLERK_JWT_PUBLIC_KEY: str
     CLERK_ISSUER: str
+    # Backend API secret used to retrieve Clerk user profiles when a local
+    # UUID-only user needs an email address for billing.
+    CLERK_SECRET_KEY: str | None = None
     # NoDecode tells pydantic-settings not to JSON-parse this field's raw env
     # value, so our `mode="before"` validator below sees the original string
     # and can accept either a JSON array or a comma-separated list.
     CLERK_AUTHORIZED_PARTIES: Annotated[list[str], NoDecode] = []
 
-    @field_validator("CLERK_AUTHORIZED_PARTIES", mode="before")
+    @field_validator("CLERK_AUTHORIZED_PARTIES", "BACKEND_CORS_ORIGINS", mode="before")
     def split_authorized_parties(cls, v: Any) -> Any:
         if v is None:
             return []
@@ -59,8 +62,21 @@ class Settings(BaseSettings):
 
     # 60 minutes * 24 hours * 8 days = 8 days
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
-    SERVER_NAME: str
-    SERVER_HOST: AnyHttpUrl
+    SERVER_NAME: str = "localhost"
+    SERVER_HOST: AnyHttpUrl = AnyHttpUrl("http://localhost")
+    # Extra CORS origins (JSON array or comma-separated) added to the built-in
+    # allow-list in main.py. Credentials are allowed, so "*" is rejected: it
+    # would let any website make authenticated requests with the session cookie.
+    BACKEND_CORS_ORIGINS: Annotated[list[str], NoDecode] = []
+
+    @field_validator("BACKEND_CORS_ORIGINS")
+    def _reject_wildcard_cors(cls, v: list[str]) -> list[str]:
+        if any(origin.strip() == "*" for origin in v):
+            raise ValueError(
+                "BACKEND_CORS_ORIGINS must list explicit origins; '*' is not allowed"
+            )
+        return [origin.strip().rstrip("/") for origin in v]
+
     PROFILE_QUERY_MODE: bool = False
 
     PROJECT_NAME: str
@@ -100,49 +116,11 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER_PASSWORD: str
     USERS_OPEN_REGISTRATION: bool = False
 
-    # Investment feature access
+    # Investment feature switch. When on, investments are available to users
+    # on any paid tier (see require_investments_access) and to superusers.
     INVESTMENTS_ENABLED: bool = False
-    INVESTMENTS_ALLOWED_USER_IDS: str = ""
-    INVESTMENTS_ALLOWED_USER_UUIDS: str = ""
-
-    @field_validator("INVESTMENTS_ALLOWED_USER_IDS")
-    def validate_investment_user_ids(cls, v: str) -> str:
-        for raw_id in v.split(","):
-            raw_id = raw_id.strip()
-            if not raw_id:
-                continue
-            try:
-                user_id = int(raw_id)
-            except ValueError as exc:
-                raise ValueError(
-                    "INVESTMENTS_ALLOWED_USER_IDS must contain comma-separated integers"
-                ) from exc
-            if user_id <= 0:
-                raise ValueError(
-                    "INVESTMENTS_ALLOWED_USER_IDS must contain positive integers"
-                )
-        return v
-
-    @property
-    def investments_allowed_user_ids(self) -> set[int]:
-        return {
-            int(raw_id.strip())
-            for raw_id in self.INVESTMENTS_ALLOWED_USER_IDS.split(",")
-            if raw_id.strip()
-        }
-
-    @property
-    def investments_allowed_user_uuids(self) -> set[str]:
-        return {
-            raw_uuid.strip()
-            for raw_uuid in self.INVESTMENTS_ALLOWED_USER_UUIDS.split(",")
-            if raw_uuid.strip()
-        }
 
     SEED_DATABASE: bool = False
-
-    SERVER_NAME: str = "localhost"
-    SERVER_HOST: str = "http://localhost"
 
     DOCS_USER: str = "user"
     DOCS_PASSWORD: str = "password"
@@ -151,12 +129,47 @@ class Settings(BaseSettings):
 
     # OpenRouter Settings (for WhatsApp AI parsing)
     OPENROUTER_API_KEY: str
-    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
+    OPENROUTER_MODEL: str = "openai/gpt-5.6-luna"
     OPENROUTER_FALLBACK_MODELS: str | None = (
         None  # Comma-separated list of fallback models
     )
     OPENROUTER_SITE_URL: str | None = None
     OPENROUTER_APP_NAME: str | None = None
+
+    # Chat agent
+    CHAT_ENABLED: bool = True
+    # Comma-separated user UUID allowlist. Empty means no user can access chat;
+    # "*" opens chat to every active user, including email/password accounts.
+    CHAT_ALLOWED_USER_UUIDS: str = ""
+    CHAT_MAX_TOOL_ROUNDS: int = 8
+    # Per-turn ceilings so one request can't run up an unbounded model bill.
+    # Once a turn has used its tool rounds or CHAT_MAX_TOKENS_PER_TURN tokens
+    # (summed over every model call), its next call must answer without tools,
+    # so it goes over the token budget by at most that call.
+    # CHAT_MAX_OUTPUT_TOKENS caps any single response.
+    CHAT_MAX_TOKENS_PER_TURN: int = 200_000
+    CHAT_MAX_OUTPUT_TOKENS: int = 8_192
+    # Per-user request limits for POST /chat. 0 disables a window.
+    CHAT_RATE_LIMIT_PER_MINUTE: int = 10
+    CHAT_RATE_LIMIT_PER_DAY: int = 300
+    CHAT_CONVERSATION_TTL_SECONDS: int = 60 * 60 * 24 * 7
+    CHAT_MODEL: str | None = "openai/gpt-5.6-luna"
+    # Smarter model for the Premium tier; unset falls back to CHAT_MODEL.
+    CHAT_PREMIUM_MODEL: str | None = None
+    TAVILY_API_KEY: str | None = None
+    CHAT_WEB_SEARCH_MAX_RESULTS: int = 5
+    # Chat observability: persist turns/llm-calls/tool-calls to Postgres.
+    CHAT_OBSERVABILITY_ENABLED: bool = True
+    # In-progress billing reservations older than this stop consuming quota.
+    CHAT_TURN_RESERVATION_TTL_SECONDS: int = 900
+
+    @property
+    def chat_allowed_user_uuids(self) -> set[str]:
+        return {
+            raw_uuid.strip()
+            for raw_uuid in self.CHAT_ALLOWED_USER_UUIDS.split(",")
+            if raw_uuid.strip()
+        }
 
     # Feedback
     TELEGRAM_BOT_TOKEN: str
@@ -194,7 +207,125 @@ class Settings(BaseSettings):
     AXIOM_SLOW_REQUEST_THRESHOLD_MS: int = 2000  # Consider requests >2s as slow
 
     DEPLOYMENT_ID: str | None = None  # For tracking deployments
+    # Unset means production so a forgotten variable fails closed. Use
+    # "development", "staging" or "test" elsewhere.
+    ENVIRONMENT: str = "production"
     REGION: str | None = None  # e.g., "us-east-1", "eu-west-1"
+
+    # ---------- Polar.sh subscriptions ----------
+    POLAR_ACCESS_TOKEN: str | None = None
+    POLAR_WEBHOOK_SECRET: str | None = None
+    POLAR_ORGANIZATION_ID: str | None = None
+    # "sandbox" targets api.sandbox.polar.sh; "production" targets api.polar.sh.
+    POLAR_SERVER: str = "sandbox"
+    # Public base URL of this backend, used to build Polar success_url for
+    # checkout. Falls back to SERVER_HOST when not set.
+    POLAR_SUCCESS_URL_BASE: AnyHttpUrl | None = None
+    # Polar product ids per paying tier. Optional in sandbox; production
+    # startup requires two non-empty, unique ids.
+    POLAR_PRODUCT_TIER1_ID: str | None = None
+    POLAR_PRODUCT_TIER2_ID: str | None = None
+    POLAR_WEBHOOK_MAX_BYTES: int = 262_144
+    # Paid access lapses this long after `current_period_end` unless a renewal
+    # webhook moved the period forward, so missed webhooks can't grant access
+    # forever.
+    SUBSCRIPTION_RENEWAL_GRACE_HOURS: int = 72
+    # Master switch. None/unset = auto-enable when POLAR_ACCESS_TOKEN is set.
+    # Explicit false always disables (even if a token is present). Explicit true
+    # (or auto-enable) requires access token + webhook secret + org id.
+    SUBSCRIPTIONS_ENABLED: bool | None = None
+    # Used only when SUBSCRIPTIONS_ENABLED is False. Sandbox/dev default is
+    # tier2 (Premium model, investments) locally; production (ENVIRONMENT or
+    # POLAR_SERVER) always forces free (see validators).
+    SUBSCRIPTIONS_DEV_DEFAULT_TIER: str = "tier2"
+
+    @field_validator("POLAR_SERVER")
+    def _polar_server_value(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v not in ("sandbox", "production"):
+            raise ValueError("POLAR_SERVER must be 'sandbox' or 'production'")
+        return v
+
+    @field_validator("SUBSCRIPTIONS_DEV_DEFAULT_TIER")
+    def _dev_default_tier_value(cls, v: str, info: dict[str, Any]) -> str:
+        v = (v or "").strip().lower()
+        if v not in ("free", "tier1", "tier2"):
+            v = "tier2"
+        # Fail closed in production: never grant a paid tier when Polar is off.
+        if info.data.get("POLAR_SERVER") == "production":
+            return "free"
+        return v
+
+    @field_validator("SUBSCRIPTIONS_ENABLED", mode="before")
+    def _subscriptions_enabled_requires_creds(
+        cls, v: Any, info: dict[str, Any]
+    ) -> bool:
+        has_token = bool((info.data.get("POLAR_ACCESS_TOKEN") or "").strip())
+
+        if v is None or (isinstance(v, str) and not v.strip()):
+            enabled = has_token
+        elif v is False or (
+            isinstance(v, str) and v.strip().lower() in ("false", "0", "no", "off")
+        ):
+            enabled = False
+        elif v is True or (
+            isinstance(v, str) and v.strip().lower() in ("true", "1", "yes", "on")
+        ):
+            enabled = True
+        else:
+            enabled = has_token
+
+        if enabled:
+            missing = [
+                name
+                for name in (
+                    "POLAR_ACCESS_TOKEN",
+                    "POLAR_WEBHOOK_SECRET",
+                    "POLAR_ORGANIZATION_ID",
+                )
+                if not (info.data.get(name) or "").strip()
+            ]
+            if missing:
+                raise ValueError(
+                    "SUBSCRIPTIONS_ENABLED=true requires: " + ", ".join(missing)
+                )
+        return enabled
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.strip().lower() in ("production", "prod")
+
+    @model_validator(mode="after")
+    def _validate_production_polar(self) -> "Settings":
+        if self.is_production:
+            if not self.SUBSCRIPTIONS_ENABLED:
+                # Fail closed: never hand every user a paid tier in production,
+                # even when POLAR_SERVER was left at its sandbox default.
+                self.SUBSCRIPTIONS_DEV_DEFAULT_TIER = "free"
+            elif self.POLAR_SERVER != "production":
+                raise ValueError(
+                    "ENVIRONMENT=production with subscriptions enabled requires "
+                    "POLAR_SERVER=production; sandbox test cards would unlock "
+                    "paid tiers"
+                )
+        if not self.SUBSCRIPTIONS_ENABLED or self.POLAR_SERVER != "production":
+            return self
+
+        product_ids = [
+            (self.POLAR_PRODUCT_TIER1_ID or "").strip(),
+            (self.POLAR_PRODUCT_TIER2_ID or "").strip(),
+        ]
+        if not all(product_ids):
+            raise ValueError(
+                "Production subscriptions require all POLAR_PRODUCT_TIER*_ID values"
+            )
+        if len(set(product_ids)) != len(product_ids):
+            raise ValueError("Production Polar product ids must be unique")
+
+        success_base = str(self.POLAR_SUCCESS_URL_BASE or self.SERVER_HOST)
+        if not success_base.lower().startswith("https://"):
+            raise ValueError("Production Polar checkout success URL must use HTTPS")
+        return self
 
     @field_validator("WHATSAPP_ENABLED", mode="before")
     def get_whatsapp_enabled(cls, v: bool, info: dict[str, Any]) -> bool:

@@ -8,6 +8,7 @@ Covers:
 """
 from datetime import datetime, timedelta, timezone
 
+from app.core.config import settings
 from app.models.user import User
 from httpx import AsyncClient
 from jose import jwt
@@ -15,6 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.conftest import create_test_token
 from tests.utils import create_test_user
+
+
+def assert_user_me_response(body: dict[str, object], user: User) -> None:
+    """Assert the current /users/me response contract."""
+    assert body == {
+        "id": user.id,
+        "email": user.email,
+        "country": user.country,
+        "subscription_tier": settings.SUBSCRIPTIONS_DEV_DEFAULT_TIER,
+    }
 
 
 def local_token_payload(user_id: int, *, expires_delta: timedelta) -> dict[str, object]:
@@ -131,8 +142,7 @@ class TestProtectedEndpoint:
         )
 
         assert response.status_code == 200
-        body = response.json()
-        assert body == {"country": test_user.country}
+        assert_user_me_response(response.json(), test_user)
 
     async def test_no_token_returns_401(self, unauth_client: AsyncClient):
         """Request without Authorization header is rejected."""
@@ -170,7 +180,7 @@ class TestHS256TokenValidation:
         )
 
         assert response.status_code == 200
-        assert response.json() == {"country": test_user.country}
+        assert_user_me_response(response.json(), test_user)
 
     async def test_expired_token_rejected(
         self,
@@ -268,4 +278,4 @@ class TestLoginFlow:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert verify_resp.status_code == 200
-        assert verify_resp.json() == {"country": user.country}
+        assert_user_me_response(verify_resp.json(), user)

@@ -1,0 +1,570 @@
+import asyncio
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from app.core.config import settings
+from app.core.tiers import Tier, configure_product_ids
+from app.crud import crud_subscription
+from app.models.subscription import UserSubscription
+from app.models.user import User
+from app.services import polar as polar_service
+from app.services.clerk import ClerkProfile
+from fastapi import HTTPException
+from httpx import Response
+from polar_sdk.models import ResourceNotFound, ResourceNotFoundData
+from sqlalchemy import delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests.conftest import TestSessionLocal
+
+
+def _subscription(user_id: int, *, tier: str = "tier1") -> UserSubscription:
+    return UserSubscription(
+        user_id=user_id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        tier=tier,
+        status="active",
+        current_period_start=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+
+
+@pytest.mark.parametrize(
+    ("event_type", "status", "data", "expected"),
+    [
+        ("subscription.updated", "active", SimpleNamespace(), 20),
+        ("subscription.updated", "past_due", SimpleNamespace(), 50),
+        ("subscription.updated", "unpaid", SimpleNamespace(), 70),
+        (
+            "subscription.updated",
+            "active",
+            SimpleNamespace(cancel_at_period_end=True),
+            60,
+        ),
+    ],
+)
+def test_equal_timestamp_priority_uses_payload_lifecycle_severity(
+    event_type: str, status: str, data: SimpleNamespace, expected: int
+) -> None:
+    assert (
+        polar_service._subscription_event_priority(event_type, status, data) == expected
+    )
+
+
+async def test_webhook_persists_scheduled_cancellation_lifecycle(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    test_user.polar_customer_id = "customer_test"
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(days=10)
+    event = SimpleNamespace(
+        TYPE="subscription.canceled",
+        timestamp=now,
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_1",
+            status="active",
+            current_period_start=now - timedelta(days=20),
+            current_period_end=ends_at,
+            cancel_at_period_end=True,
+            canceled_at=now,
+            ends_at=ends_at,
+            ended_at=None,
+            pending_update=None,
+        ),
+    )
+    await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.status == "active"
+    assert row.cancel_at_period_end is True
+    assert row.ends_at == ends_at
+    assert row.ended_at is None
+
+
+async def test_revoked_event_is_persisted_as_immediate_loss(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    test_user.polar_customer_id = "customer_test"
+    now = datetime.now(timezone.utc)
+    event = SimpleNamespace(
+        TYPE="subscription.revoked",
+        timestamp=now,
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_1",
+            status="canceled",
+            current_period_start=now - timedelta(days=1),
+            current_period_end=now + timedelta(days=29),
+            cancel_at_period_end=False,
+            canceled_at=now,
+            ends_at=now,
+            ended_at=now,
+            pending_update=None,
+        ),
+    )
+    await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.status == "revoked"
+    assert row.ended_at == now
+
+
+async def test_stale_webhook_still_repairs_entitlement_cache(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    test_user.polar_customer_id = "customer_test"
+    current = datetime.now(timezone.utc)
+    row = _subscription(test_user.id)
+    row.last_event_at = current
+    db_session.add(row)
+    await db_session.commit()
+    event = SimpleNamespace(
+        TYPE="subscription.active",
+        timestamp=current - timedelta(seconds=1),
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_1",
+            status="active",
+            current_period_start=current - timedelta(days=1),
+            current_period_end=current + timedelta(days=29),
+            cancel_at_period_end=False,
+            canceled_at=None,
+            ends_at=None,
+            ended_at=None,
+            pending_update=None,
+        ),
+    )
+
+    affected_user_id = await polar_service.handle_polar_event(db_session, event)
+
+    assert affected_user_id == test_user.id
+
+
+async def test_customer_creation_fetches_missing_email_from_clerk(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
+    test_user.email = None
+    test_user.name = None
+    test_user.uuid = "user_clerk_test"
+
+    create = AsyncMock(return_value=SimpleNamespace(id="customer_test"))
+    client = SimpleNamespace(
+        customers=SimpleNamespace(
+            get_external_async=AsyncMock(
+                side_effect=ResourceNotFound(
+                    data=ResourceNotFoundData(detail="missing"),
+                    raw_response=Response(404),
+                )
+            ),
+            create_async=create,
+        )
+    )
+    get_profile = AsyncMock(
+        return_value=ClerkProfile(email="clerk@example.com", name="Clerk User")
+    )
+    monkeypatch.setattr(polar_service, "get_polar_client", lambda: client)
+    monkeypatch.setattr(polar_service, "get_clerk_profile", get_profile)
+
+    customer_id = await polar_service.ensure_customer(db_session, test_user)
+
+    assert customer_id == "customer_test"
+    get_profile.assert_awaited_once_with("user_clerk_test")
+    assert create.await_args.kwargs["request"] == {
+        "external_id": "user_clerk_test",
+        "email": "clerk@example.com",
+        "name": "Clerk User",
+        "metadata": {"toston_user_id": str(test_user.id)},
+    }
+
+
+async def test_webhook_claim_is_atomic_and_rollback_releases_it(
+    db_session: AsyncSession,
+) -> None:
+    assert await crud_subscription.claim_webhook(db_session, "delivery_test")
+    assert not await crud_subscription.claim_webhook(db_session, "delivery_test")
+    await db_session.rollback()
+    assert await crud_subscription.claim_webhook(db_session, "delivery_test")
+
+
+async def test_older_webhook_snapshots_cannot_overwrite_newer_state(
+    db_session: AsyncSession, test_user: User
+) -> None:
+    configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
+    db_session.add(_subscription(test_user.id))
+    await db_session.commit()
+
+    newer_at = datetime.now(timezone.utc)
+    newer = await crud_subscription.upsert_from_webhook(
+        db_session,
+        user_id=test_user.id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        product_id="product_2",
+        status="active",
+        current_period_start=newer_at,
+        current_period_end=None,
+        canceled_at=None,
+        event_at=newer_at,
+    )
+    await db_session.commit()
+    assert newer is not None
+    assert newer.tier == "tier2"
+
+    for stale_at in (newer_at - timedelta(seconds=1),):
+        stale = await crud_subscription.upsert_from_webhook(
+            db_session,
+            user_id=test_user.id,
+            polar_customer_id="customer_test",
+            polar_subscription_id="subscription_test",
+            product_id="product_1",
+            status="canceled",
+            current_period_start=stale_at,
+            current_period_end=None,
+            canceled_at=stale_at,
+            event_at=stale_at,
+        )
+        assert stale is None
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.tier == "tier2"
+    assert row.status == "active"
+
+
+async def test_equal_timestamp_distinct_events_use_fail_closed_priority(
+    db_session: AsyncSession, test_user: User
+) -> None:
+    configure_product_ids({"tier1": "product_1"})
+    event_at = datetime.now(timezone.utc)
+    active = await crud_subscription.upsert_from_webhook(
+        db_session,
+        user_id=test_user.id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        product_id="product_1",
+        status="active",
+        current_period_start=event_at,
+        current_period_end=event_at + timedelta(days=30),
+        canceled_at=None,
+        event_at=event_at,
+        event_priority=30,
+    )
+    assert active is not None
+    revoked = await crud_subscription.upsert_from_webhook(
+        db_session,
+        user_id=test_user.id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        product_id="product_1",
+        status="revoked",
+        current_period_start=event_at,
+        current_period_end=event_at + timedelta(days=30),
+        canceled_at=event_at,
+        ended_at=event_at,
+        event_at=event_at,
+        event_priority=70,
+    )
+    assert revoked is not None
+
+    replay_active = await crud_subscription.upsert_from_webhook(
+        db_session,
+        user_id=test_user.id,
+        polar_customer_id="customer_test",
+        polar_subscription_id="subscription_test",
+        product_id="product_1",
+        status="active",
+        current_period_start=event_at,
+        current_period_end=event_at + timedelta(days=30),
+        canceled_at=None,
+        event_at=event_at,
+        event_priority=30,
+    )
+    assert replay_active is None
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.status == "revoked"
+
+
+async def test_concurrent_first_webhooks_serialize_without_unique_violation() -> None:
+    configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
+    email = f"polar-race-{uuid4()}@example.com"
+    customer_id = f"customer-{uuid4()}"
+
+    async with TestSessionLocal() as setup:
+        user = User(email=email, country="USD", is_active=True, is_superuser=False)
+        setup.add(user)
+        await setup.commit()
+        user_id = user.id
+
+    older_at = datetime.now(timezone.utc)
+    newer_at = older_at + timedelta(milliseconds=1)
+
+    async def apply(product_id: str, event_at: datetime) -> None:
+        async with TestSessionLocal() as session:
+            await crud_subscription.upsert_from_webhook(
+                session,
+                user_id=user_id,
+                polar_customer_id=customer_id,
+                polar_subscription_id="subscription-race",
+                product_id=product_id,
+                status="active",
+                current_period_start=older_at,
+                current_period_end=None,
+                canceled_at=None,
+                event_at=event_at,
+            )
+            await session.commit()
+
+    try:
+        await asyncio.gather(
+            apply("product_1", older_at),
+            apply("product_2", newer_at),
+        )
+        async with TestSessionLocal() as verify:
+            row = await crud_subscription.get_by_user(verify, user_id)
+            assert row is not None
+            assert row.polar_customer_id == customer_id
+            assert row.tier == "tier2"
+            assert row.last_event_at == newer_at
+    finally:
+        async with TestSessionLocal() as cleanup:
+            await cleanup.execute(
+                delete(UserSubscription).where(UserSubscription.user_id == user_id)
+            )
+            await cleanup.execute(delete(User).where(User.id == user_id))
+            await cleanup.commit()
+
+
+async def test_transient_customer_lookup_is_retryable(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = SimpleNamespace(
+        customers=SimpleNamespace(get_async=AsyncMock(side_effect=RuntimeError("down")))
+    )
+    monkeypatch.setattr(polar_service, "get_polar_client", lambda: client)
+
+    with pytest.raises(RuntimeError, match="down"):
+        await polar_service._resolve_user_from_polar_customer(
+            db_session, "missing_customer"
+        )
+
+
+async def test_unknown_product_never_replaces_existing_entitlement(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
+    test_user.polar_customer_id = "customer_test"
+    db_session.add(_subscription(test_user.id, tier="tier2"))
+    await db_session.commit()
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+
+    event = SimpleNamespace(
+        TYPE="subscription.updated",
+        timestamp=datetime.now(timezone.utc),
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_unknown",
+            status="active",
+            pending_update=None,
+        ),
+    )
+    await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.tier == "tier2"
+    assert row.status == "active"
+
+
+async def test_unknown_product_revocation_still_removes_access(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
+    test_user.polar_customer_id = "customer_test"
+    db_session.add(_subscription(test_user.id, tier="tier2"))
+    await db_session.commit()
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    now = datetime.now(timezone.utc)
+
+    event = SimpleNamespace(
+        TYPE="subscription.revoked",
+        timestamp=now,
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_retired",
+            status="canceled",
+            ended_at=now,
+            pending_update=None,
+        ),
+    )
+    affected = await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert affected == test_user.id
+    assert row is not None
+    assert row.tier == "tier2"
+    assert row.status == "revoked"
+    assert row.ended_at == now
+
+
+async def test_unknown_product_scheduled_cancel_sets_end_date(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
+    test_user.polar_customer_id = "customer_test"
+    db_session.add(_subscription(test_user.id, tier="tier2"))
+    await db_session.commit()
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    now = datetime.now(timezone.utc)
+    ends_at = now + timedelta(days=5)
+
+    event = SimpleNamespace(
+        TYPE="subscription.canceled",
+        timestamp=now,
+        data=SimpleNamespace(
+            id="subscription_test",
+            customer_id="customer_test",
+            product_id="product_retired",
+            status="active",
+            cancel_at_period_end=True,
+            current_period_end=ends_at,
+            ends_at=ends_at,
+            pending_update=None,
+        ),
+    )
+    await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert row is not None
+    assert row.tier == "tier2"
+    assert row.cancel_at_period_end is True
+    assert row.ends_at == ends_at
+
+
+async def test_unknown_product_cancel_of_other_subscription_is_ignored(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configure_product_ids({"tier1": "product_1", "tier2": "product_2"})
+    test_user.polar_customer_id = "customer_test"
+    db_session.add(_subscription(test_user.id, tier="tier2"))
+    await db_session.commit()
+    monkeypatch.setattr(polar_service, "_product_ids_configured", True)
+    now = datetime.now(timezone.utc)
+
+    event = SimpleNamespace(
+        TYPE="subscription.revoked",
+        timestamp=now,
+        data=SimpleNamespace(
+            id="some_other_subscription",
+            customer_id="customer_test",
+            product_id="product_retired",
+            status="canceled",
+            ended_at=now,
+            pending_update=None,
+        ),
+    )
+    affected = await polar_service.handle_polar_event(db_session, event)
+    await db_session.commit()
+
+    row = await crud_subscription.get_by_user(db_session, test_user.id)
+    assert affected is None
+    assert row is not None
+    assert row.status == "active"
+    assert row.ended_at is None
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "expected_behavior"),
+    [
+        (Tier.tier1, Tier.tier2, "invoice"),
+        (Tier.tier2, Tier.tier1, "next_period"),
+    ],
+)
+async def test_change_plan_uses_directional_proration(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+    current: Tier,
+    target: Tier,
+    expected_behavior: str,
+) -> None:
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
+    monkeypatch.setattr(polar_service, "_product_ids_configured", False)
+    monkeypatch.setattr(settings, "POLAR_PRODUCT_TIER1_ID", "product_1")
+    monkeypatch.setattr(settings, "POLAR_PRODUCT_TIER2_ID", "product_2")
+    test_user.polar_customer_id = "customer_test"
+    db_session.add(_subscription(test_user.id, tier=current.value))
+    await db_session.commit()
+
+    update = AsyncMock(
+        return_value=SimpleNamespace(
+            pending_update=(
+                SimpleNamespace(applies_at=datetime.now(timezone.utc))
+                if expected_behavior == "next_period"
+                else None
+            )
+        )
+    )
+    client = SimpleNamespace(subscriptions=SimpleNamespace(update_async=update))
+    monkeypatch.setattr(polar_service, "get_polar_client", lambda: client)
+
+    result = await polar_service.change_plan(db_session, test_user, target)
+
+    request = update.await_args.kwargs["subscription_update"]
+    assert request["proration_behavior"].value == expected_behavior
+    assert result.effective == (
+        "immediate" if expected_behavior == "invoice" else "next_period"
+    )
+
+
+async def test_checkout_rejects_existing_live_subscription(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", True)
+    db_session.add(_subscription(test_user.id))
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await polar_service.create_checkout(db_session, test_user, Tier.tier2)
+    assert exc_info.value.status_code == 409

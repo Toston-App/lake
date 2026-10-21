@@ -43,6 +43,8 @@ from app.utilities.investment_telemetry import (
 
 router = APIRouter()
 
+LAPSED_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
+
 
 @router.get("", response_model=list[Asset])
 async def list_assets(
@@ -526,6 +528,7 @@ async def refresh_all_prices(
 
     By default, only refreshes assets the user has holdings in.
     Set only_my_holdings=false to refresh all active assets (admin).
+    Users whose subscription lapsed can refresh once every 24 hours.
     """
     if not only_my_holdings and not crud.user.is_superuser(current_user):
         fail_investment_event(
@@ -536,13 +539,23 @@ async def refresh_all_prices(
             detail="Only superusers can refresh all asset prices",
         )
 
-    limiter_key = (
-        "global:refresh-prices"
-        if not only_my_holdings
-        else f"user:{current_user.id}:refresh-prices"
-    )
     with investment_stage(request, "rate_limit"):
-        await enforce_investment_rate_limit(limiter_key, 30.0)
+        if getattr(request.state, "investments_read_only", False):
+            # Lapsed subscribers keep a daily refresh so their read-only
+            # portfolio doesn't go stale.
+            await enforce_investment_rate_limit(
+                f"user:{current_user.id}:refresh-prices:lapsed",
+                LAPSED_REFRESH_INTERVAL_SECONDS,
+                detail="Your subscription is inactive: prices can be refreshed "
+                "once every 24 hours until you renew",
+            )
+        else:
+            limiter_key = (
+                "global:refresh-prices"
+                if not only_my_holdings
+                else f"user:{current_user.id}:refresh-prices"
+            )
+            await enforce_investment_rate_limit(limiter_key, 30.0)
     owner_id = current_user.id if only_my_holdings else None
 
     with investment_stage(request, "bulk_price_refresh"):

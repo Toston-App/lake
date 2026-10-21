@@ -5,7 +5,11 @@ from fastapi import HTTPException
 from app.utilities.redis import r
 
 
-async def enforce_investment_rate_limit(key: str, seconds: float) -> None:
+async def enforce_investment_rate_limit(
+    key: str,
+    seconds: float,
+    detail: str = "Too many external data requests",
+) -> None:
     """Atomically throttle costly operations across workers and replicas."""
     redis_key = f"rate-limit:investments:{key}"
     try:
@@ -16,4 +20,4 @@ async def enforce_investment_rate_limit(key: str, seconds: float) -> None:
             detail="Investment request throttling is temporarily unavailable",
         ) from exc
     if not acquired:
-        raise HTTPException(status_code=429, detail="Too many external data requests")
+        raise HTTPException(status_code=429, detail=detail)

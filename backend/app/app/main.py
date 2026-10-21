@@ -95,7 +95,7 @@ app.add_middleware(
     deployment_id=settings.DEPLOYMENT_ID
     or os.getenv("RAILWAY_DEPLOYMENT_ID"),  # Auto-detect Railway
     region=settings.REGION or os.getenv("RAILWAY_REGION"),
-    environment=os.getenv("ENVIRONMENT", "production"),
+    environment=settings.ENVIRONMENT,
     sample_rate=settings.AXIOM_SAMPLE_RATE,
     slow_request_threshold_ms=settings.AXIOM_SLOW_REQUEST_THRESHOLD_MS,
 )
@@ -159,6 +159,7 @@ app.add_middleware(
         "https://localhost:8080",
         "https://localhost:8888",
         "https://localhost:9000",
+        *settings.BACKEND_CORS_ORIGINS,
     ],
     allow_credentials=True,
     allow_methods=["*"],

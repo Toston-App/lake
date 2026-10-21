@@ -1,13 +1,12 @@
-from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app import crud, models, schemas
+from app import models, schemas
 from app.api import deps
+from app.services import catalog as catalog_service
+from app.services.errors import ServiceError, raise_http
 from app.utilities.wide_events import enrich_event
 
 router = APIRouter()
@@ -30,12 +29,9 @@ async def read_categories(
         query={"type": "list_categories", "skip": skip, "limit": limit},
     )
 
-    if crud.user.is_superuser(current_user):
-        categories = await crud.category.get_multi(db, skip=skip, limit=limit)
-    else:
-        categories = await crud.category.get_multi_by_owner(
-            db=db, owner_id=current_user.id, skip=skip, limit=limit
-        )
+    categories = await catalog_service.list_categories(
+        db, current_user, skip=skip, limit=limit
+    )
 
     enrich_event(request, database={"operation": "list_categories", "results_count": len(categories)})
     return categories
@@ -58,9 +54,7 @@ async def create_category(
         operation={"type": "create_category"},
     )
 
-    category = await crud.category.create_with_owner(
-        db=db, obj_in=category_in, owner_id=current_user.id
-    )
+    category = await catalog_service.create_category(db, current_user, category_in)
 
     enrich_event(request, database={"operation": "create_category", "id": category.id})
     return category
@@ -83,22 +77,10 @@ async def read_category(
         query={"type": "get_category_by_id", "category_id": id},
     )
 
-    result = await db.execute(
-        select(models.Category)
-        .options(selectinload(models.Category.subcategories))
-        .filter(models.Category.id == id)
-    )
-    category = result.scalar_one_or_none()
-
-    if not category:
-        raise HTTPException(status_code=404, detail="Category not found")
-
-    if not crud.user.is_superuser(current_user) and (
-        category.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=403, detail="Not enough permissions")
-
-    return category
+    try:
+        return await catalog_service.get_category(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.put("/{id}", response_model=schemas.Category)
@@ -119,22 +101,10 @@ async def update_category(
         operation={"type": "update_category", "category_id": id},
     )
 
-    category = await read_category(db=db, id=id, current_user=current_user, request=request)
-
-    # TODO: Check there are changes
-
-    category_in.updated_at = datetime.now(timezone.utc)
-    category = await crud.category.update(db=db, db_obj=category, obj_in=category_in)
-
-    # Re-fetch with subcategories loaded to avoid lazy-load error on response serialization
-    result = await db.execute(
-        select(models.Category)
-        .options(selectinload(models.Category.subcategories))
-        .filter(models.Category.id == id)
-    )
-    category = result.scalar_one()
-
-    return category
+    try:
+        return await catalog_service.update_category(db, current_user, id, category_in)
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
@@ -154,11 +124,9 @@ async def delete_category(
         operation={"type": "delete_category", "category_id": id},
     )
 
-    category = await read_category(db=db, id=id, current_user=current_user, request=request)
-
-    if category.is_income:
-        raise HTTPException(status_code=400, detail="This item cannot be deleted")
-
-    await crud.category.remove(db=db, id=id)
+    try:
+        await catalog_service.delete_category(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")

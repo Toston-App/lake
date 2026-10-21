@@ -1,11 +1,12 @@
-from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud, models, schemas
+from app import models, schemas
 from app.api import deps
+from app.services import catalog as catalog_service
+from app.services.errors import ServiceError, raise_http
 from app.utilities.wide_events import enrich_event
 
 router = APIRouter()
@@ -28,12 +29,9 @@ async def read_subcategories(
         query={"type": "list_subcategories", "skip": skip, "limit": limit},
     )
 
-    if crud.user.is_superuser(current_user):
-        categories = await crud.subcategory.get_multi(db, skip=skip, limit=limit)
-    else:
-        categories = await crud.subcategory.get_multi_by_owner(
-            db=db, owner_id=current_user.id, skip=skip, limit=limit
-        )
+    categories = await catalog_service.list_subcategories(
+        db, current_user, skip=skip, limit=limit
+    )
 
     enrich_event(request, database={"operation": "list_subcategories", "results_count": len(categories)})
     return categories
@@ -56,9 +54,12 @@ async def create_subcategory(
         operation={"type": "create_subcategory"},
     )
 
-    subcategory = await crud.subcategory.create_with_owner(
-        db=db, obj_in=subcategory_in, owner_id=current_user.id
-    )
+    try:
+        subcategory = await catalog_service.create_subcategory(
+            db, current_user, subcategory_in
+        )
+    except ServiceError as exc:
+        raise_http(exc)
 
     enrich_event(request, database={"operation": "create_subcategory", "id": subcategory.id})
     return subcategory
@@ -81,14 +82,10 @@ async def read_subcategory(
         query={"type": "get_subcategory_by_id", "subcategory_id": id},
     )
 
-    subcategory = await crud.subcategory.get(db=db, id=id)
-    if not subcategory:
-        raise HTTPException(status_code=404, detail="Subcategory not found")
-    if not crud.user.is_superuser(current_user) and (
-        subcategory.owner_id != current_user.id
-    ):
-        raise HTTPException(status_code=400, detail="Not enough permissions")
-    return subcategory
+    try:
+        return await catalog_service.get_subcategory(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.put("/{id}", response_model=schemas.Subcategory)
@@ -109,14 +106,12 @@ async def update_subcategory(
         operation={"type": "update_subcategory", "subcategory_id": id},
     )
 
-    subcategory = await read_subcategory(db=db, id=id, current_user=current_user, request=request)
-
-    category_in.updated_at = datetime.now(timezone.utc)
-    subcategory = await crud.subcategory.update(
-        db=db, db_obj=subcategory, obj_in=category_in
-    )
-
-    return subcategory
+    try:
+        return await catalog_service.update_subcategory(
+            db, current_user, id, category_in
+        )
+    except ServiceError as exc:
+        raise_http(exc)
 
 
 @router.delete("/{id}", response_model=schemas.DeletionResponse)
@@ -136,7 +131,9 @@ async def delete_subcategory(
         operation={"type": "delete_subcategory", "subcategory_id": id},
     )
 
-    await read_subcategory(db=db, id=id, current_user=current_user, request=request)
-    await crud.subcategory.remove(db=db, id=id)
+    try:
+        await catalog_service.delete_subcategory(db, current_user, id)
+    except ServiceError as exc:
+        raise_http(exc)
 
     return schemas.DeletionResponse(message=f"Item {id} deleted")

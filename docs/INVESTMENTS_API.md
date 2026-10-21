@@ -98,17 +98,30 @@ const headers = {
 
 ### Investment Data Security Rules
 
-All investment endpoints are protected by an environment-controlled feature gate:
+All investment endpoints are behind an environment switch and a subscription check:
 
 ```env
 INVESTMENTS_ENABLED=true
-INVESTMENTS_ALLOWED_USER_IDS=1,42
-INVESTMENTS_ALLOWED_USER_UUIDS=user_abc,user_xyz
 ```
 
-The feature is disabled by default. When enabled, active superusers and active users whose
-database ID or UUID appears in the corresponding comma-separated allowlist can access
-`/api/v1/investments/**`. Other authenticated users receive `403 Forbidden`.
+The feature is disabled by default (`403 Forbidden`). When enabled, access to
+`/api/v1/investments/**` depends on the user's subscription:
+
+| User | Reads (`GET`) | Writes (`POST`, `PUT`, `DELETE`) |
+|------|---------------|----------------------------------|
+| Any paid tier (the `investments` feature in `app/core/tiers.py`), or a superuser | yes | yes |
+| Had a subscription that is now canceled, revoked or past due | yes (read-only) | `402`: `Your subscription is inactive: investments are read-only until you renew` |
+| Never subscribed | `402`: `Investments require an active paid subscription` | `402`: same |
+
+Read-only users can still see their holdings, transactions, portfolio and prices, but
+can't add, edit or delete holdings or transactions until they renew. They can call
+`POST /assets/refresh-prices` once every 24 hours; a second call within that window
+returns `429`. A scheduled cancellation keeps full access until its end date.
+
+The tier comes from the same entitlement resolution as chat (see
+[POLAR_SUBSCRIPTIONS.md](./POLAR_SUBSCRIPTIONS.md)). With subscriptions disabled, every user
+gets `SUBSCRIPTIONS_DEV_DEFAULT_TIER`, which is forced to `free` in production, so only
+superusers keep access there.
 
 - Asset records are global and shared by all portfolios. Only superusers may create,
   update, or deactivate them directly. Regular users can still add assets through the
@@ -710,6 +723,8 @@ Bulk refresh prices for tracked assets.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `only_my_holdings` | boolean | true | Only refresh assets in user's portfolio |
+
+Users whose subscription lapsed can call this once every 24 hours (`429` otherwise).
 
 **Response Schema:**
 

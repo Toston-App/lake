@@ -141,7 +141,23 @@ async def read_user_me(
     """
     Get current user.
     """
-    return current_user
+    # Attach the (cached) subscription tier so the frontend can show usage /
+    # upgrade prompts without a second round-trip.
+    tier_value = "free"
+    try:
+        from app.services.entitlements import get_user_tier
+
+        tier, _ = await get_user_tier(db, current_user.id)
+        tier_value = tier.value
+    except Exception:
+        # Never let entitlement resolution break /users/me.
+        pass
+    return schemas.UserGetMe(
+        id=current_user.id,
+        email=current_user.email,
+        country=current_user.country,
+        subscription_tier=tier_value,
+    )
 
 
 @router.post("/open", response_model=schemas.Msg)

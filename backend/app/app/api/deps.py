@@ -1,6 +1,7 @@
 import logging
 from collections.abc import AsyncGenerator, Generator
 from enum import Enum
+from typing import NoReturn
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
@@ -165,39 +166,90 @@ def get_current_active_user(
     return current_user
 
 
-def require_investments_access(
+def require_chat_access(
     current_user: models.User = Depends(get_current_active_user),
-    request: Request = None,
 ) -> models.User:
-    if request is not None:
-        from app.utilities.investment_telemetry import (
-            complete_investment_stage,
-            fail_investment_event,
-            start_investment_event,
+    """Require global chat enablement and UUID allowlisting ("*" allows all)."""
+    if not settings.CHAT_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Chat is disabled",
         )
-
-        start_investment_event(request, user_id=current_user.id)
-
-    allowed_by_id = current_user.id in settings.investments_allowed_user_ids
-    allowed_by_uuid = (
-        current_user.uuid is not None
-        and current_user.uuid in settings.investments_allowed_user_uuids
-    )
-    if not settings.INVESTMENTS_ENABLED or not (
-        crud.user.is_superuser(current_user) or allowed_by_id or allowed_by_uuid
+    allowed = settings.chat_allowed_user_uuids
+    if "*" not in allowed and (
+        current_user.uuid is None or current_user.uuid not in allowed
     ):
-        if request is not None:
-            fail_investment_event(
-                request,
-                reason="feature_access_denied",
-                stage="access",
-            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Investments feature access is not enabled for this user",
+            detail="Chat access is not enabled for this user",
         )
-    if request is not None:
-        complete_investment_stage(request, "access")
+    return current_user
+
+
+# Methods that only read investment data; everything else creates, edits or
+# deletes it.
+_INVESTMENT_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# Writes a lapsed subscriber may still make; the endpoint throttles them via
+# request.state.investments_read_only.
+_INVESTMENT_LAPSED_WRITES = frozenset(
+    {("POST", f"{settings.API_V1_STR}/investments/assets/refresh-prices")}
+)
+
+
+async def require_investments_access(
+    request: Request,
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(async_get_db),
+) -> models.User:
+    """Investments are a paid feature: any paid tier, or a superuser.
+
+    A user whose subscription lapsed (canceled, revoked, payment failure) keeps
+    read-only access so they can still see their portfolio, but can't add,
+    edit or delete anything until they renew. They may still refresh prices,
+    which the endpoint limits to once a day.
+    """
+    from app.core.tiers import FEATURE_INVESTMENTS, has_feature
+    from app.crud import crud_subscription
+    from app.services.entitlements import get_user_tier
+    from app.utilities.investment_telemetry import (
+        complete_investment_stage,
+        fail_investment_event,
+        start_investment_event,
+    )
+
+    start_investment_event(request, user_id=current_user.id)
+
+    def deny(status_code: int, reason: str, detail: str) -> NoReturn:
+        fail_investment_event(request, reason=reason, stage="access")
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    if not settings.INVESTMENTS_ENABLED:
+        deny(
+            status.HTTP_403_FORBIDDEN,
+            "feature_access_denied",
+            "Investments feature is not enabled",
+        )
+    if not crud.user.is_superuser(current_user):
+        tier, _ = await get_user_tier(db, current_user.id)
+        if not has_feature(tier, FEATURE_INVESTMENTS):
+            subscription = await crud_subscription.get_by_user(db, current_user.id)
+            if subscription is None or not subscription.polar_subscription_id:
+                deny(
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    "subscription_required",
+                    "Investments require an active paid subscription",
+                )
+            request.state.investments_read_only = True
+            if request.method not in _INVESTMENT_READ_METHODS and (
+                (request.method, request.url.path) not in _INVESTMENT_LAPSED_WRITES
+            ):
+                deny(
+                    status.HTTP_402_PAYMENT_REQUIRED,
+                    "subscription_inactive",
+                    "Your subscription is inactive: investments are read-only "
+                    "until you renew",
+                )
+    complete_investment_stage(request, "access")
     return current_user
 
 
