@@ -124,7 +124,7 @@ async def create_subscription_checkout(
     """Create a Polar checkout session for the requested tier.
 
     Returns a hosted URL the frontend should redirect to. Paid tiers only buy
-    chat capacity, so users without chat access can't start a checkout.
+    chat capacity, so checkout is unavailable while chat is disabled.
     """
     try:
         tier = tier_from_value(body.tier)

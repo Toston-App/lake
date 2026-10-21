@@ -186,7 +186,6 @@ SUBSCRIPTIONS_ENABLED=true
 POLAR_SERVER=production
 # production OAT, webhook secret, org id, product ids only
 # never reuse sandbox tokens or product ids
-CHAT_ALLOWED_USER_UUIDS=*   # or an explicit beta allowlist
 ```
 
 If Polar is off in production, everyone is **free** (`SUBSCRIPTIONS_DEV_DEFAULT_TIER` is forced to `free`).
@@ -391,7 +390,7 @@ Chat endpoints reserve quota and return **HTTP 402** when denied or **503** when
 
 Each turn has a budget of `CHAT_MAX_TOOL_ROUNDS` tool rounds and `CHAT_MAX_TOKENS_PER_TURN` tokens summed over its model calls. Once either is used up, the next model call runs with `tool_choice="none"` and must answer, so the turn ends with a reply, is billed like any other message, and goes over the token budget by at most that one call. `CHAT_MAX_OUTPUT_TOKENS` caps each response. The budget is deliberately not a Pydantic AI `total_tokens_limit`: that limit fires mid-stream, after the provider has already billed the call, so the user would get the whole answer and then an error.
 
-Checkout and plan changes require chat access (`CHAT_ALLOWED_USER_UUIDS`, `*` for everyone), so nobody can pay for a plan they can't use. Successful subscription webhooks invalidate Redis after the database commit so the next turn sees the new tier without waiting for TTL. An invalidation failure returns HTTP 500; Polar's duplicate retry replays the idempotent handler and repairs the cache.
+Checkout and plan changes require chat to be enabled (`CHAT_ENABLED`), so nobody can pay for a plan they can't use. Successful subscription webhooks invalidate Redis after the database commit so the next turn sees the new tier without waiting for TTL. An invalidation failure returns HTTP 500; Polar's duplicate retry replays the idempotent handler and repairs the cache.
 
 ### Reconciliation
 

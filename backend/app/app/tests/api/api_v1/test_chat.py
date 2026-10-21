@@ -126,7 +126,6 @@ async def test_confirm_pending_action(
 
     user = await crud.user.get_by_email(async_get_db, email=settings.EMAIL_TEST_USER)
     monkeypatch.setattr(settings, "CHAT_ENABLED", True)
-    monkeypatch.setattr(settings, "CHAT_ALLOWED_USER_UUIDS", user.uuid or "")
     conversation_id = "test-conv-confirm"
     action_id = "test-action-123"
 

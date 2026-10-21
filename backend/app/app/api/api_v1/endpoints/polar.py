@@ -1,8 +1,8 @@
 """Polar.sh webhook receiver.
 
 Public (unauthenticated) endpoint that Polar calls to deliver subscription
-lifecycle events. The payload signature is verified with
-`polar_sdk.webhooks.validate_event` using `POLAR_WEBHOOK_SECRET`; on
+lifecycle events. The payload signature is verified using
+`POLAR_WEBHOOK_SECRET` (Polar `polar_whs_` or Standard Webhooks `whsec_`); on
 verification failure we return 403. Unknown event types are acknowledged
 with 202 so Polar doesn't retry (forward compatibility).
 
@@ -43,6 +43,42 @@ async def _bounded_body(request: Request) -> bytes:
     return bytes(payload)
 
 
+def _validate_event(body: bytes, headers: dict[str, str], secret: str):
+    """Verify and parse a Polar webhook, accepting both secret formats.
+
+    `validate_event` base64-encodes the secret as text, which suits Polar's
+    `polar_whs_...` secrets but not Standard Webhooks `whsec_<base64 key>`
+    ones: those must be decoded to the key, so we verify them directly.
+    """
+    from polar_sdk.webhooks import (
+        WebhookUnknownTypeError,
+        WebhookVerificationError,
+        WebhoookPayload,
+        validate_event,
+    )
+
+    if not secret.startswith("whsec_"):
+        return validate_event(body=body, headers=headers, secret=secret)
+
+    from polar_sdk.models import WebhookEventType
+    from pydantic import TypeAdapter
+    from standardwebhooks.webhooks import Webhook
+    from standardwebhooks.webhooks import (
+        WebhookVerificationError as StandardWebhookVerificationError,
+    )
+
+    try:
+        data = Webhook(secret).verify(body, headers)
+    except StandardWebhookVerificationError as exc:
+        raise WebhookVerificationError(str(exc)) from exc
+
+    if isinstance(data, dict) and data.get("type") not in {
+        t.value for t in WebhookEventType
+    }:
+        raise WebhookUnknownTypeError(data.get("type"))
+    return TypeAdapter(WebhoookPayload).validate_python(data)
+
+
 @router.post("/webhook")
 async def polar_webhook(
     request: Request,
@@ -69,7 +105,6 @@ async def polar_webhook(
         from polar_sdk.webhooks import (
             WebhookUnknownTypeError,
             WebhookVerificationError,
-            validate_event,
         )
     except ImportError as exc:
         raise HTTPException(
@@ -82,11 +117,7 @@ async def polar_webhook(
         raise HTTPException(status_code=503, detail="Webhook secret not configured")
 
     try:
-        event = validate_event(
-            body=payload,
-            headers=dict(request.headers),
-            secret=secret,
-        )
+        event = _validate_event(payload, dict(request.headers), secret)
     except WebhookVerificationError:
         raise HTTPException(status_code=403, detail="Invalid webhook signature")
     except WebhookUnknownTypeError:
