@@ -161,10 +161,13 @@ def preview(data: schemas.RecurringPreviewRequest) -> schemas.RecurringPreview:
     rule = _rule_from_fields(data.model_dump())
     _validate_rule(rule)
     count = min(UPCOMING_PREVIEW, data.max_occurrences or UPCOMING_PREVIEW)
+    after = data.start_date if data.exclude_start else None
+    if after and data.max_occurrences:
+        count = min(count, data.max_occurrences - 1)
     return schemas.RecurringPreview(
         upcoming=[
             schemas.UpcomingOccurrence(nominal_date=o.nominal, date=o.actual)
-            for o in upcoming(rule, count)
+            for o in upcoming(rule, count, after_nominal=after, last_actual=after)
         ]
     )
 
@@ -297,7 +300,18 @@ async def create_recurring(
     if source_transaction is not None:
         template.occurrences_count = 1
         template.last_run_date = data.start_date
-    _reschedule(template)
+        # The transaction covers the start date itself, even when a weekend
+        # adjustment would move that date forward.
+        _set_next(
+            template,
+            next_occurrence(
+                rule_for(template),
+                after_nominal=data.start_date,
+                last_actual=data.start_date,
+            ),
+        )
+    else:
+        _reschedule(template)
     db.add(template)
     await db.flush()
     if source_transaction is not None:

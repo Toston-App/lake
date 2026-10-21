@@ -156,6 +156,8 @@ class RecurringTransactionDetail(RecurringTransaction):
 class RecurringPreviewRequest(RecurrenceRule):
     frequency: Frequency
     start_date: date
+    # The start date is an existing transaction (mark as recurring).
+    exclude_start: bool = False
 
 
 class RecurringPreview(BaseModel):

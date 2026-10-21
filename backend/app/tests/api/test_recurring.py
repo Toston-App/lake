@@ -6,7 +6,7 @@ pause/resume, skip, delete (keeping or removing generated transactions),
 validation and ownership.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
@@ -242,6 +242,24 @@ class TestPreview:
         assert upcoming[0] == {"nominal_date": "2025-02-15", "date": "2025-02-14"}
         assert upcoming[1] == {"nominal_date": "2025-02-28", "date": "2025-02-28"}
 
+    async def test_exclude_start_matches_mark_as_recurring(self, client: AsyncClient):
+        # Saturday 17 Oct 2026 is already recorded; Monday 19 is still pending.
+        resp = await client.post(
+            f"{PREFIX}/preview",
+            json={
+                "frequency": "weekly",
+                "weekdays": [0, 5],
+                "start_date": "2026-10-17",
+                "business_day_adjustment": "next",
+                "exclude_start": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert [o["date"] for o in resp.json()["upcoming"][:2]] == [
+            "2026-10-19",
+            "2026-10-26",
+        ]
+
 
 class TestFromTransaction:
     async def test_marks_existing_expense_as_recurring(
@@ -284,6 +302,26 @@ class TestFromTransaction:
             },
         )
         assert again.status_code == 400
+
+    async def test_saturday_transaction_moved_to_monday_is_not_duplicated(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        saturday = date(2026, 10, 17)
+        expense = await create_test_expense(
+            db_session, owner_id=test_user.id, expense_date=saturday
+        )
+        resp = await client.post(
+            f"{PREFIX}/from-transaction",
+            json={
+                "transaction_type": "expense",
+                "transaction_id": expense.id,
+                "frequency": "monthly",
+                "business_day_adjustment": "next",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["next_run_date"] == "2026-11-17"
+        assert len(await _expenses(db_session, resp.json()["id"])) == 1
 
     async def test_cannot_mark_other_users_transaction(
         self, client: AsyncClient, db_session: AsyncSession
