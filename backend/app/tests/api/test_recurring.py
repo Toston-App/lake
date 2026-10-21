@@ -303,6 +303,38 @@ class TestFromTransaction:
         )
         assert again.status_code == 400
 
+    async def test_overrides_fields_of_the_transaction(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        account = await create_test_account(db_session, owner_id=test_user.id)
+        other = await create_test_account(
+            db_session, owner_id=test_user.id, name="Card"
+        )
+        expense = await create_test_expense(
+            db_session,
+            owner_id=test_user.id,
+            amount=10,
+            description="Gym",
+            account_id=account.id,
+            expense_date=TODAY - timedelta(days=1),
+        )
+        resp = await client.post(
+            f"{PREFIX}/from-transaction",
+            json={
+                "transaction_type": "expense",
+                "transaction_id": expense.id,
+                "frequency": "monthly",
+                "amount": 12.5,
+                "account_id": other.id,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["amount"] == 12.5
+        assert data["account_id"] == other.id
+        assert data["description"] == "Gym"
+        assert data["start_date"] == (TODAY - timedelta(days=1)).isoformat()
+
     async def test_saturday_transaction_moved_to_monday_is_not_duplicated(
         self, client: AsyncClient, db_session: AsyncSession, test_user: User
     ):

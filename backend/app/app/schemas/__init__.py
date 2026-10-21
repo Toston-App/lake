@@ -69,6 +69,7 @@ from .recurring_transaction import (
     RecurringTransactionCreate,
     RecurringTransactionDetail,
     RecurringTransactionUpdate,
+    TemplateFields,
     UpcomingOccurrence,
 )
 from .holding import (

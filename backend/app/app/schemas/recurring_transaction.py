@@ -68,7 +68,9 @@ class RecurrenceRule(BaseModel):
         return v
 
 
-class RecurringTransactionFields(RecurrenceRule):
+class TemplateFields(BaseModel):
+    """What every generated transaction copies from its template."""
+
     description: str | None = None
     amount: float | None = Field(default=None, gt=0)
     account_id: int | None = None
@@ -76,12 +78,15 @@ class RecurringTransactionFields(RecurrenceRule):
     category_id: int | None = None
     subcategory_id: int | None = None
     place_id: int | None = None
-    start_date: date | None = None
 
     @field_validator("amount")
     @classmethod
     def round_amount(cls, v: float | None) -> float | None:
         return round(v, 2) if v is not None else v
+
+
+class RecurringTransactionFields(RecurrenceRule, TemplateFields):
+    start_date: date | None = None
 
 
 class RecurringTransactionCreate(RecurringTransactionFields):
@@ -102,8 +107,12 @@ class RecurringTransactionUpdate(RecurringTransactionFields):
     is_active: bool | None = None
 
 
-class RecurringFromTransaction(RecurrenceRule):
-    """Turn an existing transaction into a recurring template."""
+class RecurringFromTransaction(RecurrenceRule, TemplateFields):
+    """Turn an existing transaction into a recurring template.
+
+    Template fields default to the transaction's; any sent here override them.
+    The series always starts on the transaction's date.
+    """
 
     transaction_type: TransactionType
     transaction_id: int

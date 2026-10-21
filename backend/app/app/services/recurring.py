@@ -442,15 +442,17 @@ async def create_from_transaction(
             "place_id": transaction.place_id,
             "category_id": getattr(transaction, "category_id", None),
         }
+    copied.update(amount=transaction.amount, description=transaction.description)
+    template_fields = set(schemas.TemplateFields.model_fields)
+    copied.update(data.model_dump(exclude_unset=True, include=template_fields))
     start_date = transaction.date or local_today(data.timezone or "UTC")
     create_in = schemas.RecurringTransactionCreate(
         **data.model_dump(
-            exclude_none=True, exclude={"transaction_type", "transaction_id"}
+            exclude_none=True,
+            exclude=template_fields | {"transaction_type", "transaction_id"},
         ),
         **{k: v for k, v in copied.items() if v is not None},
         type=recurring_type,
-        amount=transaction.amount,
-        description=transaction.description,
         start_date=start_date,
     )
     return await create_recurring(db, user, create_in, source_transaction=transaction)
