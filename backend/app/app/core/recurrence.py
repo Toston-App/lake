@@ -173,8 +173,9 @@ def next_occurrence(
 ) -> Occurrence | None:
     """First occurrence after `after_nominal` whose actual date is after `last_actual`.
 
-    The actual date is never before the rule's start date, and two nominal
-    dates that land on the same actual date only produce one occurrence.
+    Two nominal dates that land on the same actual date only produce one
+    occurrence. A weekend start date moved to the previous Friday may fall
+    before the rule's start date.
     """
     lower = from_date
     if after_nominal is not None:
@@ -185,7 +186,7 @@ def next_occurrence(
         # date a few days before the last actual one may still be pending.
         lower = last_actual - timedelta(days=3)
     for nominal in iter_nominal(rule, lower):
-        actual = max(adjust_for_weekend(nominal, rule.adjustment), rule.start_date)
+        actual = adjust_for_weekend(nominal, rule.adjustment)
         if last_actual is not None and actual <= last_actual:
             continue
         return Occurrence(nominal=nominal, actual=actual)

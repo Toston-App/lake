@@ -242,6 +242,20 @@ class TestPreview:
         assert upcoming[0] == {"nominal_date": "2025-02-15", "date": "2025-02-14"}
         assert upcoming[1] == {"nominal_date": "2025-02-28", "date": "2025-02-28"}
 
+    async def test_sunday_start_moves_to_previous_friday(self, client: AsyncClient):
+        resp = await client.post(
+            f"{PREFIX}/preview",
+            json={
+                "frequency": "monthly",
+                "start_date": "2026-11-15",
+                "business_day_adjustment": "previous",
+            },
+        )
+        assert resp.status_code == 200
+        upcoming = resp.json()["upcoming"]
+        assert upcoming[0] == {"nominal_date": "2026-11-15", "date": "2026-11-13"}
+        assert upcoming[1] == {"nominal_date": "2026-12-15", "date": "2026-12-15"}
+
     async def test_exclude_start_matches_mark_as_recurring(self, client: AsyncClient):
         # Saturday 17 Oct 2026 is already recorded; Monday 19 is still pending.
         resp = await client.post(
