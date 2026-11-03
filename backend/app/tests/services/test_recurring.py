@@ -219,9 +219,7 @@ async def test_expired_lease_taken_over_stops_generation(
     template.locked_until = other
     await db_session.commit()
 
-    created = await recurring_service.generate_due(
-        db_session, template.id, lease=stale
-    )
+    created = await recurring_service.generate_due(db_session, template.id, lease=stale)
     template = await db_session.get(
         RecurringTransaction, template.id, populate_existing=True
     )
@@ -243,9 +241,7 @@ async def test_lease_lost_between_occurrences_stops_generation(
         tmpl.locked_until = other
         await db.commit()
 
-    monkeypatch.setattr(
-        recurring_service, "_create_occurrence", create_then_lose_lease
-    )
+    monkeypatch.setattr(recurring_service, "_create_occurrence", create_then_lose_lease)
     created = await recurring_service.generate_due(
         db_session, template.id, today=TODAY + timedelta(days=3)
     )
@@ -642,7 +638,7 @@ async def test_worker_releases_leases_of_unreached_templates(
         db_session, test_user, monkeypatch, 3
     )
 
-    async def cancelled(db, recurring_id, **kwargs):
+    async def cancelled(*_args, **_kwargs):
         raise asyncio.CancelledError
 
     monkeypatch.setattr(recurring_worker, "generate_due", cancelled)
