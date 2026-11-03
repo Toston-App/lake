@@ -546,6 +546,19 @@ async def claim_due(db: AsyncSession, *, limit: int = 50) -> list[int]:
     return ids
 
 
+async def release_leases(db: AsyncSession, ids: list[int]) -> None:
+    """Clear the lease of templates that were claimed but will not be generated."""
+    if not ids:
+        return
+    await db.execute(
+        update(RecurringTransaction)
+        .where(RecurringTransaction.id.in_(ids))
+        .values(locked_until=None)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+
+
 async def _already_generated(
     db: AsyncSession, template: RecurringTransaction, run_date: date
 ) -> bool:

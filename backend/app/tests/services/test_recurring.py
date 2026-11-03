@@ -1,11 +1,14 @@
 """Generation of recurring transactions: worker claiming, idempotency and failures."""
 
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
 from app.models import Expense, RecurringTransaction, Transfer, User
 from app.services import recurring as recurring_service
+from app.worker import recurring_worker
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -328,3 +331,69 @@ async def test_weekend_start_is_not_generated_on_creation(
     assert template.next_run_date == expected
     assert template.occurrences_count == 0
     assert await _count(db_session, Expense, template.id) == 0
+
+
+async def _claimed_batch(
+    db: AsyncSession, user: User, monkeypatch: pytest.MonkeyPatch, size: int
+) -> list[RecurringTransaction]:
+    """Make `size` templates due and route the worker's sessions to the test one."""
+    templates = [await _create(db, user) for _ in range(size)]
+    for template in templates:
+        template.next_run_date = TODAY
+    await db.commit()
+
+    @asynccontextmanager
+    async def session():
+        yield db
+
+    monkeypatch.setattr(recurring_worker, "async_session", session)
+    monkeypatch.setattr(recurring_worker, "BATCH_SIZE", size)
+    return templates
+
+
+async def _locked_until(db: AsyncSession, recurring_id: int) -> datetime | None:
+    return await db.scalar(
+        select(RecurringTransaction.locked_until).where(
+            RecurringTransaction.id == recurring_id
+        )
+    )
+
+
+async def test_worker_continues_batch_after_a_template_fails(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    first, failing, last = await _claimed_batch(db_session, test_user, monkeypatch, 3)
+    generate_due = recurring_service.generate_due
+
+    async def flaky(db, recurring_id, **kwargs):
+        if recurring_id == failing.id:
+            raise ConnectionError("transient")
+        return await generate_due(db, recurring_id, **kwargs)
+
+    monkeypatch.setattr(recurring_worker, "generate_due", flaky)
+
+    assert await recurring_worker.tick() is True
+    assert await _count(db_session, Expense, first.id) == 1
+    assert await _count(db_session, Expense, last.id) == 1
+    # The failing template keeps its lease and is retried once it expires.
+    assert await _count(db_session, Expense, failing.id) == 0
+    assert await _locked_until(db_session, failing.id) is not None
+
+
+async def test_worker_releases_leases_of_unreached_templates(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    interrupted, *unreached = await _claimed_batch(
+        db_session, test_user, monkeypatch, 3
+    )
+
+    async def cancelled(db, recurring_id, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(recurring_worker, "generate_due", cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await recurring_worker.tick()
+    assert await _locked_until(db_session, interrupted.id) is not None
+    for template in unreached:
+        assert await _locked_until(db_session, template.id) is None
