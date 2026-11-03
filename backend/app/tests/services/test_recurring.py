@@ -77,6 +77,39 @@ async def test_generate_due_skips_occurrence_created_before_a_crash(
     assert await _count(db_session, Expense, template.id) == 1
 
 
+async def test_generate_due_does_not_count_already_generated_occurrence(
+    db_session: AsyncSession, test_user: User
+):
+    template = await _create(db_session, test_user)
+    first_run = template.next_run_date
+    db_session.add(
+        Expense(
+            owner_id=test_user.id,
+            amount=10,
+            date=first_run,
+            recurring_id=template.id,
+        )
+    )
+    await db_session.commit()
+
+    assert (
+        await recurring_service.generate_due(db_session, template.id, today=first_run)
+        == 0
+    )
+    await db_session.refresh(template)
+    assert template.last_run_date == first_run
+    assert template.next_run_date == first_run + timedelta(days=1)
+
+    # The next occurrence is still created and counted.
+    assert (
+        await recurring_service.generate_due(
+            db_session, template.id, today=first_run + timedelta(days=1)
+        )
+        == 1
+    )
+    assert await _count(db_session, Expense, template.id) == 2
+
+
 async def test_catch_up_is_capped_per_run(db_session: AsyncSession, test_user: User):
     template = await _create(db_session, test_user)
     later = TODAY + timedelta(days=10)

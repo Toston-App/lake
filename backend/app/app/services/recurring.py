@@ -632,14 +632,15 @@ async def generate_due(
             and created < limit
         ):
             run_date = template.next_run_date
-            if not await _already_generated(db, template, run_date):
+            is_new = not await _already_generated(db, template, run_date)
+            if is_new:
                 await _create_occurrence(db, owner, template, run_date)
             template.occurrences_count += 1
             template.last_run_date = run_date
             template.last_error = None
             _advance(template)
             await db.commit()
-            created += 1
+            created += is_new
     except ServiceError as exc:
         # Validation failures happen before anything is written. Pause instead
         # of retrying forever; the user sees why in the UI.
