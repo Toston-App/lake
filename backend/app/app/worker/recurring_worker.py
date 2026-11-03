@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime
 
 from app.db.session import async_session
 from app.services.recurring import claim_due, generate_due, release_leases
@@ -20,18 +21,18 @@ BATCH_SIZE = 50
 async def tick() -> bool:
     """Generate one batch of due templates; returns True when a batch was claimed."""
     async with async_session() as db:
-        ids = await claim_due(db, limit=BATCH_SIZE)
-    if not ids:
+        leases = await claim_due(db, limit=BATCH_SIZE)
+    if not leases:
         return False
 
     created = 0
-    attempted = 0
+    pending = dict(leases)
     try:
-        for recurring_id in ids:
-            attempted += 1
+        for recurring_id, lease in leases.items():
+            del pending[recurring_id]
             try:
                 async with async_session() as db:
-                    created += await generate_due(db, recurring_id, leased=True)
+                    created += await generate_due(db, recurring_id, lease=lease)
             except Exception:
                 # Keep this template's lease so it is retried once it expires,
                 # but carry on with the rest of the batch.
@@ -40,21 +41,25 @@ async def tick() -> bool:
                 )
     finally:
         # Interrupted mid-batch (e.g. cancelled): hand back what was not reached.
-        await _release(ids[attempted:])
+        await _release(pending)
     logger.info(
-        "Processed %s recurring templates, created %s transactions", len(ids), created
+        "Processed %s recurring templates, created %s transactions",
+        len(leases),
+        created,
     )
     return True
 
 
-async def _release(ids: list[int]) -> None:
-    if not ids:
+async def _release(leases: dict[int, datetime]) -> None:
+    if not leases:
         return
     try:
         async with async_session() as db:
-            await release_leases(db, ids)
+            await release_leases(db, leases)
     except Exception:
-        logger.exception("Failed releasing leases of recurring transactions %s", ids)
+        logger.exception(
+            "Failed releasing leases of recurring transactions %s", list(leases)
+        )
 
 
 async def run_forever() -> None:

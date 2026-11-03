@@ -165,6 +165,86 @@ async def test_leased_template_is_not_generated_by_requests(
     assert created == 0
 
 
+async def test_lease_is_renewed_per_occurrence_and_released(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    template = await _create(db_session, test_user)
+    seen = []
+    create_occurrence = recurring_service._create_occurrence
+
+    async def record_lease(db, owner, tmpl, run_date):
+        seen.append(
+            await db.scalar(
+                select(RecurringTransaction.locked_until).where(
+                    RecurringTransaction.id == tmpl.id
+                )
+            )
+        )
+        await create_occurrence(db, owner, tmpl, run_date)
+
+    monkeypatch.setattr(recurring_service, "_create_occurrence", record_lease)
+    created = await recurring_service.generate_due(
+        db_session, template.id, today=TODAY + timedelta(days=3)
+    )
+    template = await db_session.get(
+        RecurringTransaction, template.id, populate_existing=True
+    )
+    assert created == 3
+    assert all(seen) and seen == sorted(set(seen))
+    assert template.locked_until is None
+
+
+async def test_expired_lease_taken_over_stops_generation(
+    db_session: AsyncSession, test_user: User
+):
+    template = await _create(db_session, test_user)
+    template.next_run_date = TODAY - timedelta(days=1)
+    template.next_nominal_date = template.next_run_date
+    await db_session.commit()
+    stale = (await recurring_service.claim_due(db_session))[template.id]
+    # The lease expired mid-batch and a request (or another worker) took it.
+    other = datetime.now(timezone.utc) + timedelta(minutes=5)
+    template.locked_until = other
+    await db_session.commit()
+
+    created = await recurring_service.generate_due(
+        db_session, template.id, lease=stale
+    )
+    template = await db_session.get(
+        RecurringTransaction, template.id, populate_existing=True
+    )
+    assert created == 0
+    assert await _count(db_session, Expense, template.id) == 0
+    # The new holder's lease is left alone.
+    assert template.locked_until == other
+
+
+async def test_lease_lost_between_occurrences_stops_generation(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    template = await _create(db_session, test_user)
+    other = datetime.now(timezone.utc) + timedelta(minutes=5)
+    create_occurrence = recurring_service._create_occurrence
+
+    async def create_then_lose_lease(db, owner, tmpl, run_date):
+        await create_occurrence(db, owner, tmpl, run_date)
+        tmpl.locked_until = other
+        await db.commit()
+
+    monkeypatch.setattr(
+        recurring_service, "_create_occurrence", create_then_lose_lease
+    )
+    created = await recurring_service.generate_due(
+        db_session, template.id, today=TODAY + timedelta(days=3)
+    )
+    template = await db_session.get(
+        RecurringTransaction, template.id, populate_existing=True
+    )
+    assert created == 1
+    assert await _count(db_session, Expense, template.id) == 1
+    assert template.locked_until == other
+
+
 async def test_failure_pauses_template_with_reason(
     db_session: AsyncSession, test_user: User
 ):

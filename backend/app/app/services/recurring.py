@@ -3,7 +3,10 @@
 Generated transactions go through the regular transaction services so that
 account, category and user totals stay consistent. Because those services
 commit several times per transaction, a template is protected with a short
-lease (`locked_until`) instead of a row lock while it is being generated.
+lease (`locked_until`) instead of a row lock while it is being generated. The
+exact `locked_until` value works as the lease token: it is renewed with a
+compare-and-set before every occurrence, so a holder whose lease was taken over
+after expiring stops instead of generating alongside the new holder.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Date, and_, cast, exists, func, or_, select, update
+from sqlalchemy import Date, and_, cast, exists, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
@@ -500,7 +503,8 @@ async def create_from_transaction(
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
-async def _acquire_lease(db: AsyncSession, recurring_id: int) -> bool:
+async def _acquire_lease(db: AsyncSession, recurring_id: int) -> datetime | None:
+    """Lease a free template; returns the lease token, or None if it is held."""
     now = datetime.now(timezone.utc)
     result = await db.execute(
         update(RecurringTransaction)
@@ -517,11 +521,50 @@ async def _acquire_lease(db: AsyncSession, recurring_id: int) -> bool:
     )
     acquired = result.first() is not None
     await db.commit()
-    return acquired
+    return now + LEASE if acquired else None
 
 
-async def claim_due(db: AsyncSession, *, limit: int = 50) -> list[int]:
-    """Lease up to `limit` templates that have an occurrence due today or earlier."""
+async def _renew_lease(
+    db: AsyncSession, recurring_id: int, lease: datetime
+) -> datetime | None:
+    """Extend a lease we hold; returns the new token, or None if it was lost.
+
+    An expired lease is still ours as long as nobody else acquired it since.
+    """
+    renewed = datetime.now(timezone.utc) + LEASE
+    result = await db.execute(
+        update(RecurringTransaction)
+        .where(
+            RecurringTransaction.id == recurring_id,
+            RecurringTransaction.locked_until == lease,
+        )
+        .values(locked_until=renewed)
+        .returning(RecurringTransaction.id)
+        .execution_options(synchronize_session=False)
+    )
+    held = result.first() is not None
+    await db.commit()
+    return renewed if held else None
+
+
+async def _release_lease(db: AsyncSession, recurring_id: int, lease: datetime) -> None:
+    await db.execute(
+        update(RecurringTransaction)
+        .where(
+            RecurringTransaction.id == recurring_id,
+            RecurringTransaction.locked_until == lease,
+        )
+        .values(locked_until=None)
+        .execution_options(synchronize_session=False)
+    )
+    await db.commit()
+
+
+async def claim_due(db: AsyncSession, *, limit: int = 50) -> dict[int, datetime]:
+    """Lease up to `limit` templates that have an occurrence due today or earlier.
+
+    Returns the lease token of each claimed template, to pass to `generate_due`.
+    """
     now = datetime.now(timezone.utc)
     local_date = cast(func.timezone(RecurringTransaction.timezone, func.now()), Date)
     due = (
@@ -546,18 +589,26 @@ async def claim_due(db: AsyncSession, *, limit: int = 50) -> list[int]:
         .returning(RecurringTransaction.id)
         .execution_options(synchronize_session=False)
     )
-    ids = [row.id for row in result]
+    leases = {row.id: now + LEASE for row in result}
     await db.commit()
-    return ids
+    return leases
 
 
-async def release_leases(db: AsyncSession, ids: list[int]) -> None:
-    """Clear the lease of templates that were claimed but will not be generated."""
-    if not ids:
+async def release_leases(db: AsyncSession, leases: dict[int, datetime]) -> None:
+    """Clear the lease of templates that were claimed but will not be generated.
+
+    A lease is only cleared while it still holds our token, so one another
+    process took over after it expired is left alone.
+    """
+    if not leases:
         return
     await db.execute(
         update(RecurringTransaction)
-        .where(RecurringTransaction.id.in_(ids))
+        .where(
+            tuple_(RecurringTransaction.id, RecurringTransaction.locked_until).in_(
+                list(leases.items())
+            )
+        )
         .values(locked_until=None)
         .execution_options(synchronize_session=False)
     )
@@ -626,15 +677,17 @@ async def generate_due(
     recurring_id: int,
     *,
     today: date | None = None,
-    leased: bool = False,
+    lease: datetime | None = None,
     limit: int = MAX_OCCURRENCES_PER_RUN,
 ) -> int:
     """Create every occurrence of a template that is due; returns how many were created.
 
-    Callers that already hold the lease (the worker) pass `leased=True`.
+    Callers that already hold the lease (the worker) pass its token as `lease`.
     """
-    if not leased and not await _acquire_lease(db, recurring_id):
-        return 0
+    if lease is None:
+        lease = await _acquire_lease(db, recurring_id)
+        if lease is None:
+            return 0
     template = await db.get(RecurringTransaction, recurring_id, populate_existing=True)
     if template is None:
         return 0
@@ -649,6 +702,13 @@ async def generate_due(
             and template.next_run_date <= today
             and created < limit
         ):
+            lease = await _renew_lease(db, recurring_id, lease)
+            if lease is None:
+                # Someone else took the template over after our lease expired.
+                logger.warning(
+                    "Lost the lease on recurring transaction %s", recurring_id
+                )
+                return created
             run_date = template.next_run_date
             is_new = not await _already_generated(db, template, run_date)
             if is_new:
@@ -671,6 +731,6 @@ async def generate_due(
         await db.rollback()
         return created
 
-    template.locked_until = None
     await db.commit()
+    await _release_lease(db, recurring_id, lease)
     return created
