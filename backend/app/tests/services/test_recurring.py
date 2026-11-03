@@ -6,7 +6,9 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
-from app.models import Expense, RecurringTransaction, Transfer, User
+from app.models import Expense, Income, RecurringTransaction, Transfer, User
+from app.services import accounts as account_service
+from app.services import catalog as catalog_service
 from app.services import recurring as recurring_service
 from app.services.errors import ConflictError
 from app.worker import recurring_worker
@@ -14,7 +16,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import schemas
-from tests.utils import create_test_account
+from tests.utils import (
+    create_test_account,
+    create_test_category,
+    create_test_place,
+    create_test_subcategory,
+    create_test_user,
+)
 
 TODAY = datetime.now(timezone.utc).date()
 
@@ -23,6 +31,9 @@ TODAY = datetime.now(timezone.utc).date()
 def _no_redis(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "app.services.transactions.invalidate_user_cache", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        "app.services.accounts.invalidate_user_cache", AsyncMock(return_value=True)
     )
 
 
@@ -333,6 +344,110 @@ async def test_failure_pauses_template_with_reason(
     assert template.last_error
     assert template.locked_until is None
     assert await _count(db_session, Transfer, template.id) == 0
+
+
+async def _refresh(db: AsyncSession, template: RecurringTransaction):
+    return await db.get(RecurringTransaction, template.id, populate_existing=True)
+
+
+async def test_deleting_the_account_pauses_an_expense_template(
+    db_session: AsyncSession, test_user: User
+):
+    checking = await create_test_account(db_session, owner_id=test_user.id)
+    rent = await _create(db_session, test_user, account_id=checking.id)
+    await account_service.delete_account(db_session, test_user, checking.id)
+
+    created = await recurring_service.generate_due(
+        db_session, rent.id, today=TODAY + timedelta(days=2)
+    )
+    rent = await _refresh(db_session, rent)
+    assert created == 0
+    assert rent.is_active is False
+    assert rent.account_id is None
+    assert "account" in rent.last_error
+    assert await _count(db_session, Expense, rent.id) == 0
+
+
+async def test_deleting_the_subcategory_or_place_pauses_an_income_template(
+    db_session: AsyncSession, test_user: User
+):
+    category = await create_test_category(
+        db_session, owner_id=test_user.id, is_income=True
+    )
+    salary = await create_test_subcategory(
+        db_session, owner_id=test_user.id, category_id=category.id
+    )
+    office = await create_test_place(db_session, owner_id=test_user.id)
+    by_subcategory = await _create(
+        db_session, test_user, type="income", subcategory_id=salary.id
+    )
+    by_place = await _create(db_session, test_user, type="income", place_id=office.id)
+    await catalog_service.delete_subcategory(db_session, test_user, salary.id)
+    await catalog_service.delete_place(db_session, test_user, office.id)
+
+    for template, kind in ((by_subcategory, "subcategory"), (by_place, "place")):
+        template = await _refresh(db_session, template)
+        assert template.is_active is False
+        assert kind in template.last_error
+        await recurring_service.generate_due(
+            db_session, template.id, today=TODAY + timedelta(days=2)
+        )
+        assert await _count(db_session, Income, template.id) == 0
+
+
+async def test_deleting_a_category_pauses_templates_using_its_subcategories(
+    db_session: AsyncSession, test_user: User
+):
+    category = await create_test_category(db_session, owner_id=test_user.id)
+    subcategory = await create_test_subcategory(
+        db_session, owner_id=test_user.id, category_id=category.id
+    )
+    template = await _create(
+        db_session,
+        test_user,
+        category_id=category.id,
+        subcategory_id=subcategory.id,
+    )
+    await catalog_service.delete_category(db_session, test_user, category.id)
+
+    template = await _refresh(db_session, template)
+    assert template.is_active is False
+    assert template.last_error
+
+
+async def test_template_without_an_account_keeps_generating(
+    db_session: AsyncSession, test_user: User
+):
+    other = await create_test_account(db_session, owner_id=test_user.id)
+    template = await _create(db_session, test_user)
+    await account_service.delete_account(db_session, test_user, other.id)
+
+    created = await recurring_service.generate_due(
+        db_session, template.id, today=TODAY + timedelta(days=2)
+    )
+    template = await _refresh(db_session, template)
+    assert created == 2
+    assert template.is_active is True
+    assert template.last_error is None
+
+
+async def test_foreign_account_pauses_instead_of_generating_unassigned(
+    db_session: AsyncSession, test_user: User
+):
+    stranger = await create_test_user(db_session, email="stranger@example.com")
+    foreign = await create_test_account(db_session, owner_id=stranger.id)
+    template = await _create(db_session, test_user)
+    template.account_id = foreign.id
+    await db_session.commit()
+
+    created = await recurring_service.generate_due(
+        db_session, template.id, today=TODAY + timedelta(days=2)
+    )
+    template = await _refresh(db_session, template)
+    assert created == 0
+    assert template.is_active is False
+    assert template.last_error
+    assert await _count(db_session, Expense, template.id) == 0
 
 
 async def test_weekend_adjustment_records_friday(

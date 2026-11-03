@@ -518,6 +518,37 @@ async def _delete_template(
     await db.commit()
 
 
+# Template columns that point at each kind of referenced entity.
+_REFERENCE_COLUMNS = {
+    "account": ("account_id", "to_account_id"),
+    "category": ("category_id",),
+    "subcategory": ("subcategory_id",),
+    "place": ("place_id",),
+}
+
+
+async def pause_for_deleted(db: AsyncSession, kind: str, ids: list[int]) -> None:
+    """Pause the templates that use an entity which is about to be deleted.
+
+    The template foreign keys are ON DELETE SET NULL, so once the entity is gone
+    a template that lost it looks like one that never had it and would keep
+    generating unassigned transactions. Call this before the delete, in the same
+    transaction.
+    """
+    if not ids:
+        return
+    columns = [getattr(RecurringTransaction, c) for c in _REFERENCE_COLUMNS[kind]]
+    await db.execute(
+        update(RecurringTransaction)
+        .where(or_(*(column.in_(ids) for column in columns)))
+        .values(
+            is_active=False,
+            last_error=f"The {kind} used by this recurring transaction was deleted",
+        )
+        .execution_options(synchronize_session=False)
+    )
+
+
 async def create_from_transaction(
     db: AsyncSession, user: models.User, data: schemas.RecurringFromTransaction
 ) -> RecurringTransaction:
@@ -711,6 +742,15 @@ async def _create_occurrence(
             recurring_id=template.id,
         )
         return
+    # The transaction services silently drop a missing or foreign reference;
+    # a template should pause instead, like transfers do.
+    await _require_ref(db, owner, crud.account, template.account_id, "Account")
+    await _require_ref(
+        db, owner, crud.subcategory, template.subcategory_id, "Subcategory"
+    )
+    await _require_ref(db, owner, crud.place, template.place_id, "Place")
+    if recurring_type == RecurringType.expense:
+        await _require_ref(db, owner, crud.category, template.category_id, "Category")
     common = {
         "amount": template.amount,
         "description": template.description,
