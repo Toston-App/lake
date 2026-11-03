@@ -266,3 +266,32 @@ async def test_changing_rule_reschedules_from_today(
     template = await _update(db_session, test_user, template, month_days=[10])
     assert template.next_run_date == date(2031, 11, 10)
     assert template.occurrences_count == 1
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        # Set up on Thursday: the Saturday start moves to Friday 14.
+        (date(2031, 11, 13), date(2031, 11, 14)),
+        # Set up on Friday 14: Friday has come, so the series starts Saturday.
+        (date(2031, 11, 14), date(2031, 11, 15)),
+    ],
+)
+async def test_weekend_start_is_not_generated_on_creation(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+    today: date,
+    expected: date,
+):
+    monkeypatch.setattr(recurring_service, "local_today", lambda tz: today)
+    template = await _create(
+        db_session,
+        test_user,
+        frequency="semimonthly",
+        start_date=date(2031, 11, 15),
+        business_day_adjustment="previous",
+    )
+    assert template.next_run_date == expected
+    assert template.occurrences_count == 0
+    assert await _count(db_session, Expense, template.id) == 0

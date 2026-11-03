@@ -6,6 +6,7 @@ from app.core.recurrence import (
     BusinessDayAdjustment,
     Frequency,
     MonthlyMode,
+    Occurrence,
     Rule,
     adjust_for_weekend,
     next_occurrence,
@@ -113,14 +114,30 @@ def test_end_date_stops_series():
     assert _actual(rule, 10) == [date(2025, 1, 5), date(2025, 2, 5), date(2025, 3, 5)]
 
 
-def test_actual_date_never_before_start():
-    # Saturday start with "previous" would land on Friday, before the start.
+def test_weekend_start_moves_to_previous_friday():
     rule = Rule(
         Frequency.monthly,
         date(2025, 3, 15),
         adjustment=BusinessDayAdjustment.previous,
     )
-    assert _actual(rule, 1) == [date(2025, 3, 15)]
+    assert _actual(rule, 1) == [date(2025, 3, 14)]
+    # Set up on Thursday: Friday is still ahead.
+    occurrence = next_occurrence(rule, today=date(2025, 3, 13))
+    assert occurrence.actual == date(2025, 3, 14)
+
+
+def test_weekend_start_stays_when_previous_friday_has_come():
+    rule = Rule(
+        Frequency.semimonthly,
+        date(2025, 3, 15),
+        adjustment=BusinessDayAdjustment.previous,
+    )
+    # Set up on Friday 14 (or later) for a series starting Saturday 15.
+    for today in (date(2025, 3, 14), date(2025, 3, 15)):
+        assert upcoming(rule, 2, today=today) == [
+            Occurrence(nominal=date(2025, 3, 15), actual=date(2025, 3, 15)),
+            Occurrence(nominal=date(2025, 3, 31), actual=date(2025, 3, 31)),
+        ]
 
 
 def test_collapsed_dates_produce_single_occurrence():

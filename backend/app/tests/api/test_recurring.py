@@ -247,14 +247,14 @@ class TestPreview:
             f"{PREFIX}/preview",
             json={
                 "frequency": "monthly",
-                "start_date": "2026-11-15",
+                "start_date": "2036-06-15",
                 "business_day_adjustment": "previous",
             },
         )
         assert resp.status_code == 200
         upcoming = resp.json()["upcoming"]
-        assert upcoming[0] == {"nominal_date": "2026-11-15", "date": "2026-11-13"}
-        assert upcoming[1] == {"nominal_date": "2026-12-15", "date": "2026-12-15"}
+        assert upcoming[0] == {"nominal_date": "2036-06-15", "date": "2036-06-13"}
+        assert upcoming[1] == {"nominal_date": "2036-07-15", "date": "2036-07-15"}
 
     async def test_exclude_start_matches_mark_as_recurring(self, client: AsyncClient):
         # Saturday 17 Oct 2026 is already recorded; Monday 19 is still pending.

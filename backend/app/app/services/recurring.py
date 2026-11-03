@@ -112,7 +112,10 @@ def _reschedule(
     _set_next(
         template,
         next_occurrence(
-            rule_for(template), last_actual=template.last_run_date, from_date=from_date
+            rule_for(template),
+            last_actual=template.last_run_date,
+            from_date=from_date,
+            today=local_today(template.timezone),
         ),
     )
 
@@ -169,7 +172,13 @@ def preview(data: schemas.RecurringPreviewRequest) -> schemas.RecurringPreview:
     return schemas.RecurringPreview(
         upcoming=[
             schemas.UpcomingOccurrence(nominal_date=o.nominal, date=o.actual)
-            for o in upcoming(rule, count, after_nominal=after, last_actual=after)
+            for o in upcoming(
+                rule,
+                count,
+                after_nominal=after,
+                last_actual=after,
+                today=local_today(data.timezone or "UTC"),
+            )
         ]
     )
 

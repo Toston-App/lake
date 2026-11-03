@@ -170,12 +170,15 @@ def next_occurrence(
     after_nominal: date | None = None,
     last_actual: date | None = None,
     from_date: date | None = None,
+    today: date | None = None,
 ) -> Occurrence | None:
     """First occurrence after `after_nominal` whose actual date is after `last_actual`.
 
     Two nominal dates that land on the same actual date only produce one
     occurrence. A weekend start date moved to the previous Friday may fall
-    before the rule's start date.
+    before the rule's start date, but only onto a day after `today`: a
+    Friday that has already come keeps the start date instead, so a new
+    series never records a date before it starts and the day it was set up.
     """
     lower = from_date
     if after_nominal is not None:
@@ -187,6 +190,8 @@ def next_occurrence(
         lower = last_actual - timedelta(days=3)
     for nominal in iter_nominal(rule, lower):
         actual = adjust_for_weekend(nominal, rule.adjustment)
+        if actual < rule.start_date and today is not None and actual <= today:
+            actual = rule.start_date
         if last_actual is not None and actual <= last_actual:
             continue
         return Occurrence(nominal=nominal, actual=actual)
@@ -200,10 +205,15 @@ def upcoming(
     after_nominal: date | None = None,
     last_actual: date | None = None,
     from_date: date | None = None,
+    today: date | None = None,
 ) -> list[Occurrence]:
     out: list[Occurrence] = []
     occurrence = next_occurrence(
-        rule, after_nominal=after_nominal, last_actual=last_actual, from_date=from_date
+        rule,
+        after_nominal=after_nominal,
+        last_actual=last_actual,
+        from_date=from_date,
+        today=today,
     )
     while occurrence and len(out) < count:
         out.append(occurrence)
