@@ -35,3 +35,4 @@ class Category(Base):
     total: float = Column(Float, default=0.0, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    import_id: int = Column(Integer, ForeignKey("import.id"), nullable=True, index=True)

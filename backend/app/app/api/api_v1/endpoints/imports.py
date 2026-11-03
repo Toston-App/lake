@@ -1,389 +1,191 @@
-from datetime import datetime
+"""Generic CSV / XLSX import.
+
+Flow:
+1. ``POST /import/sessions``                upload a file, get headers + suggested mapping
+2. ``PUT  /import/sessions/{id}/mapping``    confirm columns, get values to match
+3. ``POST /import/sessions/{id}/preview``    dry run of the user's decisions
+4. ``POST /import/sessions/{id}/commit``     import everything in one transaction
+5. ``POST /import/{id}/undo``                remove an import and what it created
+"""
+
+from datetime import datetime, timezone
 from typing import Any
 
-import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from fastapi.encoders import jsonable_encoder
-from fuzzywuzzy import fuzz
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud, models, schemas
+from app import models, schemas
 from app.api import deps
-from app.models.imports import ImportService
-from app.synonyms import get_synonyms
-from app.utilities.redis import invalidate_user_cache
+from app.services.imports import service
+from app.services.imports.reader import MAX_FILE_BYTES
+from app.utilities.redis import invalidate_user_cache, r
 from app.utilities.wide_events import enrich_event, mark_for_logging
 
 router = APIRouter()
-synonyms = get_synonyms()
+
+UPLOADS_PER_HOUR = 20
+# Multipart overhead on top of the file itself.
+MAX_REQUEST_BYTES = MAX_FILE_BYTES + 64 * 1024
 
 
-def normalize(text):
-    return text.strip().lower()
-
-
-def get_synonym(category):
-    # Check if the normalized category exists in synonyms, otherwise return original
-    return synonyms.get(normalize(category), category)
-
-
-def find_best_match(new_category, user_categories, threshold=80):
-    # Normalize and check if the new category has a synonym
-    new_category_normalized = get_synonym(new_category)
-
-    best_match = None
-    best_score = 0
-
-    for category in user_categories:
-        # Check subcategories for fuzzy match
-        for subcategory in category["subcategories"]:
-            subcategory_name = normalize(subcategory["name"])
-            subcategory_score = fuzz.ratio(subcategory_name, new_category_normalized)
-
-            if subcategory_score > best_score and subcategory_score >= threshold:
-                best_match = {
-                    "category_id": category["id"],
-                    "subcategory_id": subcategory["id"],
-                }
-                best_score = subcategory_score
-
-    return best_match
-
-
-async def create_accounts(
-    db: AsyncSession, owner_id: int, accounts: list[str], import_id: str
-) -> dict:
-    accounts_with_id = {}
-    for account in accounts:
-        if account == "":
-            continue
-
-        account_data = {
-            "import_id": import_id,
-            "name": account,
-            "initial_balance": 0,
-            "current_balance": 0,
-        }
-        account_in = schemas.AccountCreate(**account_data)
-        new_account = await crud.account.create_with_owner(
-            db=db, obj_in=account_in, owner_id=owner_id
-        )
-
-        accounts_with_id[account] = new_account.id
-
-    return accounts_with_id
-
-
-async def create_sites(
-    db: AsyncSession, owner_id: int, sites: list[str], import_id: str
-) -> dict:
-    sites_with_id = {}
-    for site in sites:
-        if site == "":
-            continue
-
-        site_data = {
-            "import_id": import_id,
-            "name": site,
-            "is_online": False,
-        }
-        site_in = schemas.PlaceCreate(**site_data)
-        new_site = await crud.place.create_with_owner(
-            db=db, obj_in=site_in, owner_id=owner_id
-        )
-
-        sites_with_id[site] = new_site.id
-
-    return sites_with_id
-
-
-async def process_csv(
-    csv_file: UploadFile,
-    column_mapping: dict[str, str],
-) -> pd.DataFrame:
-    """
-    Process the CSV file and return a standardized DataFrame.
-
-    :param csv_file: The uploaded CSV file
-    :param column_mapping: A dictionary mapping standard column names to actual CSV column names
-    :return: A standardized DataFrame
-    """
+async def enforce_import_rate_limit(user_id: int) -> None:
+    hour = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+    key = f"rate-limit:imports:{user_id}:{hour}"
     try:
-        df = pd.read_csv(csv_file.file)
-
-        # Check if all required columns are present
-        for standard_col, csv_col in column_mapping.items():
-            if csv_col not in df.columns:
-                raise ValueError(f"Column '{csv_col}' is missing from the CSV file.")
-
-        # Rename columns to standard names
-        df = df.rename(columns={v: k for k, v in column_mapping.items()})
-
-        # Ensure all standard columns are present
-        for col in [
-            "Date",
-            "Amount",
-            "Category",
-            "Title",
-            "Description",
-            "Account",
-            "Site",
-        ]:
-            if col not in df.columns:
-                df[col] = ""  # Add empty column if not present
-
-        # Standardize the DataFrame
-        df["Date"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
-        df["Amount"] = df["Amount"].astype(float)
-        df["Category"] = df["Category"].fillna("")
-        df["Title"] = df["Title"].fillna("")
-        df["Description"] = df["Description"].fillna("")
-        df["Account"] = df["Account"].fillna("")
-        df["Site"] = df["Site"].fillna("")
-
-        return df[
-            ["Date", "Amount", "Category", "Title", "Description", "Account", "Site"]
-        ]
-    except Exception as e:
-        raise HTTPException(status_code=409, detail=f"Error processing CSV: {str(e)}")
-
-
-async def import_transactions(
-    db: AsyncSession,
-    current_user: models.User,
-    df: pd.DataFrame,
-    accounts_with_id: dict,
-    sites_with_id: dict,
-    categories_with_id: dict,
-    import_id: str,
-) -> tuple[int, int, int, int]:
-    """
-    Import transactions from the standardized DataFrame.
-    Returns a tuple of (total_imported, expenses_imported, incomes_imported, unmatched_categories)
-    """
-    expenses_imported = 0
-    incomes_imported = 0
-    unmatched_categories = 0
-
-    try:
-        for _, row in df.iterrows():
-            account_id = accounts_with_id.get(row["Account"])
-            site_id = sites_with_id.get(row["Site"])
-            date = row["Date"]
-            amount = abs(row["Amount"])
-            description = f"{row['Title']} {row['Description']}".strip()
-            type = "Expense" if row["Amount"] < 0 else "Income"
-
-            category = row["Category"]
-            category_id = None
-            subcategory_id = None
-
-            if category:
-                match = categories_with_id.get(category)
-                if match:
-                    category_id = match["category_id"]
-                    subcategory_id = match["subcategory_id"]
-                else:
-                    unmatched_categories += 1
-                    print(f"🚀🚀🚀🚀🚀 - Unmatched category: {category}")
-
-            if type == "Expense":
-                expense_in = schemas.ExpenseCreate(
-                    account_id=account_id,
-                    category_id=category_id,
-                    subcategory_id=subcategory_id,
-                    date=date,
-                    amount=amount,
-                    description=description,
-                    place_id=site_id,
-                    import_id=import_id,
-                )
-                await crud.expense.create_with_owner(
-                    db=db, obj_in=expense_in, owner_id=current_user.id
-                )
-                expenses_imported += 1
-            else:
-                income_in = schemas.IncomeCreate(
-                    account_id=account_id,
-                    date=date,
-                    amount=amount,
-                    description=description,
-                    subcategory_id=subcategory_id,
-                    place_id=site_id,
-                    import_id=import_id,
-                )
-                await crud.income.create_with_owner(
-                    db=db, obj_in=income_in, owner_id=current_user.id
-                )
-                incomes_imported += 1
-
-        total_imported = expenses_imported + incomes_imported
-        return total_imported, expenses_imported, incomes_imported, unmatched_categories
-    except Exception as e:
+        count = await r.incr(key)
+        if count == 1:
+            await r.expire(key, 3600)
+    except Exception as exc:
         raise HTTPException(
-            status_code=400, detail=f"Error importing transactions: {str(e)}"
+            status_code=503, detail="Imports are temporarily unavailable"
+        ) from exc
+    if count > UPLOADS_PER_HOUR:
+        raise HTTPException(
+            status_code=429, detail="Too many imports, try again in an hour"
         )
 
 
-async def process_import(
+async def _read_bounded(request: Request, upload: UploadFile) -> bytes:
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_REQUEST_BYTES:
+        raise HTTPException(status_code=413, detail="The file is larger than 10 MB.")
+    data = await upload.read(MAX_FILE_BYTES + 1)
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="The file is larger than 10 MB.")
+    return data
+
+
+@router.post("/sessions", response_model=schemas.SessionCreated)
+async def create_session(
     request: Request,
-    db: AsyncSession,
-    current_user: models.User,
-    csv_file: UploadFile,
-    column_mapping: dict[str, str],
-    service: ImportService,
-) -> dict[str, Any]:
-    """
-    Process the import and return detailed results.
-    """
+    db: AsyncSession = Depends(deps.async_get_db),
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Upload a CSV or XLSX file and start an import session."""
     mark_for_logging(request)
+    await enforce_import_rate_limit(current_user.id)
+    data = await _read_bounded(request, file)
+    session = await service.create_session(db, current_user, file.filename or "", data)
     enrich_event(
         request,
-        user={"id": current_user.id, "email": current_user.email},
+        user={"id": current_user.id},
         operation={
-            "type": "import",
-            "service": service.value,
-            "filename": csv_file.filename,
+            "type": "import_upload",
+            "file_type": session.file_type,
+            "file_size": len(data),
+            "rows": session.total_rows,
+            "columns": len(session.headers),
+            "profile_used": session.profile_id is not None,
         },
     )
+    return session
 
-    if csv_file.filename == "":
-        raise HTTPException(status_code=400, detail="Filename is empty")
 
-    df = await process_csv(csv_file, column_mapping)
+@router.put("/sessions/{import_id}/mapping", response_model=schemas.MappingResult)
+async def set_mapping(
+    import_id: int,
+    body: schemas.MappingIn,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Confirm which column holds each field and get the values to match."""
+    draft = await service.get_draft(db, current_user.id, import_id)
+    return await service.apply_mapping(db, current_user, draft, body)
 
-    # Create import record first
-    import_in = schemas.ImportCreate(
-        service=service,
-        # this doesn't sound like a good idea after all i think. if somehow the table get leaked, the expenses, accounts, incomes and more data will be accessible thanks to this shitty. im to lazy to remove it lol
-        file_content="",
-        # TODO: check how to get file size
-        file_size=0,
-    )
-    import_obj = await crud.imports.create_with_owner(
-        db=db, obj_in=import_in, owner_id=current_user.id
-    )
-    import_id = import_obj.id  # Use this ID for related records
 
-    # Create all needed accounts
-    accounts = df["Account"].unique().tolist()
-    accounts_with_id = await create_accounts(
-        db=db, owner_id=current_user.id, accounts=accounts, import_id=import_id
-    )
+@router.post("/sessions/{import_id}/preview", response_model=schemas.CommitPreview)
+async def preview(
+    import_id: int,
+    decisions: schemas.Decisions,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Dry run: what would be imported, created and skipped."""
+    draft = await service.get_draft(db, current_user.id, import_id)
+    return await service.preview_commit(db, current_user, draft, decisions)
 
-    # Create all needed sites
-    sites = df["Site"].unique().tolist()
-    sites_with_id = await create_sites(
-        db=db, owner_id=current_user.id, sites=sites, import_id=import_id
-    )
 
-    # Extrapolate categories
-    categories = df["Category"].unique().tolist()
-    user_categories = jsonable_encoder(
-        await crud.category.get_multi_by_owner(db=db, owner_id=current_user.id)
-    )
-    categories_with_id = {
-        category: find_best_match(category, user_categories) for category in categories
-    }
-
-    (
-        total_imported,
-        expenses_imported,
-        incomes_imported,
-        unmatched_categories,
-    ) = await import_transactions(
-        db,
-        current_user,
-        df,
-        accounts_with_id,
-        sites_with_id,
-        categories_with_id,
-        import_id,
-    )
-
-    # Update import record with results
-    import_update = schemas.ImportUpdate(
-        total_rows_processed=len(df),
-        total_transactions_imported=total_imported,
-        expenses_imported=expenses_imported,
-        incomes_imported=incomes_imported,
-        accounts_created=len(accounts_with_id),
-        sites_created=len(sites_with_id),
-        unmatched_categories=unmatched_categories,
-        ended_at=datetime.now().isoformat(),
-    )
-    await crud.imports.update(db=db, db_obj=import_obj, obj_in=import_update)
-
+@router.post("/sessions/{import_id}/commit", response_model=schemas.CommitResult)
+async def commit(
+    request: Request,
+    import_id: int,
+    decisions: schemas.Decisions,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Import the file using the user's decisions, in a single transaction."""
+    mark_for_logging(request)
+    result = await service.commit_import(db, current_user, import_id, decisions)
+    await invalidate_user_cache(current_user.id)
     enrich_event(
         request,
-        import_results={
-            "total_rows_processed": len(df),
-            "total_imported": total_imported,
-            "expenses_imported": expenses_imported,
-            "incomes_imported": incomes_imported,
-            "accounts_created": len(accounts_with_id),
-            "sites_created": len(sites_with_id),
-            "unmatched_categories": unmatched_categories,
-        },
+        user={"id": current_user.id},
+        operation={"type": "import_commit", "import_id": result.import_id},
+        import_results=result.model_dump(exclude={"message"}),
     )
+    return result
 
-    # Invalidate user's cached dashboard data after import
+
+@router.delete("/sessions/{import_id}", status_code=204)
+async def cancel_session(
+    import_id: int,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> None:
+    """Discard an import session and its staged data."""
+    await service.cancel_session(db, current_user, import_id)
+
+
+@router.get("/profiles", response_model=list[schemas.ImportProfileOut])
+async def list_profiles(
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    return await service.list_profiles(db, current_user.id)
+
+
+@router.delete("/profiles/{profile_id}", status_code=204)
+async def delete_profile(
+    profile_id: int,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> None:
+    await service.delete_profile(db, current_user.id, profile_id)
+
+
+@router.get("", response_model=list[schemas.ImportSummary])
+async def list_imports(
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Import history."""
+    return await service.list_imports(db, current_user.id)
+
+
+@router.get("/{import_id}", response_model=schemas.ImportSummary)
+async def get_import(
+    import_id: int,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    return await service.get_import(db, current_user.id, import_id)
+
+
+@router.post("/{import_id}/undo", response_model=schemas.ImportSummary)
+async def undo(
+    request: Request,
+    import_id: int,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete the transactions of an import and anything it created that is unused."""
+    mark_for_logging(request)
+    record = await service.undo_import(db, current_user, import_id)
     await invalidate_user_cache(current_user.id)
-
-    return {
-        "message": "Importación exitosa",
-        "total_transactions_imported": total_imported,
-        "expenses_imported": expenses_imported,
-        "incomes_imported": incomes_imported,
-        "accounts_created": len(accounts_with_id),
-        "sites_created": len(sites_with_id),
-        "unmatched_categories": unmatched_categories,
-        "total_rows_processed": len(df),
-    }
-
-
-@router.post("/bluecoins")
-async def bluecoins(
-    request: Request,
-    db: AsyncSession = Depends(deps.async_get_db),
-    csv_file: UploadFile = File(...),
-    current_user: models.User = Depends(deps.get_current_active_user),
-) -> Any:
-    """
-    Import from bluecoins.
-    """
-    column_mapping = {
-        "Date": "Date",
-        "Amount": "Amount",
-        "Category": "Category",
-        "Title": "Title",
-        "Description": "Notes",
-        "Account": "Account",
-    }
-    return await process_import(
-        request, db, current_user, csv_file, column_mapping, ImportService.BLUECOINS
+    enrich_event(
+        request,
+        user={"id": current_user.id},
+        operation={"type": "import_undo", "import_id": import_id},
     )
-
-
-@router.post("/csv")
-async def import_csv(
-    request: Request,
-    db: AsyncSession = Depends(deps.async_get_db),
-    csv_file: UploadFile = File(...),
-    current_user: models.User = Depends(deps.get_current_active_user),
-) -> Any:
-    """
-    Import from generic CSV.
-    """
-    column_mapping = {
-        "Date": "Date",
-        "Amount": "Amount",
-        "Category": "Category",
-        "Title": "Title",
-        "Description": "Description",
-        "Account": "Account",
-        "Site": "Site",
-    }
-    return await process_import(
-        request, db, current_user, csv_file, column_mapping, ImportService.CSV
-    )
+    return record

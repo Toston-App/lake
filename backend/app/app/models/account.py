@@ -120,5 +120,5 @@ class Account(Base):
     investment_transactions: list["InvestmentTransaction"] = relationship(
         "InvestmentTransaction", back_populates="account", cascade="all, delete-orphan"
     )
-    import_id: int = Column(Integer, ForeignKey("import.id"))
+    import_id: int = Column(Integer, ForeignKey("import.id"), index=True)
     import_source = relationship("Import", back_populates="accounts")

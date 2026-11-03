@@ -15,7 +15,7 @@ from .chat_observability import (
 from .data_export import DataExport, DataExportStatus
 from .expense import Expense
 from .holding import Holding
-from .imports import Import
+from .imports import Import, ImportProfile, ImportService, ImportStatus
 from .income import Income
 from .investment_transaction import InvestmentTransaction, TransactionType
 from .item import Item

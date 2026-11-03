@@ -94,6 +94,12 @@ def _cell(value: Any, *, header: str | None = None) -> Any:
 
 def _excel_value(ws, header: str, value: Any) -> Any:
     converted = _cell(value, header=header)
+    if isinstance(converted, str) and converted.startswith("="):
+        # openpyxl writes any string starting with "=" as a formula. User text
+        # (descriptions, names, imported data) must never become a formula.
+        cell = WriteOnlyCell(ws, value=converted)
+        cell.data_type = "s"
+        return cell
     if converted is None or not _is_money_header(header):
         return converted
     cell = WriteOnlyCell(ws, value=converted)
