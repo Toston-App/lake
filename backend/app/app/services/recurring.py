@@ -7,11 +7,15 @@ lease (`locked_until`) instead of a row lock while it is being generated. The
 exact `locked_until` value works as the lease token: it is renewed with a
 compare-and-set before every occurrence, so a holder whose lease was taken over
 after expiring stops instead of generating alongside the new holder.
+User changes (update, skip, delete) take the same lease, so they never
+interleave with a generation run.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -32,6 +36,7 @@ from app.core.recurrence import (
 from app.schemas.transaction import TransactionType
 from app.services import transactions as transaction_service
 from app.services.errors import (
+    ConflictError,
     DomainError,
     NotFoundError,
     PermissionDeniedError,
@@ -44,6 +49,9 @@ RecurringTransaction = models.RecurringTransaction
 
 MADE_FROM = "Recurring"
 LEASE = timedelta(minutes=5)
+# How long a user change waits for a generation run to release the lease.
+LEASE_WAIT_SECONDS = 3.0
+LEASE_POLL_SECONDS = 0.2
 # Missed occurrences created per template in one run; the rest wait for the next run.
 MAX_OCCURRENCES_PER_RUN = 60
 UPCOMING_PREVIEW = 5
@@ -265,6 +273,34 @@ async def list_recurring(
 # ---------------------------------------------------------------------------
 # Writes
 # ---------------------------------------------------------------------------
+async def _lease_for_change(
+    db: AsyncSession, user: models.User, recurring_id: int
+) -> tuple[RecurringTransaction, datetime]:
+    """Load a template for a user change while holding its lease.
+
+    Waits briefly for a running generation to finish; returns the template and
+    the lease token. The caller must release the lease (or delete the template)
+    when done.
+    """
+    deadline = time.monotonic() + LEASE_WAIT_SECONDS
+    while True:
+        await get_recurring(db, user, recurring_id)
+        lease = await _acquire_lease(db, recurring_id)
+        if lease:
+            # Reload: a generation run may have changed it while we waited.
+            return await get_recurring(db, user, recurring_id), lease
+        if time.monotonic() >= deadline:
+            raise ConflictError(
+                "This recurring transaction is being processed, try again shortly"
+            )
+        await asyncio.sleep(LEASE_POLL_SECONDS)
+
+
+async def _abandon_change(db: AsyncSession, recurring_id: int, lease: datetime) -> None:
+    await db.rollback()
+    await _release_lease(db, recurring_id, lease)
+
+
 async def _require_ref(
     db: AsyncSession, user: models.User, crud_obj, obj_id: int | None, label: str
 ):
@@ -357,12 +393,27 @@ async def update_recurring(
     recurring_id: int,
     data: schemas.RecurringTransactionUpdate,
 ) -> RecurringTransaction:
-    template = await get_recurring(db, user, recurring_id)
     changes = data.model_dump(exclude_unset=True)
     for required in NON_NULLABLE_FIELDS:
         if required in changes and changes[required] is None:
             raise DomainError(f"{required} cannot be empty")
+    template, lease = await _lease_for_change(db, user, recurring_id)
+    try:
+        await _apply_update(db, user, template, changes)
+    except Exception:
+        await _abandon_change(db, recurring_id, lease)
+        raise
+    # Still leased: generate what the change made due, then release.
+    await generate_due(db, template.id, lease=lease)
+    return await get_recurring(db, user, template.id)
 
+
+async def _apply_update(
+    db: AsyncSession,
+    user: models.User,
+    template: RecurringTransaction,
+    changes: dict,
+) -> None:
     merged = {
         column: getattr(template, column)
         for column in (
@@ -406,17 +457,17 @@ async def update_recurring(
         _reschedule(template, from_date=from_date)
 
     await db.commit()
-    await generate_due(db, template.id)
-    return await get_recurring(db, user, template.id)
 
 
 async def skip_next(
     db: AsyncSession, user: models.User, recurring_id: int
 ) -> RecurringTransaction:
-    template = await get_recurring(db, user, recurring_id)
+    template, lease = await _lease_for_change(db, user, recurring_id)
     if not template.next_run_date:
+        await _abandon_change(db, recurring_id, lease)
         raise DomainError("This recurring transaction has no upcoming date")
     _advance(template)
+    template.locked_until = None
     await db.commit()
     return await get_recurring(db, user, template.id)
 
@@ -428,7 +479,18 @@ async def delete_recurring(
     *,
     delete_generated: bool = False,
 ) -> RecurringTransaction:
-    template = await get_recurring(db, user, recurring_id)
+    template, lease = await _lease_for_change(db, user, recurring_id)
+    try:
+        await _delete_template(db, template, delete_generated=delete_generated)
+    except Exception:
+        await _abandon_change(db, recurring_id, lease)
+        raise
+    return template
+
+
+async def _delete_template(
+    db: AsyncSession, template: RecurringTransaction, *, delete_generated: bool
+) -> None:
     if delete_generated:
         owner = await crud.user.get(db, id=template.owner_id)
         model = TRANSACTION_MODELS[RecurringType(template.type)]
@@ -454,7 +516,6 @@ async def delete_recurring(
             await delete(db, owner, transaction_id)
     await db.delete(template)
     await db.commit()
-    return template
 
 
 async def create_from_transaction(

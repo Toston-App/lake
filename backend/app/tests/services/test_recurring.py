@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from app.models import Expense, RecurringTransaction, Transfer, User
 from app.services import recurring as recurring_service
+from app.services.errors import ConflictError
 from app.worker import recurring_worker
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -243,6 +244,65 @@ async def test_lease_lost_between_occurrences_stops_generation(
     assert created == 1
     assert await _count(db_session, Expense, template.id) == 1
     assert template.locked_until == other
+
+
+async def test_user_changes_wait_for_a_generation_run(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(recurring_service, "LEASE_WAIT_SECONDS", 0)
+    template = await _create(db_session, test_user)
+    next_run_date = template.next_run_date
+    # A worker is generating this template.
+    template.locked_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+    await db_session.commit()
+
+    with pytest.raises(ConflictError):
+        await recurring_service.skip_next(db_session, test_user, template.id)
+    with pytest.raises(ConflictError):
+        await recurring_service.update_recurring(
+            db_session,
+            test_user,
+            template.id,
+            schemas.RecurringTransactionUpdate(is_active=False),
+        )
+    with pytest.raises(ConflictError):
+        await recurring_service.delete_recurring(db_session, test_user, template.id)
+
+    template = await db_session.get(
+        RecurringTransaction, template.id, populate_existing=True
+    )
+    assert template.is_active is True
+    assert template.next_run_date == next_run_date
+
+
+async def test_user_changes_hold_and_release_the_lease(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    template_id = (await _create(db_session, test_user)).id
+    leased_during_change = []
+    advance = recurring_service._advance
+
+    def spy(t: RecurringTransaction) -> None:
+        leased_during_change.append(t.locked_until is not None)
+        advance(t)
+
+    monkeypatch.setattr(recurring_service, "_advance", spy)
+    await recurring_service.skip_next(db_session, test_user, template_id)
+    assert leased_during_change == [True]
+
+    template = await db_session.get(
+        RecurringTransaction, template_id, populate_existing=True
+    )
+    assert template.locked_until is None
+
+    template = await recurring_service.update_recurring(
+        db_session,
+        test_user,
+        template_id,
+        schemas.RecurringTransactionUpdate(is_active=False),
+    )
+    assert template.is_active is False
+    assert template.locked_until is None
 
 
 async def test_failure_pauses_template_with_reason(

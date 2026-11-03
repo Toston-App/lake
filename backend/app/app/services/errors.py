@@ -25,5 +25,9 @@ class DomainError(ServiceError):
     status_code = 400
 
 
+class ConflictError(ServiceError):
+    status_code = 409
+
+
 def raise_http(exc: ServiceError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=exc.message)

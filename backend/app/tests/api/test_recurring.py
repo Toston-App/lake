@@ -464,6 +464,26 @@ class TestUpdateRecurring:
         assert resp.json()["next_run_date"] == (TODAY + timedelta(days=14)).isoformat()
         assert resp.json()["occurrences_count"] == 3
 
+    async def test_changes_conflict_while_generating(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from app.models import RecurringTransaction
+        from app.services import recurring as recurring_service
+
+        monkeypatch.setattr(recurring_service, "LEASE_WAIT_SECONDS", 0)
+        created = (await client.post(PREFIX, json=_weekly_expense())).json()
+        template = await _reload(db_session, RecurringTransaction, created["id"])
+        template.locked_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+        await db_session.commit()
+
+        url = f"{PREFIX}/{created['id']}"
+        assert (await client.post(f"{url}/skip")).status_code == 409
+        assert (await client.put(url, json={"is_active": False})).status_code == 409
+        assert (await client.delete(url)).status_code == 409
+
 
 class TestDeleteRecurring:
     async def test_delete_keeps_generated_transactions(
