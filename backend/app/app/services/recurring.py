@@ -60,6 +60,8 @@ SCHEDULE_FIELDS = frozenset(
         "timezone",
     }
 )
+# Schedule fields that don't change which dates the rule produces.
+LIMIT_FIELDS = frozenset({"end_date", "max_occurrences", "timezone"})
 TRANSACTION_MODELS = {
     RecurringType.expense: models.Expense,
     RecurringType.income: models.Income,
@@ -378,8 +380,16 @@ async def update_recurring(
         template.last_error = None
         _reschedule(template, from_date=local_today(template.timezone))
     elif SCHEDULE_FIELDS & changes.keys():
-        # Only future occurrences follow the new schedule.
+        # Only future occurrences follow the new schedule. The pending one is
+        # kept even when its nominal date has passed (a weekend date moved
+        # forward, or a due date the worker hasn't reached yet).
         from_date = local_today(template.timezone) if template.last_run_date else None
+        if template.next_nominal_date:
+            if not (changes.keys() & SCHEDULE_FIELDS) - LIMIT_FIELDS:
+                # The rule's dates are unchanged: keep the pending occurrence.
+                from_date = template.next_nominal_date
+            elif from_date:
+                from_date = min(from_date, template.next_nominal_date)
         _reschedule(template, from_date=from_date)
 
     await db.commit()

@@ -185,3 +185,84 @@ async def test_weekend_adjustment_records_friday(
         RecurringTransaction, template.id, populate_existing=True
     )
     assert template.next_run_date == date(2031, 12, 15)
+
+
+def _set_today(monkeypatch: pytest.MonkeyPatch, day: date) -> None:
+    monkeypatch.setattr(recurring_service, "local_today", lambda tz: day)
+
+
+async def _create_monthly_on_15th(
+    db: AsyncSession, user: User, **fields
+) -> RecurringTransaction:
+    """Created on 15 Oct 2031, so the first occurrence is already generated."""
+    return await _create(
+        db,
+        user,
+        frequency="monthly",
+        start_date=date(2031, 10, 15),
+        month_days=[15],
+        **fields,
+    )
+
+
+async def _update(db: AsyncSession, user: User, template, **fields):
+    return await recurring_service.update_recurring(
+        db, user, template.id, schemas.RecurringTransactionUpdate(**fields)
+    )
+
+
+async def test_editing_limits_keeps_weekend_occurrence_moved_forward(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    # Saturday 15 Nov 2031 -> Monday 17; the edit happens on Sunday 16.
+    _set_today(monkeypatch, date(2031, 10, 15))
+    template = await _create_monthly_on_15th(
+        db_session, test_user, business_day_adjustment="next"
+    )
+    assert template.next_run_date == date(2031, 11, 17)
+
+    _set_today(monkeypatch, date(2031, 11, 16))
+    template = await _update(
+        db_session, test_user, template, end_date=date(2032, 12, 31)
+    )
+    assert template.next_nominal_date == date(2031, 11, 15)
+    assert template.next_run_date == date(2031, 11, 17)
+
+
+async def test_editing_schedule_keeps_due_occurrence_not_yet_generated(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    _set_today(monkeypatch, date(2031, 10, 15))
+    template = await _create_monthly_on_15th(db_session, test_user)
+    assert template.occurrences_count == 1
+
+    # The worker hasn't generated the 15 Nov occurrence yet.
+    _set_today(monkeypatch, date(2031, 11, 20))
+    template = await _update(db_session, test_user, template, max_occurrences=12)
+    assert template.occurrences_count == 2
+    assert template.last_run_date == date(2031, 11, 15)
+    assert template.next_run_date == date(2031, 12, 15)
+
+
+async def test_editing_limits_keeps_skipped_occurrence_skipped(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    _set_today(monkeypatch, date(2031, 10, 15))
+    template = await _create_monthly_on_15th(db_session, test_user)
+    _set_today(monkeypatch, date(2031, 11, 2))
+    template = await recurring_service.skip_next(db_session, test_user, template.id)
+    assert template.next_run_date == date(2031, 12, 15)
+
+    template = await _update(db_session, test_user, template, timezone="UTC")
+    assert template.next_run_date == date(2031, 12, 15)
+
+
+async def test_changing_rule_reschedules_from_today(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    _set_today(monkeypatch, date(2031, 10, 15))
+    template = await _create_monthly_on_15th(db_session, test_user)
+    _set_today(monkeypatch, date(2031, 11, 2))
+    template = await _update(db_session, test_user, template, month_days=[10])
+    assert template.next_run_date == date(2031, 11, 10)
+    assert template.occurrences_count == 1
