@@ -324,6 +324,7 @@ async def create_recurring(
 
     template = RecurringTransaction(owner_id=user.id, occurrences_count=0, **fields)
     if source_transaction is not None:
+        template.source_transaction_id = source_transaction.id
         template.occurrences_count = 1
         template.last_run_date = data.start_date
         # The transaction covers the start date itself, even when a weekend
@@ -436,7 +437,11 @@ async def delete_recurring(
         ids = (
             (
                 await db.execute(
-                    select(model.id).where(model.recurring_id == template.id)
+                    select(model.id).where(
+                        model.recurring_id == template.id,
+                        # The transaction marked as recurring is not generated.
+                        model.id.is_distinct_from(template.source_transaction_id),
+                    )
                 )
             )
             .scalars()

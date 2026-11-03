@@ -198,7 +198,8 @@ async def delete_recurring_transaction(
 ) -> Any:
     """
     Delete a recurring transaction. Past transactions are kept unless
-    `delete_generated` is true.
+    `delete_generated` is true; the transaction that was marked as recurring
+    to create the series is always kept.
     """
     _enrich(
         request,

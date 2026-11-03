@@ -507,6 +507,89 @@ class TestDeleteRecurring:
         assert await _expenses(db_session, created["id"]) == []
         assert (await _reload(db_session, Account, account.id)).current_balance == 100
 
+    async def test_delete_generated_keeps_transaction_marked_as_recurring(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        account = await create_test_account(
+            db_session, owner_id=test_user.id, initial_balance=100
+        )
+        source = await client.post(
+            "/api/v1/expenses",
+            json={
+                "amount": 10,
+                "description": "Gym",
+                "date": (TODAY - timedelta(days=14)).isoformat(),
+                "account_id": account.id,
+            },
+        )
+        assert source.status_code == 200, source.text
+        source_id = source.json()["id"]
+        created = await client.post(
+            f"{PREFIX}/from-transaction",
+            json={
+                "transaction_type": "expense",
+                "transaction_id": source_id,
+                "frequency": "weekly",
+                "timezone": "UTC",
+            },
+        )
+        assert created.status_code == 200, created.text
+        recurring_id = created.json()["id"]
+        assert len(await _expenses(db_session, recurring_id)) == 3
+        assert (await _reload(db_session, Account, account.id)).current_balance == 70
+
+        resp = await client.delete(
+            f"{PREFIX}/{recurring_id}", params={"delete_generated": True}
+        )
+        assert resp.status_code == 200
+        assert await _expenses(db_session, recurring_id) == []
+        kept = await _reload(db_session, Expense, source_id)
+        assert kept is not None
+        assert kept.recurring_id is None
+        assert (await _reload(db_session, Account, account.id)).current_balance == 90
+
+    async def test_delete_generated_keeps_transfer_marked_as_recurring(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        checking = await create_test_account(
+            db_session, owner_id=test_user.id, initial_balance=1000
+        )
+        savings = await create_test_account(
+            db_session, owner_id=test_user.id, name="Savings"
+        )
+        source = await client.post(
+            "/api/v1/transfers",
+            json={
+                "amount": 100,
+                "date": (TODAY - timedelta(days=14)).isoformat(),
+                "from_acc": checking.id,
+                "to_acc": savings.id,
+            },
+        )
+        assert source.status_code == 200, source.text
+        source_id = source.json()["id"]
+        created = await client.post(
+            f"{PREFIX}/from-transaction",
+            json={
+                "transaction_type": "transfer",
+                "transaction_id": source_id,
+                "frequency": "weekly",
+                "timezone": "UTC",
+            },
+        )
+        assert created.status_code == 200, created.text
+        assert (await _reload(db_session, Account, savings.id)).current_balance == 300
+
+        resp = await client.delete(
+            f"{PREFIX}/{created.json()['id']}", params={"delete_generated": True}
+        )
+        assert resp.status_code == 200
+        kept = await _reload(db_session, Transfer, source_id)
+        assert kept is not None
+        assert kept.recurring_id is None
+        assert (await _reload(db_session, Account, checking.id)).current_balance == 900
+        assert (await _reload(db_session, Account, savings.id)).current_balance == 100
+
 
 class TestReadRecurring:
     async def test_list_and_ownership(

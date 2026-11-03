@@ -72,6 +72,10 @@ class RecurringTransaction(Base):
     place_id: int | None = Column(
         Integer, ForeignKey("place.id", ondelete="SET NULL"), nullable=True
     )
+    # The transaction that was marked as recurring to create this series, in
+    # the table matching `type`. It is the user's own entry, not a generated
+    # one, so deleting the series with its generated transactions keeps it.
+    source_transaction_id: int | None = Column(Integer, nullable=True)
 
     # Schedule rule, see app.core.recurrence.
     frequency: Frequency = Column(
