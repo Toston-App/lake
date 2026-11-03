@@ -172,6 +172,21 @@ def preview(data: schemas.RecurringPreviewRequest) -> schemas.RecurringPreview:
     )
 
 
+# Updatable columns that are NOT NULL in the database.
+NON_NULLABLE_FIELDS = (
+    "amount",
+    "frequency",
+    "interval",
+    "weekdays",
+    "monthly_mode",
+    "month_days",
+    "business_day_adjustment",
+    "start_date",
+    "timezone",
+    "is_active",
+)
+
+
 def _rule_from_fields(fields: dict) -> Rule:
     return Rule(
         frequency=fields["frequency"],
@@ -329,7 +344,7 @@ async def update_recurring(
 ) -> RecurringTransaction:
     template = await get_recurring(db, user, recurring_id)
     changes = data.model_dump(exclude_unset=True)
-    for required in ("amount", "frequency", "start_date", "timezone"):
+    for required in NON_NULLABLE_FIELDS:
         if required in changes and changes[required] is None:
             raise DomainError(f"{required} cannot be empty")
 

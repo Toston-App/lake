@@ -435,6 +435,28 @@ class TestUpdateRecurring:
         resp = await client.put(f"{PREFIX}/{created['id']}", json={"amount": None})
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "frequency",
+            "interval",
+            "weekdays",
+            "monthly_mode",
+            "month_days",
+            "business_day_adjustment",
+            "start_date",
+            "timezone",
+            "is_active",
+        ],
+    )
+    async def test_cannot_null_non_nullable_fields(
+        self, client: AsyncClient, field: str
+    ):
+        created = (await client.post(PREFIX, json=_weekly_expense())).json()
+        resp = await client.put(f"{PREFIX}/{created['id']}", json={field: None})
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == f"{field} cannot be empty"
+
     async def test_skip_next(self, client: AsyncClient):
         created = (await client.post(PREFIX, json=_weekly_expense())).json()
         resp = await client.post(f"{PREFIX}/{created['id']}/skip")
