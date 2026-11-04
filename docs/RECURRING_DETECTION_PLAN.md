@@ -45,6 +45,7 @@ POST /recurring/suggestions/accept   → create_from_transaction() per item
 POST /recurring/suggestions/dismiss  → insert fingerprints
 DELETE /recurring/suggestions/dismissals/{fingerprint} → undo a dismissal
 GET  /recurring/detect/last          → the saved result of the last scan
+GET  /recurring/detect/status        → whether a scan is running (§4.7)
 ```
 
 Principle: **date maths is deterministic code; the AI only decides "which texts
@@ -97,9 +98,9 @@ last result, so a free user who reloads the page doesn't lose their only scan.
 | Column | Type | Notes |
 |---|---|---|
 | owner_id | int PK, FK user.id, ON DELETE CASCADE | |
-| status | str | `running` / `done` |
+| status | str | `running` / `done` / `cancelled` |
 | scan_count | int | completed scans that returned suggestions, all tiers |
-| claimed_at | timestamptz | when the current or last scan started |
+| claimed_at | timestamptz | when the current or last scan started; for `cancelled`, when it was cancelled |
 | last_scan_at | timestamptz nullable | when the last scan completed |
 | last_result | JSONB nullable | the last `RecurringDetectionResult` |
 
@@ -223,17 +224,31 @@ requests can't both use the free scan:
 
 1. `INSERT … ON CONFLICT (owner_id) DO UPDATE SET status='running', claimed_at=now()
    WHERE <allowed>` `RETURNING owner_id`. With
-   `not_running = status <> 'running' OR claimed_at < now() - interval '10 minutes'`
-   (so a row left `running` by a crashed process doesn't block forever),
+   `not_running = (status <> 'running' OR claimed_at < now() - interval '10 minutes')
+   AND (status <> 'cancelled' OR claimed_at < now() - interval '1 minute')`
+   (so a row left `running` by a crashed process doesn't block forever, and a
+   cancelled scan is followed by a short cooldown),
    `<allowed>` is `not_running` for paid users and `scan_count = 0 AND not_running`
    for free users. A user with no row yet always gets the insert.
-2. No row returned → free user with `scan_count > 0`: 402; otherwise 409
-   "a scan is already running" (two parallel first scans: one runs, one gets 409).
+   The claim's `claimed_at` identifies it: steps 3–5 update the row only
+   `WHERE status = 'running' AND claimed_at = <this claim>`, so a scan whose
+   claim went stale and was taken over never touches the newer scan's row.
+2. No row returned → free user with `scan_count > 0`: 402; inside the cancel
+   cooldown: 429 `{"reason": "cancel_cooldown", "retry_after": s}` with
+   `Retry-After`; otherwise 409 "a scan is already running" (two parallel
+   first scans: one runs, one gets 409).
 3. On success: `status='done'`, `last_scan_at`, `last_result`, and
    `scan_count += 1` when the scan returned suggestions; commit.
 4. On any error during the scan: reset `status='done'` without touching
    `scan_count`, so a failed scan doesn't use the free one. AI fallback is not an
    error: a scan that completes without AI counts.
+5. When the request is cancelled (the client disconnected, e.g. a page reload):
+   set `status='cancelled'` and `claimed_at=now()` without touching
+   `scan_count`. Every await in a cancelled task is cancelled again, so this
+   runs as a background task on a session of its own, gives up after 10 s
+   (the claim then goes stale on its own) and is awaited on shutdown. The
+   1-minute cooldown keeps cancelling from being a way to start scans back to
+   back.
 
 402 body, same shape as the chat quota:
 
@@ -254,6 +269,15 @@ so accepted and dismissed items don't show up again. Not rate limited.
 `GET /users/me` gains `recurring_detection: {"scans_remaining": 0 | 1 | null}` so
 the frontend can show the button, the "1 free scan" label or the upgrade prompt
 without calling detect.
+
+### 4.7 `GET /recurring/detect/status`
+
+`{"running": bool, "last_scan_at": datetime | null, "scans_remaining": 0 | 1 | null}`.
+`running` is true only while `status='running'` and the claim isn't stale.
+A client that lost its request (409, timeout or a reload during a scan) polls
+it; when `running` turns false it reads `GET /detect/last`. A changed
+`last_scan_at` means the scan finished; an unchanged one means it was
+cancelled or failed. Not rate limited.
 
 ## 5. Detection logic
 
@@ -524,7 +548,7 @@ history. The fingerprint and template match in §5.8 already stop them coming ba
 | `app/services/recurring_detection.py` | new: load, resolve, skip, detect, classify, accept, dismiss |
 | `app/services/recurring.py` | `create_recurring(..., detection_fingerprint=None, snap_source_to_rule=False)` |
 | `app/schemas/recurring.py` | suggestion, result, accept, dismiss schemas |
-| `app/api/api_v1/endpoints/recurring.py` | 5 endpoints, before `/{id}` |
+| `app/api/api_v1/endpoints/recurring.py` | 6 endpoints, before `/{id}` |
 | `app/core/config.py` | settings in §6.3 |
 
 ## 9. Tests
@@ -573,6 +597,9 @@ AI calls are replaced with `pydantic_ai.models.function.FunctionModel` via
 - lapsed paid user who scanned before → 402
 - `GET /detect/last` hides accepted and dismissed suggestions; 404 before any scan
 - `/users/me` returns `scans_remaining` 1 → 0 for free, null for paid
+- `GET /detect/status`: running while claimed, not running once released or stale
+- cancelled scan: claim released from its own session, free scan not used, next scan 429 until the cooldown ends
+- a stale scan that fails or is cancelled leaves the claim of the newer scan that took it over
 
 ## 10. Implementation order
 
