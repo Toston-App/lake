@@ -685,3 +685,71 @@ async def test_tier2_scans_without_limit(
     for _ in range(2):
         scan = await detection.run_scan(db_session, test_user)
         assert scan.result.scans_remaining is None
+
+
+async def test_release_leaves_a_claim_taken_over_by_a_newer_scan(
+    db_session: AsyncSession, test_user: User
+):
+    old_claim = await detection.claim_scan(db_session, test_user, unlimited=True)
+    await db_session.execute(
+        update(RecurringDetectionUsage)
+        .where(RecurringDetectionUsage.owner_id == test_user.id)
+        .values(claimed_at=old_claim - timedelta(minutes=11))
+    )
+    await db_session.commit()
+    stale_claim = old_claim - timedelta(minutes=11)
+    await detection.claim_scan(db_session, test_user, unlimited=True)
+
+    # The stale scan finally fails: it must not free the newer scan's claim.
+    await detection.release_scan(db_session, test_user.id, stale_claim)
+    usage = await _usage(db_session, test_user)
+    assert usage.status == "running"
+    with pytest.raises(ConflictError):
+        await detection.claim_scan(db_session, test_user, unlimited=True)
+
+
+async def test_cancel_cooldown_expires(db_session: AsyncSession, test_user: User):
+    claimed_at = await detection.claim_scan(db_session, test_user, unlimited=True)
+    await detection._finish_scan(
+        db_session, test_user.id, claimed_at=claimed_at, status=detection.CANCELLED
+    )
+    with pytest.raises(detection.ScanCooldownError):
+        await detection.claim_scan(db_session, test_user, unlimited=True)
+
+    await db_session.execute(
+        update(RecurringDetectionUsage)
+        .where(RecurringDetectionUsage.owner_id == test_user.id)
+        .values(claimed_at=datetime.now(timezone.utc) - timedelta(minutes=2))
+    )
+    await db_session.commit()
+    await detection.claim_scan(db_session, test_user, unlimited=True)
+
+
+async def test_cancel_release_uses_a_session_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The real cleanup path: a fresh session, not the cancelled request's."""
+    from uuid import uuid4
+
+    from sqlalchemy import delete
+
+    from tests.conftest import TestSessionLocal
+
+    monkeypatch.setattr(detection, "async_session", TestSessionLocal)
+    async with TestSessionLocal() as setup:
+        user = User(email=f"cancel-{uuid4()}@example.com", country="USD")
+        setup.add(user)
+        await setup.commit()
+        user_id = user.id
+        claimed_at = await detection.claim_scan(setup, user, unlimited=False)
+
+    try:
+        detection._release_in_background(user_id, claimed_at)
+        await detection.wait_for_cleanup()
+        async with TestSessionLocal() as verify:
+            usage = await verify.get(RecurringDetectionUsage, user_id)
+            assert (usage.status, usage.scan_count) == ("cancelled", 0)
+    finally:
+        async with TestSessionLocal() as cleanup:
+            await cleanup.execute(delete(User).where(User.id == user_id))
+            await cleanup.commit()

@@ -79,6 +79,12 @@ async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("👋 Shutting down application...")
 
+    # Release recurring scans cancelled just before shutdown, so they don't
+    # show as running until their claim goes stale.
+    from app.services.recurring_detection import wait_for_cleanup
+
+    await wait_for_cleanup()
+
     # Flush any remaining logs to Axiom
     axiom_client = get_axiom_client()
     if axiom_client:

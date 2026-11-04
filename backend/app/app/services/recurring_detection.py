@@ -13,8 +13,11 @@ any tier counts, so a lapsed paid user who scanned has no free scan left.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 from collections import defaultdict
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -44,6 +47,7 @@ from app.core.recurrence_detection import (
     text_key,
 )
 from app.core.tiers import FEATURE_RECURRING_DETECTION, has_feature
+from app.db.session import async_session
 from app.schemas.transaction import TransactionType
 from app.services import recurring as recurring_service
 from app.services.errors import (
@@ -64,8 +68,15 @@ AI_MERCHANT_CHUNK = 150
 AI_MERCHANT_MAX_CHUNKS = 4
 # A claim older than this belongs to a scan that crashed; it can be taken over.
 STALE_CLAIM = timedelta(minutes=10)
+# After a cancelled scan (e.g. a page reload) the next one waits this long, so
+# cancelling can't be used to start scans back to back.
+CANCEL_COOLDOWN = timedelta(minutes=1)
+# The release after a cancel gives up after this, rather than holding a
+# connection while it waits on a row lock.
+RELEASE_TIMEOUT_S = 10
 RUNNING = "running"
 DONE = "done"
+CANCELLED = "cancelled"
 
 
 class ScanLimitError(ServiceError):
@@ -87,6 +98,19 @@ class ScanLimitError(ServiceError):
             else None,
             "upgrade_url": "/account",
         }
+
+
+class ScanCooldownError(ServiceError):
+    """The last scan was cancelled moments ago."""
+
+    status_code = 429
+
+    def __init__(self, retry_after: int):
+        super().__init__("A scan was just cancelled; try again shortly")
+        self.retry_after = retry_after
+
+    def detail(self) -> dict[str, Any]:
+        return {"reason": "cancel_cooldown", "retry_after": self.retry_after}
 
 
 # ---------------------------------------------------------------------------
@@ -120,14 +144,23 @@ async def scans_remaining(db: AsyncSession, user: models.User) -> int | None:
     return _remaining(False, await _usage(db, user))
 
 
-async def claim_scan(db: AsyncSession, user: models.User, *, unlimited: bool) -> None:
+async def claim_scan(
+    db: AsyncSession, user: models.User, *, unlimited: bool
+) -> datetime:
     """Take the user's scan slot, atomically, before running a scan.
 
-    Raises ScanLimitError when a free user has used their scan and
-    ConflictError when another scan for this user is still running.
+    Returns the claim's `claimed_at`, which identifies it: finishing or
+    releasing only touches the row while it still holds this claim.
+
+    Raises ScanLimitError when a free user has used their scan,
+    ScanCooldownError right after a cancelled scan and ConflictError when
+    another scan for this user is still running.
     """
     now = datetime.now(timezone.utc)
-    not_running = or_(Usage.status != RUNNING, Usage.claimed_at < now - STALE_CLAIM)
+    not_running = and_(
+        or_(Usage.status != RUNNING, Usage.claimed_at < now - STALE_CLAIM),
+        or_(Usage.status != CANCELLED, Usage.claimed_at < now - CANCEL_COOLDOWN),
+    )
     allowed = not_running if unlimited else and_(Usage.scan_count == 0, not_running)
     stmt = (
         insert(Usage)
@@ -142,12 +175,15 @@ async def claim_scan(db: AsyncSession, user: models.User, *, unlimited: bool) ->
     claimed = (await db.execute(stmt)).scalar_one_or_none()
     await db.commit()
     if claimed is not None:
-        return
+        return now
     usage = await _usage(db, user)
     if usage is not None:
         await db.refresh(usage)
     if not unlimited and usage is not None and usage.scan_count > 0:
         raise ScanLimitError(usage.last_scan_at)
+    if usage is not None and usage.status == CANCELLED and usage.claimed_at:
+        wait = usage.claimed_at + CANCEL_COOLDOWN - now
+        raise ScanCooldownError(max(1, math.ceil(wait.total_seconds())))
     raise ConflictError("A scan is already running")
 
 
@@ -155,21 +191,77 @@ async def _finish_scan(
     db: AsyncSession,
     user_id: int,
     *,
+    claimed_at: datetime,
     result: dict[str, Any] | None = None,
     counted: bool = False,
-) -> None:
-    values: dict[str, Any] = {"status": DONE}
+    status: str = DONE,
+) -> bool:
+    """End the scan holding `claimed_at`. False if that claim was lost.
+
+    A claim is lost when a newer scan took it over after it went stale; the
+    row then belongs to that scan and is left alone.
+    """
+    values: dict[str, Any] = {"status": status}
     if result is not None:
         values.update(last_result=result, last_scan_at=datetime.now(timezone.utc))
     if counted:
         values["scan_count"] = Usage.scan_count + 1
-    await db.execute(
+    if status == CANCELLED:
+        # The cooldown counts from the cancel, not from the scan's start.
+        values["claimed_at"] = datetime.now(timezone.utc)
+    updated = await db.execute(
         update(Usage)
-        .where(Usage.owner_id == user_id)
+        .where(
+            Usage.owner_id == user_id,
+            Usage.status == RUNNING,
+            Usage.claimed_at == claimed_at,
+        )
         .values(**values)
         .execution_options(synchronize_session=False)
     )
     await db.commit()
+    if updated.rowcount == 0:
+        logger.warning("Recurring scan of user %s lost its claim", user_id)
+        return False
+    return True
+
+
+def _cleanup_session() -> AbstractAsyncContextManager[AsyncSession]:
+    """A session of its own: the request's may be closed by the cancellation."""
+    return async_session()
+
+
+# Strong references, so cleanup tasks aren't garbage collected mid-run.
+_cleanup_tasks: set[asyncio.Task] = set()
+
+
+async def _release_after_cancel(user_id: int, claimed_at: datetime) -> None:
+    async def release() -> None:
+        async with _cleanup_session() as db:
+            await _finish_scan(db, user_id, claimed_at=claimed_at, status=CANCELLED)
+
+    try:
+        await asyncio.wait_for(release(), RELEASE_TIMEOUT_S)
+    except Exception:
+        # The claim then goes stale on its own (STALE_CLAIM).
+        logger.exception("Could not release the recurring scan of user %s", user_id)
+
+
+def _release_in_background(user_id: int, claimed_at: datetime) -> None:
+    """Release the claim even though the current task is being cancelled.
+
+    Every await in a cancelled task is cancelled again, so the release runs
+    as its own task.
+    """
+    task = asyncio.create_task(_release_after_cancel(user_id, claimed_at))
+    _cleanup_tasks.add(task)
+    task.add_done_callback(_cleanup_tasks.discard)
+
+
+async def wait_for_cleanup() -> None:
+    """Let pending releases finish, e.g. on shutdown."""
+    if _cleanup_tasks:
+        await asyncio.gather(*_cleanup_tasks, return_exceptions=True)
 
 
 async def _rollback(db: AsyncSession, user: models.User) -> None:
@@ -178,17 +270,17 @@ async def _rollback(db: AsyncSession, user: models.User) -> None:
     await db.refresh(user)
 
 
-async def release_scan(db: AsyncSession, user_id: int) -> None:
+async def release_scan(db: AsyncSession, user_id: int, claimed_at: datetime) -> None:
     """Give the slot back after a failed scan, without using up the free one.
 
     Rolls back only if the session is unusable: everything the scan wrote
     (merchant aliases) was already committed.
     """
     try:
-        await _finish_scan(db, user_id)
+        await _finish_scan(db, user_id, claimed_at=claimed_at)
     except Exception:
         await db.rollback()
-        await _finish_scan(db, user_id)
+        await _finish_scan(db, user_id, claimed_at=claimed_at)
 
 
 # ---------------------------------------------------------------------------
@@ -692,23 +784,53 @@ async def run_scan(
     """Claim the user's scan slot, scan, and save the result.
 
     A scan only uses up the free scan when it returns suggestions. If the scan
-    or saving its result fails, the slot is released without counting.
+    or saving its result fails, or the request is cancelled, the slot is
+    released without counting.
     """
     user_id = user.id
     if unlimited is None:
         unlimited = await has_unlimited_scans(db, user)
-    await claim_scan(db, user, unlimited=unlimited)
+    claimed_at = await claim_scan(db, user, unlimited=unlimited)
     try:
         scan = await detect(db, user, use_ai=use_ai, today=today)
         counted = bool(scan.result.suggestions)
         scan.result.scans_remaining = None if unlimited else (0 if counted else 1)
         await _finish_scan(
-            db, user_id, result=scan.result.model_dump(mode="json"), counted=counted
+            db,
+            user_id,
+            claimed_at=claimed_at,
+            result=scan.result.model_dump(mode="json"),
+            counted=counted,
         )
+    except asyncio.CancelledError:
+        # The client went away (e.g. a page reload). Free the claim right
+        # away so the status stops reporting a scan that isn't running.
+        _release_in_background(user_id, claimed_at)
+        raise
     except Exception:
-        await release_scan(db, user_id)
+        await release_scan(db, user_id, claimed_at)
         raise
     return scan
+
+
+async def scan_status(
+    db: AsyncSession, user: models.User
+) -> schemas.RecurringDetectionStatus:
+    """Whether a scan is running, so a client that lost its request can wait."""
+    usage = await _usage(db, user)
+    stale_before = datetime.now(timezone.utc) - STALE_CLAIM
+    running = (
+        usage is not None
+        and usage.status == RUNNING
+        and usage.claimed_at is not None
+        and usage.claimed_at >= stale_before
+    )
+    unlimited = await has_unlimited_scans(db, user)
+    return schemas.RecurringDetectionStatus(
+        running=running,
+        last_scan_at=usage.last_scan_at if usage else None,
+        scans_remaining=_remaining(unlimited, usage),
+    )
 
 
 async def last_result(

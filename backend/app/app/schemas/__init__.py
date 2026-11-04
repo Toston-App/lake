@@ -64,6 +64,7 @@ from .feedback import Feedback, FeedbackCreate
 from .recurring_transaction import (
     RecurringDetectionAccess,
     RecurringDetectionResult,
+    RecurringDetectionStatus,
     RecurringDetectRequest,
     RecurringFromTransaction,
     RecurringPreview,

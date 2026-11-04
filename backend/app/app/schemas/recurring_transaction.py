@@ -230,6 +230,13 @@ class RecurringDetectionAccess(BaseModel):
     scans_remaining: int | None = None
 
 
+class RecurringDetectionStatus(BaseModel):
+    # A scan holds the claim; it stops counting once the claim goes stale.
+    running: bool
+    last_scan_at: datetime | None = None
+    scans_remaining: int | None = None
+
+
 class RecurringSuggestionAccept(RecurringFromTransaction):
     """A suggestion to turn into a template, with any edits the user made.
 
