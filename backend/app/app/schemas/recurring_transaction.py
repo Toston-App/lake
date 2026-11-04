@@ -171,3 +171,101 @@ class RecurringPreviewRequest(RecurrenceRule):
 
 class RecurringPreview(BaseModel):
     upcoming: list[UpcomingOccurrence]
+
+
+# ---------------------------------------------------------------------------
+# Detection of recurring series
+# ---------------------------------------------------------------------------
+FINGERPRINT_LENGTH = 32
+MAX_SUGGESTION_ITEMS = 50
+
+
+class RecurringDetectRequest(BaseModel):
+    use_ai: bool = True
+
+
+class SuggestionOccurrence(BaseModel):
+    transaction_id: int
+    date: date
+    amount: float
+
+
+class RecurringSuggestion(BaseModel):
+    fingerprint: str
+    type: RecurringType
+    merchant_name: str
+    description: str | None = None
+    amount: float
+    amount_min: float
+    amount_max: float
+    account_id: int | None = None
+    to_account_id: int | None = None
+    category_id: int | None = None
+    subcategory_id: int | None = None
+    place_id: int | None = None
+    frequency: Frequency
+    interval: int
+    weekdays: list[int] = []
+    monthly_mode: MonthlyMode = MonthlyMode.day_of_month
+    month_days: list[int] = []
+    business_day_adjustment: BusinessDayAdjustment = BusinessDayAdjustment.none
+    occurrences: list[SuggestionOccurrence]
+    last_date: date
+    next_expected_date: date | None = None
+    confidence: float
+    kind: str | None = None
+    reasons: list[str] = []
+
+
+class RecurringDetectionResult(BaseModel):
+    suggestions: list[RecurringSuggestion]
+    ai_used: bool
+    scanned_transactions: int
+    scanned_at: datetime
+    # Scans left: 0 or 1 for free users, None (unlimited) for paid tiers.
+    scans_remaining: int | None = None
+
+
+class RecurringDetectionAccess(BaseModel):
+    scans_remaining: int | None = None
+
+
+class RecurringSuggestionAccept(RecurringFromTransaction):
+    """A suggestion to turn into a template, with any edits the user made.
+
+    `transaction_id` must be the latest occurrence of the series.
+    """
+
+    fingerprint: str = Field(
+        min_length=FINGERPRINT_LENGTH, max_length=FINGERPRINT_LENGTH
+    )
+
+
+class RecurringSuggestionAcceptRequest(BaseModel):
+    items: list[RecurringSuggestionAccept] = Field(
+        min_length=1, max_length=MAX_SUGGESTION_ITEMS
+    )
+
+
+class RecurringSuggestionAcceptResult(BaseModel):
+    fingerprint: str
+    status: str  # "created" | "error"
+    recurring: RecurringTransactionDetail | None = None
+    error: str | None = None
+
+
+class RecurringSuggestionDismissItem(BaseModel):
+    fingerprint: str = Field(
+        min_length=FINGERPRINT_LENGTH, max_length=FINGERPRINT_LENGTH
+    )
+    label: str | None = Field(default=None, max_length=200)
+
+
+class RecurringSuggestionDismissRequest(BaseModel):
+    items: list[RecurringSuggestionDismissItem] = Field(
+        min_length=1, max_length=MAX_SUGGESTION_ITEMS
+    )
+
+
+class RecurringSuggestionDismissResult(BaseModel):
+    dismissed: int

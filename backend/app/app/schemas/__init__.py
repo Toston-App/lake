@@ -62,9 +62,19 @@ from .expense import (
 )
 from .feedback import Feedback, FeedbackCreate
 from .recurring_transaction import (
+    RecurringDetectionAccess,
+    RecurringDetectionResult,
+    RecurringDetectRequest,
     RecurringFromTransaction,
     RecurringPreview,
     RecurringPreviewRequest,
+    RecurringSuggestion,
+    RecurringSuggestionAccept,
+    RecurringSuggestionAcceptRequest,
+    RecurringSuggestionAcceptResult,
+    RecurringSuggestionDismissItem,
+    RecurringSuggestionDismissRequest,
+    RecurringSuggestionDismissResult,
     RecurringTransaction,
     RecurringTransactionCreate,
     RecurringTransactionDetail,

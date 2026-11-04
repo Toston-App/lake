@@ -1,0 +1,687 @@
+"""Recurring detection against a real database: skipping, accepting, AI and access."""
+
+import json
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import AsyncMock
+
+import pytest
+from app.ai import recurring_detection as ai
+from app.core.config import settings
+from app.models import (
+    Expense,
+    RecurringDetectionUsage,
+    RecurringMerchantAlias,
+    RecurringTransaction,
+    User,
+)
+from app.services import recurring_detection as detection
+from app.services.errors import ConflictError, NotFoundError
+from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import schemas
+from tests.utils import create_test_account, create_test_expense, create_test_user
+
+TODAY = datetime.now(timezone.utc).date()
+
+
+@pytest.fixture(autouse=True)
+def _isolate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "RECURRING_DETECTION_AI_ENABLED", False)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", False)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "free")
+    monkeypatch.setattr(
+        "app.services.transactions.invalidate_user_cache", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        "app.services.accounts.invalidate_user_cache", AsyncMock(return_value=True)
+    )
+
+
+@pytest.fixture
+def paid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "tier1")
+
+
+@pytest.fixture
+def ai_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "RECURRING_DETECTION_AI_ENABLED", True)
+
+
+def monthly_dates(day: int, count: int, today: date = TODAY) -> list[date]:
+    """`day` of the last `count` months, the newest on or before today."""
+    year, month = today.year, today.month
+    if day > today.day:
+        month -= 1
+    out = []
+    for _ in range(count):
+        if month == 0:
+            year, month = year - 1, 12
+        out.append(date(year, month, day))
+        month -= 1
+    return sorted(out)
+
+
+async def add_series(
+    db: AsyncSession,
+    user: User,
+    *,
+    description: str = "NETFLIX.COM 8473",
+    amount: float = 15.99,
+    day: int = 10,
+    count: int = 6,
+    account_id: int | None = None,
+) -> list[Expense]:
+    return [
+        await create_test_expense(
+            db,
+            owner_id=user.id,
+            amount=amount,
+            expense_date=d,
+            description=description,
+            account_id=account_id,
+        )
+        for d in monthly_dates(day, count)
+    ]
+
+
+def accept_item(
+    suggestion: schemas.RecurringSuggestion, **overrides
+) -> schemas.RecurringSuggestionAccept:
+    data = {
+        "fingerprint": suggestion.fingerprint,
+        "transaction_type": suggestion.type.value,
+        "transaction_id": suggestion.occurrences[0].transaction_id,
+        "frequency": suggestion.frequency,
+        "interval": suggestion.interval,
+        "month_days": suggestion.month_days,
+        "business_day_adjustment": suggestion.business_day_adjustment,
+    }
+    data.update(overrides)
+    return schemas.RecurringSuggestionAccept(**data)
+
+
+def _payload(messages) -> list[dict]:
+    for message in reversed(messages):
+        for part in getattr(message, "parts", []):
+            if isinstance(part, UserPromptPart):
+                return json.loads(part.content)
+    raise AssertionError("no prompt")
+
+
+def merchant_model(mapping: dict[str, str], calls: list) -> FunctionModel:
+    def fn(messages, info: AgentInfo) -> ModelResponse:
+        items = _payload(messages)
+        calls.append(items)
+        out = [
+            {
+                "i": item["i"],
+                "merchant_key": mapping.get(item["text"], item["text"]),
+                "merchant_name": mapping.get(item["text"], item["text"]).title(),
+            }
+            for item in items
+        ]
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"items": out})]
+        )
+
+    return FunctionModel(fn)
+
+
+def label_model(kind: str, is_commitment: bool, confidence: float) -> FunctionModel:
+    def fn(messages, info: AgentInfo) -> ModelResponse:
+        out = [
+            {
+                "i": item["i"],
+                "kind": kind,
+                "is_commitment": is_commitment,
+                "confidence": confidence,
+            }
+            for item in _payload(messages)
+        ]
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"items": out})]
+        )
+
+    return FunctionModel(fn)
+
+
+def failing_model() -> FunctionModel:
+    def fn(messages, info):  # noqa: ARG001
+        raise TimeoutError("model timed out")
+
+    return FunctionModel(fn)
+
+
+# -- skipping ------------------------------------------------------------------
+async def test_transactions_in_a_series_are_ignored(
+    db_session: AsyncSession, test_user: User
+):
+    expenses = await add_series(db_session, test_user)
+    template = RecurringTransaction(
+        owner_id=test_user.id,
+        type="expense",
+        amount=1,
+        frequency="daily",
+        start_date=TODAY,
+        is_active=False,
+    )
+    db_session.add(template)
+    await db_session.flush()
+    for expense in expenses:
+        expense.recurring_id = template.id
+    await db_session.commit()
+
+    scan = await detection.detect(db_session, test_user)
+    assert scan.result.scanned_transactions == 0
+    assert scan.result.suggestions == []
+
+
+async def test_series_matching_a_paused_template_is_skipped(
+    db_session: AsyncSession, test_user: User
+):
+    await add_series(db_session, test_user)
+    [found] = (await detection.detect(db_session, test_user)).result.suggestions
+    assert found.merchant_name == "Netflix"
+
+    db_session.add(
+        RecurringTransaction(
+            owner_id=test_user.id,
+            type="expense",
+            amount=15.99,
+            description="Netflix",
+            frequency="monthly",
+            start_date=TODAY,
+            is_active=False,
+        )
+    )
+    await db_session.commit()
+    assert (await detection.detect(db_session, test_user)).result.suggestions == []
+
+
+async def test_dismissed_suggestion_is_skipped_until_undone(
+    db_session: AsyncSession, test_user: User
+):
+    await add_series(db_session, test_user)
+    [found] = (await detection.detect(db_session, test_user)).result.suggestions
+    item = schemas.RecurringSuggestionDismissItem(
+        fingerprint=found.fingerprint, label="Netflix · monthly"
+    )
+
+    assert await detection.dismiss_suggestions(db_session, test_user, [item]) == 1
+    assert await detection.dismiss_suggestions(db_session, test_user, [item]) == 0
+    assert (await detection.detect(db_session, test_user)).result.suggestions == []
+
+    await detection.undo_dismissal(db_session, test_user, found.fingerprint)
+    assert len((await detection.detect(db_session, test_user)).result.suggestions) == 1
+    with pytest.raises(NotFoundError):
+        await detection.undo_dismissal(db_session, test_user, found.fingerprint)
+
+
+# -- accepting -----------------------------------------------------------------
+async def test_accept_creates_a_template_without_back_dated_copies(
+    db_session: AsyncSession, test_user: User
+):
+    account = await create_test_account(db_session, owner_id=test_user.id)
+    expenses = await add_series(db_session, test_user, account_id=account.id)
+    [found] = (await detection.detect(db_session, test_user)).result.suggestions
+    assert found.occurrences[0].transaction_id == expenses[-1].id
+
+    [result] = await detection.accept_suggestions(
+        db_session, test_user, [accept_item(found)]
+    )
+    assert result.status == "created", result.error
+    template = await db_session.get(RecurringTransaction, result.recurring.id)
+    assert template.detection_fingerprint == found.fingerprint
+    assert template.source_transaction_id == expenses[-1].id
+    assert template.next_run_date > TODAY
+    linked = await db_session.execute(
+        select(Expense.id).where(Expense.recurring_id == template.id)
+    )
+    assert linked.scalars().all() == [expenses[-1].id]
+
+
+async def test_accept_snaps_a_moved_charge_to_its_rule_date(
+    db_session: AsyncSession, test_user: User
+):
+    # The last charge came two days early; the series is due on the 15th.
+    latest = monthly_dates(15, 1, TODAY - timedelta(days=40))[0]
+    expense = await create_test_expense(
+        db_session,
+        owner_id=test_user.id,
+        amount=9.99,
+        expense_date=latest - timedelta(days=2),
+        description="spotify",
+    )
+    item = schemas.RecurringSuggestionAccept(
+        fingerprint="f" * 32,
+        transaction_type="expense",
+        transaction_id=expense.id,
+        frequency="monthly",
+        month_days=[15],
+    )
+    [result] = await detection.accept_suggestions(db_session, test_user, [item])
+    assert result.status == "created", result.error
+    template = await db_session.get(RecurringTransaction, result.recurring.id)
+    assert template.next_nominal_date.month != latest.month
+
+
+async def test_accept_with_an_older_transaction_fails_only_that_item(
+    db_session: AsyncSession, test_user: User
+):
+    await add_series(db_session, test_user)
+    await add_series(db_session, test_user, description="Spotify", amount=9.99, day=20)
+    netflix, spotify = sorted(
+        (await detection.detect(db_session, test_user)).result.suggestions,
+        key=lambda s: s.merchant_name,
+    )
+    older = netflix.occurrences[2].transaction_id
+
+    results = await detection.accept_suggestions(
+        db_session,
+        test_user,
+        [accept_item(netflix, transaction_id=older), accept_item(spotify)],
+    )
+    assert [r.status for r in results] == ["error", "created"]
+    assert "latest transaction" in results[0].error
+
+
+async def test_accepted_suggestion_stays_hidden_after_rename(
+    db_session: AsyncSession, test_user: User
+):
+    await add_series(db_session, test_user)
+    [found] = (await detection.detect(db_session, test_user)).result.suggestions
+    [result] = await detection.accept_suggestions(
+        db_session, test_user, [accept_item(found)]
+    )
+    await db_session.execute(
+        update(RecurringTransaction)
+        .where(RecurringTransaction.id == result.recurring.id)
+        .values(description="Movies")
+    )
+    await db_session.commit()
+
+    assert (await detection.detect(db_session, test_user)).result.suggestions == []
+    [again] = await detection.accept_suggestions(
+        db_session, test_user, [accept_item(found)]
+    )
+    assert again.status == "error"
+
+
+# -- AI --------------------------------------------------------------------------
+async def test_ai_groups_merchants_and_caches_aliases(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    dates = monthly_dates(10, 6)
+    for i, day in enumerate(dates):
+        await create_test_expense(
+            db_session,
+            owner_id=test_user.id,
+            amount=15.99,
+            expense_date=day,
+            description="NETFLIX.COM 8473" if i % 2 else "netflix subscription",
+        )
+    calls: list = []
+    mapping = {"netflix": "netflix", "netflix subscription": "netflix"}
+    with (
+        ai.merchant_agent.override(model=merchant_model(mapping, calls)),
+        ai.classify_agent.override(model=label_model("subscription", True, 0.9)),
+    ):
+        first = await detection.detect(db_session, test_user)
+        second = await detection.detect(db_session, test_user)
+
+    [found] = first.result.suggestions
+    assert len(found.occurrences) == 6
+    assert found.kind == "subscription"
+    assert first.result.ai_used
+    assert len(calls) == 1  # the second scan used the cached aliases
+    assert len(second.result.suggestions) == 1
+    aliases = await db_session.execute(
+        select(RecurringMerchantAlias.source).where(
+            RecurringMerchantAlias.owner_id == test_user.id
+        )
+    )
+    assert set(aliases.scalars()) == {"ai"}
+
+
+async def test_ai_failure_falls_back_and_is_not_cached(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    await add_series(db_session, test_user)
+    with (
+        ai.merchant_agent.override(model=failing_model()),
+        ai.classify_agent.override(model=failing_model()),
+    ):
+        scan = await detection.detect(db_session, test_user)
+
+    assert len(scan.result.suggestions) == 1
+    assert scan.result.ai_used is False
+    assert scan.result.suggestions[0].kind is None
+    aliases = await db_session.execute(select(RecurringMerchantAlias.id))
+    assert aliases.scalars().all() == []
+
+
+async def test_habit_with_high_confidence_is_dropped(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    await add_series(db_session, test_user, description="Starbucks")
+    with (
+        ai.merchant_agent.override(model=merchant_model({}, [])),
+        ai.classify_agent.override(model=label_model("habit", False, 0.95)),
+    ):
+        scan = await detection.detect(db_session, test_user)
+    assert scan.result.suggestions == []
+    assert scan.candidates == 1
+
+
+# -- access ----------------------------------------------------------------------
+async def _usage(db: AsyncSession, user: User) -> RecurringDetectionUsage:
+    result = await db.execute(
+        select(RecurringDetectionUsage).where(
+            RecurringDetectionUsage.owner_id == user.id
+        )
+    )
+    usage = result.scalar_one()
+    await db.refresh(usage)
+    return usage
+
+
+async def test_free_user_gets_one_scan(db_session: AsyncSession, test_user: User):
+    await add_series(db_session, test_user)
+    assert await detection.scans_remaining(db_session, test_user) == 1
+
+    scan = await detection.run_scan(db_session, test_user)
+    assert len(scan.result.suggestions) == 1
+    assert scan.result.scans_remaining == 0
+    assert await detection.scans_remaining(db_session, test_user) == 0
+
+    with pytest.raises(detection.ScanLimitError) as exc:
+        await detection.run_scan(db_session, test_user)
+    assert exc.value.detail()["reason"] == "recurring_detection_limit"
+    assert exc.value.detail()["last_scan_at"] is not None
+
+
+async def test_free_scan_without_suggestions_does_not_count(
+    db_session: AsyncSession, test_user: User
+):
+    scan = await detection.run_scan(db_session, test_user)
+    assert scan.result.suggestions == []
+    assert scan.result.scans_remaining == 1
+
+    await add_series(db_session, test_user)
+    scan = await detection.run_scan(db_session, test_user)
+    assert len(scan.result.suggestions) == 1
+    assert (await _usage(db_session, test_user)).scan_count == 1
+
+
+async def test_failed_scan_does_not_use_the_free_scan(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    await add_series(db_session, test_user)
+    monkeypatch.setattr(detection, "detect", AsyncMock(side_effect=RuntimeError))
+    with pytest.raises(RuntimeError):
+        await detection.run_scan(db_session, test_user)
+    usage = await _usage(db_session, test_user)
+    assert (usage.status, usage.scan_count) == ("done", 0)
+
+    monkeypatch.undo()
+    monkeypatch.setattr(settings, "RECURRING_DETECTION_AI_ENABLED", False)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_ENABLED", False)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "free")
+    scan = await detection.run_scan(db_session, test_user)
+    assert len(scan.result.suggestions) == 1
+
+
+async def test_running_scan_blocks_another_until_it_goes_stale(
+    db_session: AsyncSession, test_user: User
+):
+    await detection.claim_scan(db_session, test_user, unlimited=False)
+    with pytest.raises(ConflictError):
+        await detection.claim_scan(db_session, test_user, unlimited=False)
+
+    await db_session.execute(
+        update(RecurringDetectionUsage)
+        .where(RecurringDetectionUsage.owner_id == test_user.id)
+        .values(claimed_at=datetime.now(timezone.utc) - timedelta(minutes=11))
+    )
+    await db_session.commit()
+    await detection.claim_scan(db_session, test_user, unlimited=False)
+
+
+async def test_paid_tiers_scan_without_limit(
+    db_session: AsyncSession,
+    test_user: User,
+    paid: None,  # noqa: ARG001
+):
+    await add_series(db_session, test_user)
+    for _ in range(3):
+        scan = await detection.run_scan(db_session, test_user)
+        assert scan.result.scans_remaining is None
+    assert await detection.scans_remaining(db_session, test_user) is None
+
+
+async def test_lapsed_paid_user_who_scanned_has_no_free_scan(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    await add_series(db_session, test_user)
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "tier2")
+    await detection.run_scan(db_session, test_user)
+
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "free")
+    with pytest.raises(detection.ScanLimitError):
+        await detection.run_scan(db_session, test_user)
+
+
+async def test_last_result_hides_accepted_and_dismissed(
+    db_session: AsyncSession, test_user: User
+):
+    with pytest.raises(NotFoundError):
+        await detection.last_result(db_session, test_user)
+
+    await add_series(db_session, test_user)
+    await add_series(db_session, test_user, description="Spotify", amount=9.99, day=20)
+    await add_series(db_session, test_user, description="Gym", amount=30, day=3)
+    scan = await detection.run_scan(db_session, test_user)
+    by_name = {s.merchant_name: s for s in scan.result.suggestions}
+    assert set(by_name) == {"Netflix", "Spotify", "Gym"}
+
+    await detection.accept_suggestions(
+        db_session, test_user, [accept_item(by_name["Netflix"])]
+    )
+    await detection.dismiss_suggestions(
+        db_session,
+        test_user,
+        [
+            schemas.RecurringSuggestionDismissItem(
+                fingerprint=by_name["Gym"].fingerprint
+            )
+        ],
+    )
+    last = await detection.last_result(db_session, test_user)
+    assert [s.merchant_name for s in last.suggestions] == ["Spotify"]
+    assert last.scans_remaining == 0
+
+
+async def test_other_users_transactions_are_not_scanned(
+    db_session: AsyncSession, test_user: User
+):
+    other = await create_test_user(db_session, email="other@example.com")
+    await add_series(db_session, other)
+    scan = await detection.detect(db_session, test_user)
+    assert scan.result.scanned_transactions == 0
+
+
+# -- review fixes ------------------------------------------------------------------
+async def test_income_and_transfer_series_are_detected(
+    db_session: AsyncSession, test_user: User
+):
+    from tests.utils import create_test_income, create_test_transfer
+
+    checking = await create_test_account(db_session, owner_id=test_user.id)
+    savings = await create_test_account(db_session, owner_id=test_user.id)
+    for day in monthly_dates(1, 6):
+        await create_test_income(
+            db_session,
+            owner_id=test_user.id,
+            amount=3000,
+            income_date=day,
+            description="ACME PAYROLL",
+        )
+        await create_test_transfer(
+            db_session,
+            owner_id=test_user.id,
+            from_acc=checking.id,
+            to_acc=savings.id,
+            amount=500,
+            transfer_date=day + timedelta(days=1),
+            description="ahorro",
+        )
+    suggestions = (await detection.detect(db_session, test_user)).result.suggestions
+    assert {(s.type.value, s.frequency.value) for s in suggestions} == {
+        ("income", "monthly"),
+        ("transfer", "monthly"),
+    }
+    transfer = next(s for s in suggestions if s.type.value == "transfer")
+    assert (transfer.account_id, transfer.to_account_id) == (checking.id, savings.id)
+
+
+async def test_accept_after_a_price_change_needs_the_latest_charge(
+    db_session: AsyncSession, test_user: User
+):
+    dates = monthly_dates(10, 7)
+    expenses = [
+        await create_test_expense(
+            db_session,
+            owner_id=test_user.id,
+            amount=9.99 if i < 4 else 12.99,
+            expense_date=day,
+            description="Netflix",
+        )
+        for i, day in enumerate(dates)
+    ]
+    [found] = (await detection.detect(db_session, test_user)).result.suggestions
+    assert len(found.occurrences) == 7
+
+    last_old_price = expenses[3].id
+    [result] = await detection.accept_suggestions(
+        db_session, test_user, [accept_item(found, transaction_id=last_old_price)]
+    )
+    assert result.status == "error"
+    assert "latest transaction" in result.error
+
+
+async def test_accept_skips_missed_dates_instead_of_back_filling(
+    db_session: AsyncSession, test_user: User
+):
+    # Monthly series whose last charge is ~1.3 periods old: one date missed.
+    last = TODAY - timedelta(days=40)
+    for months_back in range(6):
+        await create_test_expense(
+            db_session,
+            owner_id=test_user.id,
+            amount=20,
+            expense_date=last - timedelta(days=30 * months_back),
+            description="Disney Plus",
+        )
+    [found] = (await detection.detect(db_session, test_user)).result.suggestions
+    assert found.next_expected_date >= TODAY
+    [result] = await detection.accept_suggestions(
+        db_session, test_user, [accept_item(found)]
+    )
+    assert result.status == "created", result.error
+    linked = await db_session.execute(
+        select(Expense.date).where(Expense.recurring_id == result.recurring.id)
+    )
+    assert linked.scalars().all() == [last]
+
+
+async def test_accepting_one_plan_keeps_the_merchants_other_plan(
+    db_session: AsyncSession, test_user: User
+):
+    await add_series(
+        db_session, test_user, description="Apple Bill", amount=2.99, day=5
+    )
+    await add_series(
+        db_session, test_user, description="Apple Bill", amount=29.99, day=20
+    )
+    found = (await detection.detect(db_session, test_user)).result.suggestions
+    assert sorted(s.amount for s in found) == [2.99, 29.99]
+    cheap = next(s for s in found if s.amount == 2.99)
+    [result] = await detection.accept_suggestions(
+        db_session, test_user, [accept_item(cheap)]
+    )
+    assert result.status == "created", result.error
+
+    [left] = (await detection.detect(db_session, test_user)).result.suggestions
+    assert left.amount == 29.99
+
+
+async def test_a_template_covers_only_its_closest_series(
+    db_session: AsyncSession, test_user: User
+):
+    await add_series(
+        db_session, test_user, description="Apple Bill", amount=2.99, day=5
+    )
+    await add_series(
+        db_session, test_user, description="Apple Bill", amount=29.99, day=20
+    )
+    db_session.add(
+        RecurringTransaction(
+            owner_id=test_user.id,
+            type="expense",
+            amount=30,
+            description="apple bill",
+            frequency="monthly",
+            start_date=TODAY,
+        )
+    )
+    await db_session.commit()
+    [left] = (await detection.detect(db_session, test_user)).result.suggestions
+    assert left.amount == 2.99
+
+
+async def test_ai_used_is_false_without_any_call(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    scan = await detection.detect(db_session, test_user)
+    assert scan.result.ai_used is False
+
+
+async def test_failed_save_releases_the_scan(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    await add_series(db_session, test_user)
+    real_finish = detection._finish_scan
+    calls = {"n": 0}
+
+    async def flaky(db, user_id, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db hiccup")
+        return await real_finish(db, user_id, **kwargs)
+
+    monkeypatch.setattr(detection, "_finish_scan", flaky)
+    with pytest.raises(RuntimeError):
+        await detection.run_scan(db_session, test_user)
+    usage = await _usage(db_session, test_user)
+    assert (usage.status, usage.scan_count) == ("done", 0)
+
+
+async def test_tier2_scans_without_limit(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(settings, "SUBSCRIPTIONS_DEV_DEFAULT_TIER", "tier2")
+    await add_series(db_session, test_user)
+    for _ in range(2):
+        scan = await detection.run_scan(db_session, test_user)
+        assert scan.result.scans_remaining is None
