@@ -1,12 +1,15 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
 from app.api import deps
+from app.core.config import settings
 from app.services import recurring as recurring_service
+from app.services import recurring_detection as detection_service
 from app.services.errors import ServiceError, raise_http
+from app.utilities.redis import hit_rate_limit
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
@@ -116,6 +119,174 @@ async def create_recurring_from_transaction(
     except ServiceError as exc:
         raise_http(exc)
     return recurring_service.to_detail(template)
+
+
+async def _enforce_detect_rate_limit(user_id: int) -> None:
+    """Throttle scans per user. Fails open: a scan costs little."""
+    limit = settings.RECURRING_DETECT_RATE_LIMIT_PER_HOUR
+    if limit <= 0:
+        return
+    try:
+        hits, retry_after = await hit_rate_limit(f"recurring_detect:{user_id}", 3600)
+    except Exception:
+        return
+    if hits > limit:
+        raise HTTPException(
+            status_code=429,
+            detail={"reason": "rate_limited", "retry_after": retry_after},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+@router.post("/detect", response_model=schemas.RecurringDetectionResult)
+async def detect_recurring_transactions(
+    *,
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    detect_in: schemas.RecurringDetectRequest | None = Body(default=None),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Scan the transaction history for recurring series and suggest them.
+
+    Nothing is created: accept the suggestions you want with
+    `/suggestions/accept`. Transactions already in a series, series you
+    already have and dismissed suggestions are skipped.
+
+    Paid plans scan without limit. The free plan gets one scan that finds
+    suggestions (402 after that); a scan that finds nothing doesn't count.
+    The last result stays available at `GET /detect/last`.
+
+    With `use_ai`, descriptions, place and category names, and each series'
+    schedule and amounts are sent to the AI provider to group merchants and
+    tell subscriptions from habits. Account names, ids, emails and your name
+    are never sent.
+    """
+    detect_in = detect_in or schemas.RecurringDetectRequest()
+    _enrich(
+        request, current_user, {"type": "recurring_detect", "use_ai": detect_in.use_ai}
+    )
+    try:
+        # Access first: a free user who used their scan gets 402, not 429.
+        unlimited = await detection_service.check_access(db, current_user)
+        await _enforce_detect_rate_limit(current_user.id)
+        with timed() as t:
+            scan = await detection_service.run_scan(
+                db, current_user, use_ai=detect_in.use_ai, unlimited=unlimited
+            )
+    except detection_service.ScanLimitError as exc:
+        enrich_event(request, operation={"outcome": "free_scan_used"})
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail())
+    except ServiceError as exc:
+        raise_http(exc)
+    result = scan.result
+    enrich_event(
+        request,
+        operation={
+            "type": "recurring_detect",
+            "duration_ms": t.ms,
+            "scanned": result.scanned_transactions,
+            "candidates": scan.candidates,
+            "suggestions": len(result.suggestions),
+            "ai_used": result.ai_used,
+            "ai": scan.stats.as_dict(),
+            "scans_remaining": result.scans_remaining,
+        },
+    )
+    return result
+
+
+@router.get("/detect/last", response_model=schemas.RecurringDetectionResult)
+async def read_last_recurring_detection(
+    *,
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    The result of the last scan, without the suggestions accepted or
+    dismissed since. 404 if you have never scanned.
+    """
+    _enrich(request, current_user, {"type": "recurring_detect_last"})
+    try:
+        return await detection_service.last_result(db, current_user)
+    except ServiceError as exc:
+        raise_http(exc)
+
+
+@router.post(
+    "/suggestions/accept",
+    response_model=list[schemas.RecurringSuggestionAcceptResult],
+)
+async def accept_recurring_suggestions(
+    *,
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    accept_in: schemas.RecurringSuggestionAcceptRequest,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Turn suggestions into recurring transactions. Send each one back with
+    any edits, using its latest occurrence as `transaction_id`. Each item
+    succeeds or fails on its own.
+    """
+    _enrich(
+        request,
+        current_user,
+        {"type": "recurring_accept_suggestions", "items": len(accept_in.items)},
+    )
+    results = await detection_service.accept_suggestions(
+        db, current_user, accept_in.items
+    )
+    enrich_event(
+        request,
+        operation={"created": sum(r.status == "created" for r in results)},
+    )
+    return results
+
+
+@router.post(
+    "/suggestions/dismiss",
+    response_model=schemas.RecurringSuggestionDismissResult,
+)
+async def dismiss_recurring_suggestions(
+    *,
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    dismiss_in: schemas.RecurringSuggestionDismissRequest,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Hide suggestions for good. Dismissing one twice does nothing.
+    """
+    _enrich(
+        request,
+        current_user,
+        {"type": "recurring_dismiss_suggestions", "items": len(dismiss_in.items)},
+    )
+    dismissed = await detection_service.dismiss_suggestions(
+        db, current_user, dismiss_in.items
+    )
+    return schemas.RecurringSuggestionDismissResult(dismissed=dismissed)
+
+
+@router.delete("/suggestions/dismissals/{fingerprint}", response_model=schemas.Msg)
+async def undo_recurring_dismissal(
+    *,
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    fingerprint: str,
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Undo a dismissal so the suggestion can come back on the next scan.
+    """
+    _enrich(request, current_user, {"type": "recurring_undo_dismissal"})
+    try:
+        await detection_service.undo_dismissal(db, current_user, fingerprint)
+    except ServiceError as exc:
+        raise_http(exc)
+    return schemas.Msg(msg="Dismissal removed")
 
 
 @router.get("/{id}", response_model=schemas.RecurringTransactionDetail)

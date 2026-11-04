@@ -25,6 +25,12 @@ def assert_user_me_response(body: dict[str, object], user: User) -> None:
         "email": user.email,
         "country": user.country,
         "subscription_tier": settings.SUBSCRIPTIONS_DEV_DEFAULT_TIER,
+        # Paid dev tiers scan without limit; free gets one scan.
+        "recurring_detection": {
+            "scans_remaining": None
+            if settings.SUBSCRIPTIONS_DEV_DEFAULT_TIER != "free"
+            else 1
+        },
     }
 
 
