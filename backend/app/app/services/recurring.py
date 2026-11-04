@@ -33,6 +33,7 @@ from app.core.recurrence import (
     next_occurrence,
     upcoming,
 )
+from app.core.recurrence_detection import snap_to_nominal
 from app.schemas.transaction import TransactionType
 from app.services import transactions as transaction_service
 from app.services.errors import (
@@ -350,31 +351,47 @@ async def create_recurring(
     data: schemas.RecurringTransactionCreate,
     *,
     source_transaction=None,
+    detection_fingerprint: str | None = None,
+    from_suggestion: bool = False,
 ) -> RecurringTransaction:
     """Create a template and generate anything already due.
 
     With `source_transaction`, that transaction becomes the first occurrence
     of the series (it is linked in the same commit, so it is never duplicated).
+    With `from_suggestion` (a detected series being accepted):
+    - the transaction counts as the rule's nearest date (within a few days),
+      so a charge on Friday the 13th for a series due on the 15th doesn't
+      create another one two days later;
+    - dates the series missed before today are skipped instead of back-filled:
+      the user may have cancelled, or not imported them yet.
     """
     fields = data.model_dump(exclude_none=True)
     fields.setdefault("timezone", "UTC")
     _validate_rule(_rule_from_fields(fields))
     fields = await _validate_fields(db, user, data.type, fields)
 
-    template = RecurringTransaction(owner_id=user.id, occurrences_count=0, **fields)
+    template = RecurringTransaction(
+        owner_id=user.id,
+        occurrences_count=0,
+        detection_fingerprint=detection_fingerprint,
+        **fields,
+    )
     if source_transaction is not None:
         template.source_transaction_id = source_transaction.id
         template.occurrences_count = 1
         template.last_run_date = data.start_date
+        rule = rule_for(template)
+        covered = data.start_date
+        last_actual = data.start_date
+        if from_suggestion:
+            covered = max(covered, snap_to_nominal(rule, data.start_date) or covered)
+            yesterday = local_today(template.timezone) - timedelta(days=1)
+            last_actual = max(last_actual, yesterday)
         # The transaction covers the start date itself, even when a weekend
         # adjustment would move that date forward.
         _set_next(
             template,
-            next_occurrence(
-                rule_for(template),
-                after_nominal=data.start_date,
-                last_actual=data.start_date,
-            ),
+            next_occurrence(rule, after_nominal=covered, last_actual=last_actual),
         )
     else:
         _reschedule(template)
@@ -550,7 +567,11 @@ async def pause_for_deleted(db: AsyncSession, kind: str, ids: list[int]) -> None
 
 
 async def create_from_transaction(
-    db: AsyncSession, user: models.User, data: schemas.RecurringFromTransaction
+    db: AsyncSession,
+    user: models.User,
+    data: schemas.RecurringFromTransaction,
+    *,
+    detection_fingerprint: str | None = None,
 ) -> RecurringTransaction:
     getter = {
         TransactionType.expense: transaction_service.get_expense,
@@ -583,13 +604,21 @@ async def create_from_transaction(
     create_in = schemas.RecurringTransactionCreate(
         **data.model_dump(
             exclude_none=True,
-            exclude=template_fields | {"transaction_type", "transaction_id"},
+            exclude=template_fields
+            | {"transaction_type", "transaction_id", "fingerprint"},
         ),
         **{k: v for k, v in copied.items() if v is not None},
         type=recurring_type,
         start_date=start_date,
     )
-    return await create_recurring(db, user, create_in, source_transaction=transaction)
+    return await create_recurring(
+        db,
+        user,
+        create_in,
+        source_transaction=transaction,
+        detection_fingerprint=detection_fingerprint,
+        from_suggestion=detection_fingerprint is not None,
+    )
 
 
 # ---------------------------------------------------------------------------
