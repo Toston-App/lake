@@ -177,6 +177,13 @@ async def detect_recurring_transactions(
     except detection_service.ScanLimitError as exc:
         enrich_event(request, operation={"outcome": "free_scan_used"})
         raise HTTPException(status_code=exc.status_code, detail=exc.detail())
+    except detection_service.ScanCooldownError as exc:
+        enrich_event(request, operation={"outcome": "cancel_cooldown"})
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail(),
+            headers={"Retry-After": str(exc.retry_after)},
+        )
     except ServiceError as exc:
         raise_http(exc)
     result = scan.result
@@ -212,6 +219,21 @@ async def read_last_recurring_detection(
         return await detection_service.last_result(db, current_user)
     except ServiceError as exc:
         raise_http(exc)
+
+
+@router.get("/detect/status", response_model=schemas.RecurringDetectionStatus)
+async def read_recurring_detection_status(
+    *,
+    request: Request,
+    db: AsyncSession = Depends(deps.async_get_db),
+    current_user: models.User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Whether a scan is running. Poll it after a 409, or after a reload during
+    a scan, then read the result from `GET /detect/last`. Not rate limited.
+    """
+    _enrich(request, current_user, {"type": "recurring_detect_status"})
+    return await detection_service.scan_status(db, current_user)
 
 
 @router.post(

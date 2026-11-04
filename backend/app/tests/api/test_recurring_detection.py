@@ -175,3 +175,70 @@ async def test_scan_already_running_returns_409(
     await detection.claim_scan(db_session, test_user, unlimited=False)
     response = await client.post(f"{PREFIX}/detect")
     assert response.status_code == 409
+
+
+async def test_status_reports_a_running_scan(
+    client: AsyncClient, db_session: AsyncSession, test_user: User
+):
+    from app.services import recurring_detection as detection
+
+    status = (await client.get(f"{PREFIX}/detect/status")).json()
+    assert status == {"running": False, "last_scan_at": None, "scans_remaining": 1}
+
+    claimed_at = await detection.claim_scan(db_session, test_user, unlimited=False)
+    assert (await client.get(f"{PREFIX}/detect/status")).json()["running"] is True
+
+    await detection.release_scan(db_session, test_user.id, claimed_at)
+    assert (await client.get(f"{PREFIX}/detect/status")).json()["running"] is False
+
+
+async def test_status_ignores_a_stale_claim(
+    client: AsyncClient, db_session: AsyncSession, test_user: User
+):
+    from datetime import datetime, timezone
+
+    from app.models.recurring_detection import RecurringDetectionUsage
+    from app.services import recurring_detection as detection
+
+    await detection.claim_scan(db_session, test_user, unlimited=False)
+    usage = await db_session.get(RecurringDetectionUsage, test_user.id)
+    usage.claimed_at = datetime.now(timezone.utc) - detection.STALE_CLAIM * 2
+    await db_session.commit()
+
+    assert (await client.get(f"{PREFIX}/detect/status")).json()["running"] is False
+
+
+async def test_cancelled_scan_releases_the_claim(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from app.services import recurring_detection as detection
+
+    @asynccontextmanager
+    async def test_session():
+        yield db_session
+
+    async def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(detection, "_cleanup_session", test_session)
+    monkeypatch.setattr(detection, "detect", cancelled)
+
+    with pytest.raises(asyncio.CancelledError):
+        await detection.run_scan(db_session, test_user, unlimited=False)
+    await asyncio.gather(*detection._cleanup_tasks)
+
+    status = (await client.get(f"{PREFIX}/detect/status")).json()
+    assert status["running"] is False
+    assert status["scans_remaining"] == 1
+
+    # Right after a cancel, another scan waits out a short cooldown.
+    response = await client.post(f"{PREFIX}/detect")
+    assert response.status_code == 429
+    assert response.json()["detail"]["reason"] == "cancel_cooldown"
+    assert 0 < int(response.headers["Retry-After"]) <= 60
