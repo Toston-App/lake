@@ -43,6 +43,13 @@ class RecurringTransaction(Base):
             "next_run_date",
             postgresql_where=text("is_active AND next_run_date IS NOT NULL"),
         ),
+        Index(
+            "ix_recurring_transaction_detection_fingerprint",
+            "owner_id",
+            "detection_fingerprint",
+            unique=True,
+            postgresql_where=text("detection_fingerprint IS NOT NULL"),
+        ),
     )
 
     id: int = Column(Integer, primary_key=True, index=True)
@@ -76,6 +83,9 @@ class RecurringTransaction(Base):
     # the table matching `type`. It is the user's own entry, not a generated
     # one, so deleting the series with its generated transactions keeps it.
     source_transaction_id: int | None = Column(Integer, nullable=True)
+    # Set when the template was created from a detected suggestion, so later
+    # scans skip it even after the user renames or edits the template.
+    detection_fingerprint: str | None = Column(String(32), nullable=True)
 
     # Schedule rule, see app.core.recurrence.
     frequency: Frequency = Column(
