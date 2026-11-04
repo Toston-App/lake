@@ -122,6 +122,15 @@ class Settings(BaseSettings):
 
     SEED_DATABASE: bool = False
 
+    # Recurring detection (POST /recurring/detect). Free users get one scan
+    # that finds suggestions; paid tiers scan without limit.
+    RECURRING_DETECTION_AI_ENABLED: bool = True
+    # Unset falls back to OPENROUTER_MODEL.
+    RECURRING_DETECTION_MODEL: str | None = None
+    RECURRING_DETECTION_AI_TIMEOUT_SECONDS: int = 20
+    RECURRING_DETECTION_MIN_CONFIDENCE: float = 0.35
+    RECURRING_DETECT_RATE_LIMIT_PER_HOUR: int = 10
+
     DOCS_USER: str = "user"
     DOCS_PASSWORD: str = "password"
 

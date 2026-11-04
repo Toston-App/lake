@@ -7,7 +7,7 @@ Each tier maps to a Polar product (except `free`) and defines:
   are counted too, but never limited.
 * `premium_model` — whether chat runs on `CHAT_PREMIUM_MODEL` instead of
   `CHAT_MODEL`. Every tier gets the same chat tools.
-* `features` — non-chat feature flags (investments).
+* `features` — non-chat feature flags (investments, unlimited recurring detection).
 * `polar_product_id` — the Polar product id this tier corresponds to.
   Set from env / Polar dashboard. Used only for the checkout flow; the
   webhook maps the *incoming* product id back to a tier via
@@ -31,8 +31,10 @@ class Tier(str, Enum):
 
 # Investment portfolio endpoints (/api/v1/investments/**). Every paid tier.
 FEATURE_INVESTMENTS = "investments"
+# Unlimited recurring-detection scans. Every paid tier; free users get one.
+FEATURE_RECURRING_DETECTION = "recurring_detection"
 
-ALL_FEATURES = frozenset({FEATURE_INVESTMENTS})
+ALL_FEATURES = frozenset({FEATURE_INVESTMENTS, FEATURE_RECURRING_DETECTION})
 
 
 @dataclass(frozen=True)
@@ -80,7 +82,7 @@ TIERS: dict[Tier, TierConfig] = {
         tier=Tier.tier1,
         label="Basic",
         monthly_token_limit=10_000_000,
-        features=frozenset({FEATURE_INVESTMENTS}),
+        features=frozenset({FEATURE_INVESTMENTS, FEATURE_RECURRING_DETECTION}),
         polar_product_id=None,  # set via configure_product_ids from env
         price_hint="$4.99/mo",
         monthly_price_usd=4.99,
