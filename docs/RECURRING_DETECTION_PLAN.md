@@ -1,6 +1,6 @@
 # Recurring Transaction Detection — Implementation Plan
 
-Status: proposed · Scope: backend only (the frontend lives in another repo)
+Status: implemented · Scope: backend only (the frontend lives in another repo)
 
 ## 1. Goal
 
@@ -21,11 +21,15 @@ Decisions already made:
 | Types | Expenses, incomes and transfers |
 | AI | Yes: merchant normalization + candidate classification, with a deterministic fallback |
 | Frontend | Out of scope |
+| Access | Free users get **one** scan that finds suggestions; any paid tier (Basic, Premium) scans without limit (§4.5) |
 
 ## 2. Architecture overview
 
 ```
 POST /recurring/detect
+        │
+        ▼
+claim scan access                                           (free: once ever; paid: unlimited)
         │
         ▼
 services/recurring_detection.detect()
@@ -35,11 +39,12 @@ services/recurring_detection.detect()
   4. group     by type + merchant (+ accounts for transfers)
   5. detect    amount clusters → frequency → rule → score   (core, pure)
   6. classify  "is this a recurring commitment?"            (AI, optional)
-  7. return    ranked suggestions                           (nothing is saved)
+  7. return    ranked suggestions                           (only the last result is saved, §3.4)
 
 POST /recurring/suggestions/accept   → create_from_transaction() per item
 POST /recurring/suggestions/dismiss  → insert fingerprints
 DELETE /recurring/suggestions/dismissals/{fingerprint} → undo a dismissal
+GET  /recurring/detect/last          → the saved result of the last scan
 ```
 
 Principle: **date maths is deterministic code; the AI only decides "which texts
@@ -81,11 +86,24 @@ Unique `(owner_id, fingerprint)`.
 ### 3.3 `recurring_transaction.detection_fingerprint` (new nullable column)
 
 Set when a template is created from a suggestion. It lets later scans skip that
-suggestion even after the user renames or edits the template. Indexed together
+suggestion even after the user renames or edits the template. Unique (partial index) together
 with `owner_id`. Not exposed in the public schemas.
 
-Models: `models/recurring_merchant_alias.py`,
-`models/recurring_suggestion_dismissal.py`, registered in `models/__init__.py`
+### 3.4 `recurring_detection_usage` (new)
+
+One row per user. It records whether the user has used a scan and keeps the
+last result, so a free user who reloads the page doesn't lose their only scan.
+
+| Column | Type | Notes |
+|---|---|---|
+| owner_id | int PK, FK user.id, ON DELETE CASCADE | |
+| status | str | `running` / `done` |
+| scan_count | int | completed scans that returned suggestions, all tiers |
+| claimed_at | timestamptz | when the current or last scan started |
+| last_scan_at | timestamptz nullable | when the last scan completed |
+| last_result | JSONB nullable | the last `RecurringDetectionResult` |
+
+Models: all three live in `models/recurring_detection.py`, registered in `models/__init__.py`
 (and the alembic base import).
 
 ## 4. API
@@ -108,7 +126,9 @@ Response `RecurringDetectionResult`:
 {
   "suggestions": [RecurringSuggestion, ...],
   "ai_used": true,
-  "scanned_transactions": 1342
+  "scanned_transactions": 1342,
+  "scanned_at": "2026-11-03T10:00:00Z",
+  "scans_remaining": 0
 }
 ```
 
@@ -132,7 +152,14 @@ Response `RecurringDetectionResult`:
 
 Sorted by `confidence` descending, capped at 50.
 
-Rate limit: `hit_rate_limit(f"recurring_detect:{user_id}", 3600)`, with
+`scans_remaining` is `0` for a free user after their scan and `null` (unlimited)
+for paid users. Access is checked before anything else (§4.5); a free user who
+has already scanned gets 402.
+
+Access is checked first (§4.5), so a free user who used their scan gets 402,
+not 429. Then the rate limit (every user; free scans that find nothing don't
+count, so they can be repeated):
+`hit_rate_limit(f"recurring_detect:{user_id}", 3600)`, with
 `RECURRING_DETECT_RATE_LIMIT_PER_HOUR` (default 10). Return 429 with
 `Retry-After`. Fail open on Redis errors, since one scan costs very little.
 
@@ -164,6 +191,69 @@ Each item runs on its own (commit per item), so one failure doesn't block the re
 ### 4.4 `DELETE /recurring/suggestions/dismissals/{fingerprint}`
 
 Undoes a dismissal. 404 if it isn't there.
+
+### 4.5 Access: one free scan, unlimited for paid tiers
+
+New feature flag in `core/tiers.py`:
+
+```python
+# Unlimited recurring detection scans. Every paid tier; free users get one.
+FEATURE_RECURRING_DETECTION = "recurring_detection"
+```
+
+Added to `ALL_FEATURES` and to tier1's `features`, so both paid tiers have it.
+The check uses `get_user_tier()` + `has_feature()`, like investments in
+`api/deps.py`. Superusers and `SUBSCRIPTIONS_ENABLED=False` (dev default tier)
+follow the same rules as there.
+
+Rules:
+
+- **Paid tier** (has the feature): always allowed; the usage row is updated
+  for the saved result and the count.
+- **Free tier**: allowed only if the user has no counted scan
+  (`scan_count = 0`). Only scans that return at least one suggestion count, so
+  a new user with little history doesn't waste it. This includes users who
+  scanned while paid and then lapsed: a previous counted scan on any tier uses
+  up the free one.
+- Only **detect** is limited. Accept, dismiss, undo and `GET /detect/last` stay
+  open to everyone, so a free user can act on their one result at any time.
+
+Claiming (in `services/recurring_detection.claim_scan`), so two parallel
+requests can't both use the free scan:
+
+1. `INSERT … ON CONFLICT (owner_id) DO UPDATE SET status='running', claimed_at=now()
+   WHERE <allowed>` `RETURNING owner_id`. With
+   `not_running = status <> 'running' OR claimed_at < now() - interval '10 minutes'`
+   (so a row left `running` by a crashed process doesn't block forever),
+   `<allowed>` is `not_running` for paid users and `scan_count = 0 AND not_running`
+   for free users. A user with no row yet always gets the insert.
+2. No row returned → free user with `scan_count > 0`: 402; otherwise 409
+   "a scan is already running" (two parallel first scans: one runs, one gets 409).
+3. On success: `status='done'`, `last_scan_at`, `last_result`, and
+   `scan_count += 1` when the scan returned suggestions; commit.
+4. On any error during the scan: reset `status='done'` without touching
+   `scan_count`, so a failed scan doesn't use the free one. AI fallback is not an
+   error: a scan that completes without AI counts.
+
+402 body, same shape as the chat quota:
+
+```json
+{ "reason": "recurring_detection_limit",
+  "tier": "free",
+  "last_scan_at": "2026-10-01T09:12:00Z",
+  "upgrade_url": "/account" }
+```
+
+### 4.6 `GET /recurring/detect/last`
+
+Returns the saved `last_result` with `scans_remaining` recomputed for the
+current tier, or 404 if the user never scanned. Before returning, drop
+suggestions whose fingerprint is now in a template or dismissal (§5.8 step 2),
+so accepted and dismissed items don't show up again. Not rate limited.
+
+`GET /users/me` gains `recurring_detection: {"scans_remaining": 0 | 1 | null}` so
+the frontend can show the button, the "1 free scan" label or the upgrade prompt
+without calling detect.
 
 ## 5. Detection logic
 
@@ -220,7 +310,8 @@ the transaction has no text key (see §5.4).
 
 ### 5.4 Group
 
-Group key:
+Group key (points are keyed by `(type, id)` throughout: ids are per table,
+so an expense and an income can share one):
 
 - expense / income: `(type, merchant_key)`, ignoring the account, so a
   subscription moved to another card stays one series. The suggestion uses the
@@ -255,7 +346,7 @@ consecutive dates and test each frequency:
 | weekly | 6–8 | same weekday in ≥75% | `weekly`, `interval=1`, `weekdays=[mode]` |
 | every 2 weeks | 12–16 | same weekday in ≥75% | `weekly`, `interval=2` |
 | semimonthly | 10–20, alternating | dates form two day-of-month clusters (e.g. 1 & 15, 15 & last) | `semimonthly`, `month_days=[a, b]` |
-| monthly | 26–35 | day of month within ±3 of the mode (after weekend correction) | `monthly`, `day_of_month`, `month_days=[mode]`; use `-1` when the mode is ≥28 and the dates track month end |
+| monthly | 26–35 | day of month within ±3 of the mode (after weekend correction) | `monthly`, `day_of_month`, `month_days=[mode]`; use `-1` only when ≥75% of the dates are their month's last day (or the Friday before a weekend month end) and the months differ in length; rent on the 28th or 30th keeps its day |
 | yearly | 350–380 | same month, day ±5 | `yearly` |
 
 Daily is not detected.
@@ -273,9 +364,10 @@ nominal dates are excluded from the ±3 day check above so the shifts don't coun
 as noise.
 
 Recency: drop the candidate if `last_date + 1.5 × period < today` (the series
-has probably stopped). `next_expected_date` comes from
-`core.recurrence.next_occurrence(rule, after_nominal=last nominal, last_actual=last_date)`
-so it matches what the generator will do.
+has probably stopped). `next_expected_date` is what the generator will create
+after accept: the next occurrence on or after today. Dates the series was due on
+between its last charge and today are listed as reasons
+(`"nothing recorded on 2026-10-24"`) and are **not** back-filled on accept (§7).
 
 ### 5.7 Fingerprint
 
@@ -297,7 +389,11 @@ Applied before grouping (step 1) and after detection (steps 2–3):
    manually created ones) is dropped. Match: same type, the template's
    description resolves to the same `merchant_key` (via the same alias lookup),
    and for transfers the same accounts. If the template has no description,
-   fall back to same type + account + amount within ±10%.
+   fall back to same type + account + amount within ±10%. Each template covers
+   at most **one** series, the closest in amount and only within a factor of 2,
+   so a template for a merchant's 2.99 plan doesn't hide its 29.99 plan.
+   Templates created from a suggestion are left out of this step; their
+   fingerprint (step 2) already hides their series. Applied before step 2.
 
 ### 5.9 Deterministic confidence
 
@@ -383,22 +479,30 @@ RECURRING_DETECT_RATE_LIMIT_PER_HOUR: int = 10
 
 - Merchant calls only for descriptions not seen before, so most later scans make one small classification call.
 - Log model, token counts and `usage.cost` (OpenRouter returns it with `openrouter_usage.include`) through the request's `_enrich` payload: `{type: "recurring_detect", scanned, candidates, suggestions, ai_used, ai_cost}`.
-- Not counted against the chat token quota (recurring is available on all tiers).
+- Not counted against the chat token quota. Free users' cost is bounded by the single scan (§4.5).
 
 ## 7. Accept flow (service)
 
 `accept_suggestions(db, user, items)`, for each item:
 
 1. Load the transaction with the existing getter. It must belong to the user,
-   have `recurring_id IS NULL`, and be the newest transaction of its group: check
-   there is no newer unlinked transaction with the same resolved merchant and
-   type. This stops the client from passing an old transaction, which would
-   back-fill copies.
+   have `recurring_id IS NULL`, and be the newest transaction of its series.
+   The series is re-detected once per accept request (cached aliases, no AI),
+   so it spans price changes but not the merchant's other plans. A transaction
+   outside any detected series falls back to: no newer unlinked transaction
+   with the same resolved merchant and type within ±10%. This stops the client
+   from passing an old transaction, which would back-fill copies.
 2. Call `recurring_service.create_from_transaction(db, user, item)`.
 3. Set `template.detection_fingerprint = item.fingerprint` and commit.
    `create_recurring` takes a new keyword `detection_fingerprint=None` so this
-   happens in the same commit.
-4. Catch `ServiceError` per item and report it. Other exceptions roll back that
+   happens in the same commit. A fingerprint that already has a template is an
+   error for that item; a partial **unique** index on
+   `(owner_id, detection_fingerprint)` makes that hold for concurrent accepts.
+   Dates the series missed before today are skipped, not back-filled.
+4. The source transaction counts as the rule's nearest date (within ±3 days),
+   so a charge moved to Friday the 13th for a series due on the 15th doesn't
+   create another one two days later (`snap_source_to_rule`).
+5. Catch `ServiceError` per item and report it. Other exceptions roll back that
    item and report a generic error.
 
 Older matching transactions are **not** linked to the template. Linking them
@@ -409,17 +513,18 @@ history. The fingerprint and template match in §5.8 already stop them coming ba
 
 | File | Change |
 |---|---|
-| `alembic/versions/<rev>_recurring_detection.py` | 2 tables + `detection_fingerprint` column |
-| `app/models/recurring_merchant_alias.py` | new |
-| `app/models/recurring_suggestion_dismissal.py` | new |
+| `alembic/versions/<rev>_recurring_detection.py` | 3 tables + `detection_fingerprint` column |
+| `app/models/recurring_detection.py` | new: alias, dismissal and usage tables |
 | `app/models/recurring_transaction.py` | `detection_fingerprint` column |
 | `app/models/__init__.py` | register models |
+| `app/core/tiers.py` | `FEATURE_RECURRING_DETECTION` on both paid tiers |
+| `app/api/api_v1/endpoints/users.py` | `recurring_detection.scans_remaining` in `/users/me` |
 | `app/core/recurrence_detection.py` | new, pure: normalize, cluster, detect, score, fingerprint |
 | `app/ai/recurring_detection.py` | new: two agents + call helpers with fallback |
 | `app/services/recurring_detection.py` | new: load, resolve, skip, detect, classify, accept, dismiss |
-| `app/services/recurring.py` | `create_recurring(..., detection_fingerprint=None)` |
+| `app/services/recurring.py` | `create_recurring(..., detection_fingerprint=None, snap_source_to_rule=False)` |
 | `app/schemas/recurring.py` | suggestion, result, accept, dismiss schemas |
-| `app/api/api_v1/endpoints/recurring.py` | 4 endpoints, before `/{id}` |
+| `app/api/api_v1/endpoints/recurring.py` | 5 endpoints, before `/{id}` |
 | `app/core/config.py` | settings in §6.3 |
 
 ## 9. Tests
@@ -437,7 +542,7 @@ AI calls are replaced with `pydantic_ai.models.function.FunctionModel` via
 - one missed month still detected, with lower confidence
 - stopped subscription (last date > 1.5 periods ago) → dropped
 - irregular spending at the same merchant → not detected
-- two subscriptions from the same merchant at different amounts → two series
+- two subscriptions from the same merchant at different amounts → two series (their fingerprints get the rounded amount added so they differ)
 - same-day duplicates don't break the gaps
 - fingerprint is stable across price changes and differs by frequency
 
@@ -459,6 +564,15 @@ AI calls are replaced with `pydantic_ai.models.function.FunctionModel` via
 - partial failure in a batch accept
 - rate limit → 429
 - dismiss is idempotent; DELETE of an unknown fingerprint → 404
+- free user: first scan 200 with `scans_remaining=0`, second scan 402
+- free user: a scan with no suggestions doesn't count
+- a claim held by a running scan → 409 until it goes stale (10 min)
+- free user: scan that raises → free scan not used, next scan 200
+- free user after a scan: accept, dismiss and `GET /detect/last` still work
+- tier1 and tier2: repeated scans allowed, `scans_remaining=null`; rate limit still applies
+- lapsed paid user who scanned before → 402
+- `GET /detect/last` hides accepted and dismissed suggestions; 404 before any scan
+- `/users/me` returns `scans_remaining` 1 → 0 for free, null for paid
 
 ## 10. Implementation order
 
@@ -466,7 +580,7 @@ AI calls are replaced with `pydantic_ai.models.function.FunctionModel` via
 2. `core/recurrence_detection.py` with its tests: the bulk of the logic, no AI.
 3. Service + endpoints with AI disabled; service and API tests.
 4. AI module, wired in with the fallback; AI tests with `FunctionModel`.
-5. Settings, rate limit, logging. Run the full suite and ruff.
+5. Settings, tier access (§4.5), `GET /detect/last`, rate limit, logging. Run the full suite and ruff.
 6. Try it on a seeded or demo user (`demo_data.py`) and tune the thresholds.
 
 ## 11. Risks and open points
