@@ -18,9 +18,10 @@ from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
 from app.api.api_v3.api import api_router as api_router_v3
 from app.core.config import settings
+from app.services.errors import ServiceError
 from app.services.provider_errors import ProviderUnavailable
 from app.utilities.axiom import get_axiom_client, initialize_axiom
-from app.utilities.wide_events import WideEventsMiddleware
+from app.utilities.wide_events import WideEventsMiddleware, enrich_event
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,6 +46,18 @@ async def provider_unavailable_handler(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": "Market data is temporarily unavailable"},
         headers={"Retry-After": "30"},
+    )
+
+
+@app.exception_handler(ServiceError)
+async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+    # The same response raise_http's HTTPException gets from FastAPI.
+    if exc.event_outcome:
+        enrich_event(request, operation={"outcome": exc.event_outcome})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail()},
+        headers=exc.headers() or None,
     )
 
 

@@ -9,7 +9,6 @@ from app.api import deps
 from app.core.config import settings
 from app.services import recurring as recurring_service
 from app.services import recurring_detection as detection_service
-from app.services.errors import ServiceError, raise_http
 from app.utilities.redis import hit_rate_limit
 from app.utilities.wide_events import enrich_event, timed
 
@@ -68,12 +67,7 @@ async def create_recurring_transaction(
             "frequency": recurring_in.frequency.value,
         },
     )
-    try:
-        template = await recurring_service.create_recurring(
-            db, current_user, recurring_in
-        )
-    except ServiceError as exc:
-        raise_http(exc)
+    template = await recurring_service.create_recurring(db, current_user, recurring_in)
     return recurring_service.to_detail(template)
 
 
@@ -88,10 +82,7 @@ async def preview_recurring_transaction(
     Show the next dates a schedule would produce, without saving it.
     """
     _enrich(request, current_user, {"type": "preview_recurring"})
-    try:
-        return recurring_service.preview(preview_in)
-    except ServiceError as exc:
-        raise_http(exc)
+    return recurring_service.preview(preview_in)
 
 
 @router.post("/from-transaction", response_model=schemas.RecurringTransactionDetail)
@@ -114,12 +105,9 @@ async def create_recurring_from_transaction(
             "transaction_id": recurring_in.transaction_id,
         },
     )
-    try:
-        template = await recurring_service.create_from_transaction(
-            db, current_user, recurring_in
-        )
-    except ServiceError as exc:
-        raise_http(exc)
+    template = await recurring_service.create_from_transaction(
+        db, current_user, recurring_in
+    )
     return recurring_service.to_detail(template)
 
 
@@ -174,33 +162,20 @@ async def detect_recurring_transactions(
     _enrich(
         request, current_user, {"type": "recurring_detect", "use_ai": detect_in.use_ai}
     )
-    try:
-        # Access first: a free user who used their scan gets 402, not 429.
-        unlimited = await detection_service.check_access(db, current_user)
-        limited = await _enforce_rate_limit(
-            f"recurring_detect:{current_user.id}",
-            settings.RECURRING_DETECT_RATE_LIMIT_PER_HOUR,
+    # Access first: a free user who used their scan gets 402, not 429.
+    unlimited = await detection_service.check_access(db, current_user)
+    limited = await _enforce_rate_limit(
+        f"recurring_detect:{current_user.id}",
+        settings.RECURRING_DETECT_RATE_LIMIT_PER_HOUR,
+    )
+    # Unthrottled AI calls cost money: scan deterministically instead.
+    use_ai = detect_in.use_ai and limited
+    if detect_in.use_ai and not limited:
+        enrich_event(request, operation={"ai_skipped": "rate_limiter_down"})
+    with timed() as t:
+        scan = await detection_service.run_scan(
+            db, current_user, use_ai=use_ai, unlimited=unlimited
         )
-        # Unthrottled AI calls cost money: scan deterministically instead.
-        use_ai = detect_in.use_ai and limited
-        if detect_in.use_ai and not limited:
-            enrich_event(request, operation={"ai_skipped": "rate_limiter_down"})
-        with timed() as t:
-            scan = await detection_service.run_scan(
-                db, current_user, use_ai=use_ai, unlimited=unlimited
-            )
-    except detection_service.ScanLimitError as exc:
-        enrich_event(request, operation={"outcome": "free_scan_used"})
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail())
-    except detection_service.ScanCooldownError as exc:
-        enrich_event(request, operation={"outcome": "cancel_cooldown"})
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail=exc.detail(),
-            headers={"Retry-After": str(exc.retry_after)},
-        )
-    except ServiceError as exc:
-        raise_http(exc)
     result = scan.result
     enrich_event(
         request,
@@ -230,10 +205,7 @@ async def read_last_recurring_detection(
     dismissed since. 404 if you have never scanned.
     """
     _enrich(request, current_user, {"type": "recurring_detect_last"})
-    try:
-        return await detection_service.last_result(db, current_user)
-    except ServiceError as exc:
-        raise_http(exc)
+    return await detection_service.last_result(db, current_user)
 
 
 @router.get("/detect/status", response_model=schemas.RecurringDetectionStatus)
@@ -307,12 +279,9 @@ async def dismiss_recurring_suggestions(
         current_user,
         {"type": "recurring_dismiss_suggestions", "items": len(dismiss_in.items)},
     )
-    try:
-        dismissed = await detection_service.dismiss_suggestions(
-            db, current_user, dismiss_in.items
-        )
-    except ServiceError as exc:
-        raise_http(exc)
+    dismissed = await detection_service.dismiss_suggestions(
+        db, current_user, dismiss_in.items
+    )
     return schemas.RecurringSuggestionDismissResult(dismissed=dismissed)
 
 
@@ -328,10 +297,7 @@ async def undo_recurring_dismissal(
     Undo a dismissal so the suggestion can come back on the next scan.
     """
     _enrich(request, current_user, {"type": "recurring_undo_dismissal"})
-    try:
-        await detection_service.undo_dismissal(db, current_user, fingerprint)
-    except ServiceError as exc:
-        raise_http(exc)
+    await detection_service.undo_dismissal(db, current_user, fingerprint)
     return schemas.Msg(msg="Dismissal removed")
 
 
@@ -347,10 +313,7 @@ async def read_recurring_transaction(
     Get a recurring transaction by ID.
     """
     _enrich(request, current_user, {"type": "get_recurring", "recurring_id": id})
-    try:
-        template = await recurring_service.get_recurring(db, current_user, id)
-    except ServiceError as exc:
-        raise_http(exc)
+    template = await recurring_service.get_recurring(db, current_user, id)
     return recurring_service.to_detail(template)
 
 
@@ -376,12 +339,9 @@ async def update_recurring_transaction(
             "fields": sorted(recurring_in.model_dump(exclude_unset=True)),
         },
     )
-    try:
-        template = await recurring_service.update_recurring(
-            db, current_user, id, recurring_in
-        )
-    except ServiceError as exc:
-        raise_http(exc)
+    template = await recurring_service.update_recurring(
+        db, current_user, id, recurring_in
+    )
     return recurring_service.to_detail(template)
 
 
@@ -397,10 +357,7 @@ async def skip_next_recurring_occurrence(
     Skip the next occurrence without creating it.
     """
     _enrich(request, current_user, {"type": "skip_recurring", "recurring_id": id})
-    try:
-        template = await recurring_service.skip_next(db, current_user, id)
-    except ServiceError as exc:
-        raise_http(exc)
+    template = await recurring_service.skip_next(db, current_user, id)
     return recurring_service.to_detail(template)
 
 
@@ -427,10 +384,7 @@ async def delete_recurring_transaction(
             "delete_generated": delete_generated,
         },
     )
-    try:
-        await recurring_service.delete_recurring(
-            db, current_user, id, delete_generated=delete_generated
-        )
-    except ServiceError as exc:
-        raise_http(exc)
+    await recurring_service.delete_recurring(
+        db, current_user, id, delete_generated=delete_generated
+    )
     return schemas.DeletionResponse(message=f"Recurring transaction {id} deleted")

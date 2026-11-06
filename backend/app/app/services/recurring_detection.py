@@ -86,6 +86,7 @@ class ScanLimitError(ServiceError):
     """A free user has already used their scan."""
 
     status_code = 402
+    event_outcome = "free_scan_used"
 
     def __init__(self, last_scan_at: datetime | None):
         super().__init__("Recurring detection is limited to one scan on the free plan")
@@ -107,6 +108,7 @@ class ScanCooldownError(ServiceError):
     """The last scan was cancelled moments ago."""
 
     status_code = 429
+    event_outcome = "cancel_cooldown"
 
     def __init__(self, retry_after: int):
         super().__init__("A scan was just cancelled; try again shortly")
@@ -114,6 +116,9 @@ class ScanCooldownError(ServiceError):
 
     def detail(self) -> dict[str, Any]:
         return {"reason": "cancel_cooldown", "retry_after": self.retry_after}
+
+    def headers(self) -> dict[str, str]:
+        return {"Retry-After": str(self.retry_after)}
 
 
 # ---------------------------------------------------------------------------
