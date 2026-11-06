@@ -458,6 +458,18 @@ async def _skipped_fingerprints(db: AsyncSession, user: models.User) -> set[str]
 # ---------------------------------------------------------------------------
 # Merchant resolution
 # ---------------------------------------------------------------------------
+async def _release_connection(db: AsyncSession) -> None:
+    """End the transaction so no connection is held while awaiting the AI.
+
+    An AI call can take up to RECURRING_DETECTION_AI_TIMEOUT_SECONDS; holding
+    a pooled connection idle in transaction meanwhile starves the pool. The
+    transaction is only reads (or already committed aliases), and the session
+    doesn't expire on commit, so loaded objects such as the user stay usable.
+    The next query checks out a connection again.
+    """
+    await db.commit()
+
+
 def _fallback(text: str) -> Merchant:
     return Merchant(key=slugify(text) or text, name=text.title())
 
@@ -506,6 +518,7 @@ async def resolve_merchants(
                 }
                 for i, text in enumerate(chunk)
             ]
+            await _release_connection(db)
             answers = await ai.resolve_merchants(payload, stats)
             new_rows = []
             for i, text in enumerate(chunk):
@@ -658,7 +671,7 @@ def _to_suggestion(candidate: Candidate) -> schemas.RecurringSuggestion:
 
 
 async def _classify(
-    candidates: list[Candidate], stats: ai.AiStats
+    db: AsyncSession, candidates: list[Candidate], stats: ai.AiStats
 ) -> list[Candidate] | None:
     payload = [
         {
@@ -675,6 +688,7 @@ async def _classify(
         for i, c in enumerate(candidates)
     ]
     errors = stats.errors
+    await _release_connection(db)
     labels = await ai.classify_candidates(payload, stats)
     if stats.errors > errors:
         return None
@@ -743,7 +757,7 @@ async def detect(
     found = len(candidates)
 
     if use_ai and candidates:
-        classified = await _classify(candidates, stats)
+        classified = await _classify(db, candidates, stats)
         if classified is not None:
             candidates = classified
     candidates = [

@@ -382,6 +382,47 @@ async def test_habit_with_high_confidence_is_dropped(
     assert scan.candidates == 1
 
 
+async def test_no_transaction_is_open_during_ai_calls(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """An AI call can take seconds: the session must not hold a connection."""
+    await add_series(db_session, test_user)
+    in_transaction: dict[str, list[bool]] = {"merchants": [], "classify": []}
+    real_resolve, real_classify = ai.resolve_merchants, ai.classify_candidates
+
+    async def resolve(items, stats):
+        in_transaction["merchants"].append(db_session.in_transaction())
+        return await real_resolve(items, stats)
+
+    async def classify(items, stats):
+        in_transaction["classify"].append(db_session.in_transaction())
+        return await real_classify(items, stats)
+
+    monkeypatch.setattr(ai, "resolve_merchants", resolve)
+    monkeypatch.setattr(ai, "classify_candidates", classify)
+    with (
+        ai.merchant_agent.override(model=merchant_model({}, [])),
+        ai.classify_agent.override(model=label_model("subscription", True, 0.9)),
+    ):
+        scan = await detection.run_scan(db_session, test_user)
+
+    assert in_transaction == {"merchants": [False], "classify": [False]}
+    [found] = scan.result.suggestions
+    assert found.kind == "subscription"
+    assert scan.result.ai_used
+    # The aliases the AI resolved were still saved, and the scan was counted.
+    aliases = await db_session.execute(
+        select(RecurringMerchantAlias.id).where(
+            RecurringMerchantAlias.owner_id == test_user.id
+        )
+    )
+    assert len(aliases.scalars().all()) == 1
+    assert (await _usage(db_session, test_user)).scan_count == 1
+
+
 # -- access ----------------------------------------------------------------------
 async def _usage(db: AsyncSession, user: User) -> RecurringDetectionUsage:
     result = await db.execute(
