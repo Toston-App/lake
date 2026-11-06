@@ -23,7 +23,7 @@ def _isolate(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         "app.services.transactions.invalidate_user_cache", AsyncMock(return_value=True)
     )
     limiter = AsyncMock(return_value=(1, 3600))
-    monkeypatch.setattr("app.api.api_v1.endpoints.recurring.hit_rate_limit", limiter)
+    monkeypatch.setattr("app.services.rate_limits.hit_rate_limit", limiter)
     return limiter
 
 
@@ -111,13 +111,13 @@ async def test_rate_limit_fails_open_without_ai(
 
     monkeypatch.setattr(settings, "RECURRING_DETECTION_AI_ENABLED", True)
     calls = []
-    run_scan = detection.run_scan
+    detect = detection.detect
 
     async def spy(*args, **kwargs):
         calls.append(kwargs["use_ai"])
-        return await run_scan(*args, **kwargs)
+        return await detect(*args, **kwargs)
 
-    monkeypatch.setattr(detection, "run_scan", spy)
+    monkeypatch.setattr(detection, "detect", spy)
     _isolate.side_effect = RuntimeError("redis down")
     assert (await client.post(f"{PREFIX}/detect")).status_code == 200
     # Without the limiter the scan still runs, but never calls the AI.

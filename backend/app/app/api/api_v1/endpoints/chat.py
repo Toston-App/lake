@@ -63,6 +63,7 @@ from app.services.entitlements import (
     check_quota,
     reserve_chat_turn,
 )
+from app.services.rate_limits import enforce_rate_limit
 from app.utilities.observability import (
     finalize_turn,
     record_tool_call,
@@ -75,7 +76,6 @@ from app.utilities.redis import (
     delete_pending_action,
     get_conversation,
     get_pending_action,
-    hit_rate_limit,
     list_user_conversations,
     refresh_conversation_lock,
     release_conversation_lock,
@@ -172,20 +172,9 @@ async def _enforce_chat_rate_limit(user_id: int) -> None:
         (86_400, settings.CHAT_RATE_LIMIT_PER_DAY),
     )
     for window_seconds, limit in windows:
-        if limit <= 0:
-            continue
-        try:
-            hits, retry_after = await hit_rate_limit(f"chat:{user_id}", window_seconds)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503, detail={"reason": "rate_limit_unavailable"}
-            ) from exc
-        if hits > limit:
-            raise HTTPException(
-                status_code=429,
-                detail={"reason": "rate_limited", "retry_after": retry_after},
-                headers={"Retry-After": str(retry_after)},
-            )
+        await enforce_rate_limit(
+            f"chat:{user_id}", limit, window_seconds=window_seconds, fail_open=False
+        )
 
 
 def _usage_payload(quota: QuotaResult) -> dict[str, Any]:

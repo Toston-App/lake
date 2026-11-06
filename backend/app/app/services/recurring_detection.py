@@ -808,6 +808,7 @@ async def run_scan(
     user: models.User,
     *,
     use_ai: bool = True,
+    ai_allowed: bool = True,
     today: date | None = None,
     unlimited: bool | None = None,
 ) -> ScanResult:
@@ -817,13 +818,16 @@ async def run_scan(
     or saving its result fails, or the request is cancelled, the slot is
     released without counting. Raises ConflictError, without saving, when
     the claim went stale and a newer scan took it over.
+
+    With `ai_allowed` False (the rate limiter is down) the scan runs without
+    the AI even when `use_ai` asks for it: unthrottled AI calls cost money.
     """
     user_id = user.id
     if unlimited is None:
         unlimited = await has_unlimited_scans(db, user)
     claimed_at = await claim_scan(db, user, unlimited=unlimited)
     try:
-        scan = await detect(db, user, use_ai=use_ai, today=today)
+        scan = await detect(db, user, use_ai=use_ai and ai_allowed, today=today)
         counted = bool(scan.result.suggestions)
         scan.result.scans_remaining = None if unlimited else (0 if counted else 1)
         saved = await _finish_scan(

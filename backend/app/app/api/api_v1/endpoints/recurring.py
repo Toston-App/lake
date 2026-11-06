@@ -1,7 +1,6 @@
-import logging
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
@@ -9,11 +8,10 @@ from app.api import deps
 from app.core.config import settings
 from app.services import recurring as recurring_service
 from app.services import recurring_detection as detection_service
-from app.utilities.redis import hit_rate_limit
+from app.services.rate_limits import enforce_rate_limit
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
 def _enrich(request: Request, user: models.User, operation: dict) -> None:
@@ -111,28 +109,6 @@ async def create_recurring_from_transaction(
     return recurring_service.to_detail(template)
 
 
-async def _enforce_rate_limit(key: str, limit: int) -> bool:
-    """Count a hit against an hourly per-user limit; 429 when over it.
-
-    Returns False when the limiter is unavailable (Redis down): the request
-    goes ahead, and the caller decides what to drop to keep it cheap.
-    """
-    if limit <= 0:
-        return True
-    try:
-        hits, retry_after = await hit_rate_limit(key, 3600)
-    except Exception:
-        logger.warning("Rate limiter unavailable for %s", key, exc_info=True)
-        return False
-    if hits > limit:
-        raise HTTPException(
-            status_code=429,
-            detail={"reason": "rate_limited", "retry_after": retry_after},
-            headers={"Retry-After": str(retry_after)},
-        )
-    return True
-
-
 @router.post("/detect", response_model=schemas.RecurringDetectionResult)
 async def detect_recurring_transactions(
     *,
@@ -166,17 +142,20 @@ async def detect_recurring_transactions(
     )
     # Access first: a free user who used their scan gets 402, not 429.
     unlimited = await detection_service.check_access(db, current_user)
-    limited = await _enforce_rate_limit(
+    limiter_up = await enforce_rate_limit(
         f"recurring_detect:{current_user.id}",
         settings.RECURRING_DETECT_RATE_LIMIT_PER_HOUR,
+        fail_open=True,
     )
-    # Unthrottled AI calls cost money: scan deterministically instead.
-    use_ai = detect_in.use_ai and limited
-    if detect_in.use_ai and not limited:
+    if detect_in.use_ai and not limiter_up:
         enrich_event(request, operation={"ai_skipped": "rate_limiter_down"})
     with timed() as t:
         scan = await detection_service.run_scan(
-            db, current_user, use_ai=use_ai, unlimited=unlimited
+            db,
+            current_user,
+            use_ai=detect_in.use_ai,
+            ai_allowed=limiter_up,
+            unlimited=unlimited,
         )
     result = scan.result
     enrich_event(
@@ -248,9 +227,10 @@ async def accept_recurring_suggestions(
     )
     # Each request re-runs detection over the history (no AI): throttle it.
     # Fails open; without AI it costs only database time.
-    await _enforce_rate_limit(
+    await enforce_rate_limit(
         f"recurring_accept:{current_user.id}",
         settings.RECURRING_ACCEPT_RATE_LIMIT_PER_HOUR,
+        fail_open=True,
     )
     results = await detection_service.accept_suggestions(
         db, current_user, accept_in.items

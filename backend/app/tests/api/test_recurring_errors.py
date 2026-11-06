@@ -47,7 +47,7 @@ def _isolate(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
         "app.services.transactions.invalidate_user_cache", AsyncMock(return_value=True)
     )
     limiter = AsyncMock(return_value=(1, 3600))
-    monkeypatch.setattr("app.api.api_v1.endpoints.recurring.hit_rate_limit", limiter)
+    monkeypatch.setattr("app.services.rate_limits.hit_rate_limit", limiter)
     return limiter
 
 
