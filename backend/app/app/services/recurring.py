@@ -427,14 +427,13 @@ async def create_recurring(
     *,
     source_transaction=None,
     detection_fingerprint: str | None = None,
-    from_suggestion: bool = False,
 ) -> RecurringTransaction:
     """Create a template and generate anything already due.
 
     With `source_transaction`, that transaction becomes the first occurrence
     of the series (it is linked in the same commit, so it is never duplicated);
     `ConflictError` if another series linked it since the caller checked.
-    With `from_suggestion` (a detected series being accepted):
+    With `detection_fingerprint` (a detected series being accepted):
     - the transaction counts as the rule's nearest date (within a few days),
       so a charge on Friday the 13th for a series due on the 15th doesn't
       create another one two days later;
@@ -470,7 +469,7 @@ async def create_recurring(
         rule = rule_for(template)
         covered = data.start_date
         last_actual = data.start_date
-        if from_suggestion:
+        if detection_fingerprint is not None:
             covered = max(covered, snap_to_nominal(rule, data.start_date) or covered)
             yesterday = local_today(template.timezone) - timedelta(days=1)
             last_actual = max(last_actual, yesterday)
@@ -737,7 +736,6 @@ async def create_from_transaction(
         create_in,
         source_transaction=transaction,
         detection_fingerprint=detection_fingerprint,
-        from_suggestion=detection_fingerprint is not None,
     )
 
 

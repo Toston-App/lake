@@ -769,6 +769,46 @@ async def test_worker_releases_leases_of_unreached_templates(
 
 
 # -- marking a transaction as recurring -----------------------------------------
+@pytest.mark.parametrize(
+    ("fingerprint", "occurrences"),
+    [
+        # A plain mark: the charge starts the series and today's date is due.
+        (None, 2),
+        # An accepted suggestion: the charge two days early stands for today's.
+        ("f" * 32, 1),
+    ],
+)
+async def test_mark_snaps_to_the_rule_only_for_a_detected_series(
+    db_session: AsyncSession, test_user: User, fingerprint, occurrences
+):
+    expense = Expense(owner_id=test_user.id, amount=5, date=TODAY - timedelta(days=2))
+    db_session.add(expense)
+    await db_session.commit()
+    data = schemas.RecurringFromTransaction(
+        transaction_type="expense",
+        transaction_id=expense.id,
+        frequency="weekly",
+        weekdays=[TODAY.weekday()],
+        timezone="UTC",
+    )
+    template = await recurring_service.create_from_transaction(
+        db_session, test_user, data, detection_fingerprint=fingerprint
+    )
+    assert template.detection_fingerprint == fingerprint
+    assert template.occurrences_count == occurrences
+    assert await _count(db_session, Expense, template.id) == occurrences
+    assert template.next_run_date == TODAY + timedelta(days=7)
+
+
+def test_create_recurring_derives_suggestion_from_fingerprint():
+    """Whether a series was detected is the fingerprint; no separate flag."""
+    import inspect
+
+    params = inspect.signature(recurring_service.create_recurring).parameters
+    assert "detection_fingerprint" in params
+    assert "from_suggestion" not in params
+
+
 def _from_expense(expense_id: int) -> schemas.RecurringFromTransaction:
     return schemas.RecurringFromTransaction(
         transaction_type="expense",
