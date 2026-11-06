@@ -301,7 +301,7 @@ class _GapSpec:
     interval: int
     low: int
     high: int
-    period_days: float
+    period_days: float  # days between occurrences, interval included
 
 
 GAP_SPECS = (
@@ -483,9 +483,7 @@ def detect_rule(dates: list[date]) -> DetectedRule | None:
             DetectedRule(
                 frequency=spec.frequency,
                 interval=spec.interval,
-                period_days=spec.period_days * spec.interval
-                if spec.frequency == Frequency.weekly
-                else spec.period_days,
+                period_days=spec.period_days,
                 fit=fit,
                 gap_stdev=gap_stdev,
                 weekdays=weekdays,

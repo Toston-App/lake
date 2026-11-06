@@ -104,6 +104,27 @@ def test_weekly_and_every_two_weeks():
     assert (found.detected.frequency, found.detected.interval) == (Frequency.weekly, 2)
 
 
+def test_weekly_period_days_is_one_occurrence_apart():
+    start = date(2026, 5, 4)  # a Monday
+    weekly = [_point(start + timedelta(weeks=i)) for i in range(26)]
+    [found] = _detect(weekly)
+    assert found.detected.period_days == 7
+
+    biweekly = [
+        _point(start + timedelta(weeks=2 * i), description="gym") for i in range(13)
+    ]
+    [found] = _detect(biweekly, key="gym")
+    assert found.detected.interval == 2
+    assert found.detected.period_days == 14
+
+
+def test_every_two_weeks_last_charged_a_month_ago_is_dropped():
+    # 30 days is past the 14 * STALE_PERIODS = 21 day cut-off.
+    last = TODAY - timedelta(days=30)
+    biweekly = [_point(last - timedelta(weeks=2 * i)) for i in range(13)]
+    assert _detect(biweekly) == []
+
+
 def test_semimonthly_on_1st_and_15th():
     dates = sorted(_monthly(1, 6) + _monthly(15, 6))
     [found] = _detect([_point(d, type=RecurringType.income) for d in dates], "salary")
