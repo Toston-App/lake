@@ -67,7 +67,7 @@ def axiom(monkeypatch: pytest.MonkeyPatch) -> FakeAxiomClient:
 
 @pytest.fixture
 def enriched(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
-    """Every enrich_event call /recurring makes; later calls overwrite keys."""
+    """Every enrich_event call /recurring makes."""
     from app.api.api_v1.endpoints import recurring as endpoint
 
     calls: list[dict] = []
@@ -172,6 +172,8 @@ async def test_detect_limiter_down_scans_without_ai(
     assert event["http"]["status_code"] == 200
     assert event["operation"]["type"] == "recurring_detect"
     assert event["operation"]["ai_used"] is False
+    # The skip recorded before the scan survives the operation added after it.
+    assert event["operation"]["ai_skipped"] == "rate_limiter_down"
 
 
 async def test_detect_limiter_down_without_ai_records_no_skip(

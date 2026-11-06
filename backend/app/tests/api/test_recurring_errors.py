@@ -233,7 +233,12 @@ async def test_detect_scan_limit(
         },
     )
     [event] = axiom.events
-    assert event["operation"] == {"outcome": "free_scan_used"}
+    # The outcome is added to the operation the endpoint recorded.
+    assert event["operation"] == {
+        "type": "recurring_detect",
+        "use_ai": True,
+        "outcome": "free_scan_used",
+    }
     assert event["http"]["status_code"] == 402
     assert "error" not in event
 
@@ -265,7 +270,11 @@ async def test_detect_cooldown(
         retry_after="17",
     )
     [event] = axiom.events
-    assert event["operation"] == {"outcome": "cancel_cooldown"}
+    assert event["operation"] == {
+        "type": "recurring_detect",
+        "use_ai": True,
+        "outcome": "cancel_cooldown",
+    }
     assert event["http"]["status_code"] == 429
 
 
