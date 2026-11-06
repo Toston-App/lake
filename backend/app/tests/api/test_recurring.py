@@ -382,7 +382,8 @@ class TestFromTransaction:
                 "frequency": "monthly",
             },
         )
-        assert resp.status_code == 403
+        # Reported as missing, so another user's ids can't be probed.
+        assert resp.status_code == 404
 
 
 class TestUpdateRecurring:
@@ -633,8 +634,13 @@ class TestReadRecurring:
         )
         db_session.add(foreign)
         await db_session.commit()
-        assert (await client.get(f"{PREFIX}/{foreign.id}")).status_code == 403
-        assert (await client.delete(f"{PREFIX}/{foreign.id}")).status_code == 403
+        # Reported as missing, so another user's ids can't be probed.
+        url = f"{PREFIX}/{foreign.id}"
+        assert (await client.get(url)).status_code == 404
+        assert (await client.delete(url)).status_code == 404
+        assert (await client.put(url, json={"amount": 5})).status_code == 404
+        assert (await client.post(f"{url}/skip")).status_code == 404
+        assert (await client.get(f"{PREFIX}/999999")).status_code == 404
 
     async def test_transaction_schemas_expose_recurring_id(
         self, client: AsyncClient, db_session: AsyncSession

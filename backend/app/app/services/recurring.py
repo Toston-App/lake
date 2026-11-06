@@ -286,10 +286,11 @@ async def get_recurring(
     db: AsyncSession, user: models.User, recurring_id: int
 ) -> RecurringTransaction:
     template = await db.get(RecurringTransaction, recurring_id, populate_existing=True)
-    if not template:
+    # Another user's template is reported as missing, so ids can't be probed.
+    if not template or (
+        not crud.user.is_superuser(user) and template.owner_id != user.id
+    ):
         raise NotFoundError("Recurring transaction not found")
-    if not crud.user.is_superuser(user) and template.owner_id != user.id:
-        raise PermissionDeniedError("Not enough permissions")
     return template
 
 
@@ -631,11 +632,15 @@ async def create_from_transaction(
         TransactionType.income: transaction_service.get_income,
         TransactionType.transfer: transaction_service.get_transfer,
     }[data.transaction_type]
-    transaction = await getter(db, user, data.transaction_id)
+    try:
+        transaction = await getter(db, user, data.transaction_id)
+    except PermissionDeniedError:
+        transaction = None
+    # Another user's transaction is reported as missing, so ids can't be probed.
+    if transaction is None or transaction.owner_id != user.id:
+        raise NotFoundError("Transaction not found")
     if transaction.recurring_id:
         raise DomainError("This transaction already belongs to a recurring series")
-    if transaction.owner_id != user.id:
-        raise PermissionDeniedError("Not enough permissions")
     tz = data.timezone or "UTC"
     if transaction.date and transaction.date < earliest_start(local_today(tz)):
         raise DomainError(
