@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -13,6 +14,7 @@ from app.utilities.redis import hit_rate_limit
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _enrich(request: Request, user: models.User, operation: dict) -> None:
@@ -121,21 +123,26 @@ async def create_recurring_from_transaction(
     return recurring_service.to_detail(template)
 
 
-async def _enforce_detect_rate_limit(user_id: int) -> None:
-    """Throttle scans per user. Fails open: a scan costs little."""
-    limit = settings.RECURRING_DETECT_RATE_LIMIT_PER_HOUR
+async def _enforce_rate_limit(key: str, limit: int) -> bool:
+    """Count a hit against an hourly per-user limit; 429 when over it.
+
+    Returns False when the limiter is unavailable (Redis down): the request
+    goes ahead, and the caller decides what to drop to keep it cheap.
+    """
     if limit <= 0:
-        return
+        return True
     try:
-        hits, retry_after = await hit_rate_limit(f"recurring_detect:{user_id}", 3600)
+        hits, retry_after = await hit_rate_limit(key, 3600)
     except Exception:
-        return
+        logger.warning("Rate limiter unavailable for %s", key, exc_info=True)
+        return False
     if hits > limit:
         raise HTTPException(
             status_code=429,
             detail={"reason": "rate_limited", "retry_after": retry_after},
             headers={"Retry-After": str(retry_after)},
         )
+    return True
 
 
 @router.post("/detect", response_model=schemas.RecurringDetectionResult)
@@ -159,8 +166,9 @@ async def detect_recurring_transactions(
 
     With `use_ai`, descriptions, place and category names, and each series'
     schedule and amounts are sent to the AI provider to group merchants and
-    tell subscriptions from habits. Account names, ids, emails and your name
-    are never sent.
+    tell subscriptions from habits. Account names, ids and your email are
+    never sent; descriptions are sent as written, so they may contain names.
+    Without a working rate limiter the scan runs without the AI.
     """
     detect_in = detect_in or schemas.RecurringDetectRequest()
     _enrich(
@@ -169,10 +177,17 @@ async def detect_recurring_transactions(
     try:
         # Access first: a free user who used their scan gets 402, not 429.
         unlimited = await detection_service.check_access(db, current_user)
-        await _enforce_detect_rate_limit(current_user.id)
+        limited = await _enforce_rate_limit(
+            f"recurring_detect:{current_user.id}",
+            settings.RECURRING_DETECT_RATE_LIMIT_PER_HOUR,
+        )
+        # Unthrottled AI calls cost money: scan deterministically instead.
+        use_ai = detect_in.use_ai and limited
+        if detect_in.use_ai and not limited:
+            enrich_event(request, operation={"ai_skipped": "rate_limiter_down"})
         with timed() as t:
             scan = await detection_service.run_scan(
-                db, current_user, use_ai=detect_in.use_ai, unlimited=unlimited
+                db, current_user, use_ai=use_ai, unlimited=unlimited
             )
     except detection_service.ScanLimitError as exc:
         enrich_event(request, operation={"outcome": "free_scan_used"})

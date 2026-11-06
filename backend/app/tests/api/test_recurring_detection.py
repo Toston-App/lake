@@ -102,9 +102,26 @@ async def test_rate_limit_returns_429(client: AsyncClient, _isolate: AsyncMock):
     assert response.headers["Retry-After"] == "120"
 
 
-async def test_rate_limit_fails_open(client: AsyncClient, _isolate: AsyncMock):
+async def test_rate_limit_fails_open_without_ai(
+    client: AsyncClient,
+    _isolate: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.services import recurring_detection as detection
+
+    monkeypatch.setattr(settings, "RECURRING_DETECTION_AI_ENABLED", True)
+    calls = []
+    run_scan = detection.run_scan
+
+    async def spy(*args, **kwargs):
+        calls.append(kwargs["use_ai"])
+        return await run_scan(*args, **kwargs)
+
+    monkeypatch.setattr(detection, "run_scan", spy)
     _isolate.side_effect = RuntimeError("redis down")
     assert (await client.post(f"{PREFIX}/detect")).status_code == 200
+    # Without the limiter the scan still runs, but never calls the AI.
+    assert calls == [False]
 
 
 async def test_last_result_404_before_any_scan(client: AsyncClient):
