@@ -41,27 +41,25 @@ from app.core.recurrence import (
     Frequency,
     MonthlyMode,
     Occurrence,
-    RecurringType,
     Rule,
     next_occurrence,
     snap_to_nominal,
     upcoming,
 )
 from app.schemas.transaction import TransactionType
-from app.services import transactions as transaction_service
 from app.services.errors import (
     ConflictError,
     DomainError,
     NotFoundError,
-    PermissionDeniedError,
     ServiceError,
 )
+from app.services.ownership import require_owned
+from app.services.transaction_kinds import KINDS, kind_of
 
 logger = logging.getLogger(__name__)
 
 RecurringTransaction = models.RecurringTransaction
 
-MADE_FROM = "Recurring"
 LEASE = timedelta(minutes=5)
 # How long a user change waits for a generation run to release the lease.
 LEASE_WAIT_SECONDS = 3.0
@@ -92,11 +90,6 @@ SCHEDULE_FIELDS = frozenset(
 )
 # Schedule fields that don't change which dates the rule produces.
 LIMIT_FIELDS = frozenset({"end_date", "max_occurrences", "timezone"})
-TRANSACTION_MODELS = {
-    RecurringType.expense: models.Expense,
-    RecurringType.income: models.Income,
-    RecurringType.transfer: models.Transfer,
-}
 
 
 _postgres_timezones: frozenset[str] | None = None
@@ -377,26 +370,31 @@ async def _abandon_change(db: AsyncSession, recurring_id: int, lease: datetime) 
     await _release_lease(db, recurring_id, lease)
 
 
-async def _require_ref(
-    db: AsyncSession, user: models.User, crud_obj, obj_id: int | None, label: str
+# Template reference fields: what they point at, and its name in errors.
+_REFERENCES = {
+    "account_id": (crud.account, "Account"),
+    "to_account_id": (crud.account, "Account"),
+    "category_id": (crud.category, "Category"),
+    "subcategory_id": (crud.subcategory, "Subcategory"),
+    "place_id": (crud.place, "Place"),
+}
+
+
+async def _check_reference(
+    db: AsyncSession, user: models.User, field: str, obj_id: int | None
 ):
-    if obj_id is None:
-        return None
-    obj = await crud_obj.get(db=db, id=obj_id)
-    if not obj or (not crud.user.is_superuser(user) and obj.owner_id != user.id):
-        raise NotFoundError(f"{label} not found")
-    return obj
+    """A template's reference; another user's entity is reported as missing."""
+    crud_obj, label = _REFERENCES[field]
+    return await require_owned(db, user, crud_obj, obj_id, label, hide_foreign=True)
 
 
 async def _validate_fields(
-    db: AsyncSession, user: models.User, recurring_type: RecurringType, fields: dict
+    db: AsyncSession, user: models.User, recurring_type: TransactionType, fields: dict
 ) -> dict:
     """Check ownership and per-type rules; drop fields that don't apply to the type."""
-    await _require_ref(db, user, crud.account, fields.get("account_id"), "Account")
-    if recurring_type == RecurringType.transfer:
-        await _require_ref(
-            db, user, crud.account, fields.get("to_account_id"), "Account"
-        )
+    await _check_reference(db, user, "account_id", fields.get("account_id"))
+    if recurring_type == TransactionType.transfer:
+        await _check_reference(db, user, "to_account_id", fields.get("to_account_id"))
         if not fields.get("account_id") or not fields.get("to_account_id"):
             raise DomainError("Transfers need account_id and to_account_id")
         if fields["account_id"] == fields["to_account_id"]:
@@ -405,16 +403,16 @@ async def _validate_fields(
         return fields
 
     fields["to_account_id"] = None
-    await _require_ref(db, user, crud.place, fields.get("place_id"), "Place")
-    subcategory = await _require_ref(
-        db, user, crud.subcategory, fields.get("subcategory_id"), "Subcategory"
+    await _check_reference(db, user, "place_id", fields.get("place_id"))
+    subcategory = await _check_reference(
+        db, user, "subcategory_id", fields.get("subcategory_id")
     )
-    if recurring_type == RecurringType.income:
+    if recurring_type == TransactionType.income:
         # Incomes are categorised through their subcategory only.
         fields["category_id"] = None
         return fields
 
-    await _require_ref(db, user, crud.category, fields.get("category_id"), "Category")
+    await _check_reference(db, user, "category_id", fields.get("category_id"))
     if subcategory and subcategory.category_id != fields.get("category_id"):
         raise DomainError("Subcategory does not belong to the category")
     return fields
@@ -636,12 +634,8 @@ async def _delete_template(
 ) -> None:
     if delete_generated:
         owner = await crud.user.get(db, id=template.owner_id)
-        model = TRANSACTION_MODELS[RecurringType(template.type)]
-        delete = {
-            RecurringType.expense: transaction_service.delete_expense,
-            RecurringType.income: transaction_service.delete_income,
-            RecurringType.transfer: transaction_service.delete_transfer,
-        }[RecurringType(template.type)]
+        kind = kind_of(template.type)
+        model = kind.model
         ids = (
             (
                 await db.execute(
@@ -656,7 +650,7 @@ async def _delete_template(
             .all()
         )
         for transaction_id in ids:
-            await delete(db, owner, transaction_id)
+            await kind.service("delete")(db, owner, transaction_id)
     await db.delete(template)
     await db.commit()
 
@@ -699,18 +693,18 @@ async def create_from_transaction(
     *,
     detection_fingerprint: str | None = None,
 ) -> RecurringTransaction:
-    getter = {
-        TransactionType.expense: transaction_service.get_expense,
-        TransactionType.income: transaction_service.get_income,
-        TransactionType.transfer: transaction_service.get_transfer,
-    }[data.transaction_type]
-    try:
-        transaction = await getter(db, user, data.transaction_id)
-    except PermissionDeniedError:
-        transaction = None
-    # Another user's transaction is reported as missing, so ids can't be probed.
-    if transaction is None or transaction.owner_id != user.id:
-        raise NotFoundError("Transaction not found")
+    kind = KINDS[data.transaction_type]
+    # Another user's transaction is reported as missing, so ids can't be
+    # probed; not even a superuser can make a series of it.
+    transaction = await require_owned(
+        db,
+        user,
+        kind.crud,
+        data.transaction_id,
+        "Transaction",
+        hide_foreign=True,
+        allow_superuser=False,
+    )
     if transaction.recurring_id:
         raise DomainError("This transaction already belongs to a recurring series")
     tz = data.timezone or "UTC"
@@ -720,19 +714,7 @@ async def create_from_transaction(
             "marked as recurring"
         )
 
-    recurring_type = RecurringType(data.transaction_type.value)
-    if recurring_type == RecurringType.transfer:
-        copied = {
-            "account_id": transaction.from_acc,
-            "to_account_id": transaction.to_acc,
-        }
-    else:
-        copied = {
-            "account_id": transaction.account_id,
-            "subcategory_id": transaction.subcategory_id,
-            "place_id": transaction.place_id,
-            "category_id": getattr(transaction, "category_id", None),
-        }
+    copied = kind.template_fields(transaction)
     copied.update(amount=transaction.amount, description=transaction.description)
     template_fields = set(schemas.TemplateFields.model_fields)
     copied.update(data.model_dump(exclude_unset=True, include=template_fields))
@@ -744,7 +726,7 @@ async def create_from_transaction(
             | {"transaction_type", "transaction_id", "fingerprint"},
         ),
         **{k: v for k, v in copied.items() if v is not None},
-        type=recurring_type,
+        type=kind.type,
         start_date=start_date,
     )
     return await create_recurring(
@@ -883,7 +865,7 @@ async def release_leases(db: AsyncSession, leases: dict[int, datetime]) -> None:
 async def _already_generated(
     db: AsyncSession, template: RecurringTransaction, run_date: date
 ) -> bool:
-    model = TRANSACTION_MODELS[RecurringType(template.type)]
+    model = kind_of(template.type).model
     return bool(
         await db.scalar(
             select(
@@ -898,52 +880,17 @@ async def _already_generated(
 async def _create_occurrence(
     db: AsyncSession, owner: models.User, template: RecurringTransaction, run_date: date
 ) -> None:
-    recurring_type = RecurringType(template.type)
-    if recurring_type == RecurringType.transfer:
-        if not template.account_id or not template.to_account_id:
-            raise DomainError("One of the transfer accounts was deleted")
-        await transaction_service.create_transfer(
-            db,
-            owner,
-            schemas.TransferCreate(
-                amount=template.amount,
-                description=template.description,
-                date=run_date,
-                from_acc=template.account_id,
-                to_acc=template.to_account_id,
-            ),
-            recurring_id=template.id,
-        )
-        return
-    # The transaction services silently drop a missing or foreign reference;
-    # a template should pause instead, like transfers do.
-    await _require_ref(db, owner, crud.account, template.account_id, "Account")
-    await _require_ref(
-        db, owner, crud.subcategory, template.subcategory_id, "Subcategory"
+    kind = kind_of(template.type)
+    if not all(getattr(template, field) for field in kind.required):
+        raise DomainError(kind.missing_required)
+    for field in kind.checked_references:
+        await _check_reference(db, owner, field, getattr(template, field))
+    await kind.service("create")(
+        db,
+        owner,
+        kind.build_occurrence(kind.occurrence_fields(template), run_date),
+        recurring_id=template.id,
     )
-    await _require_ref(db, owner, crud.place, template.place_id, "Place")
-    if recurring_type == RecurringType.expense:
-        await _require_ref(db, owner, crud.category, template.category_id, "Category")
-    common = {
-        "amount": template.amount,
-        "description": template.description,
-        "date": run_date.isoformat(),
-        "account_id": template.account_id,
-        "subcategory_id": template.subcategory_id,
-        "place_id": template.place_id,
-        "made_from": MADE_FROM,
-    }
-    if recurring_type == RecurringType.expense:
-        await transaction_service.create_expense(
-            db,
-            owner,
-            schemas.ExpenseCreate(**common, category_id=template.category_id),
-            recurring_id=template.id,
-        )
-    else:
-        await transaction_service.create_income(
-            db, owner, schemas.IncomeCreate(**common), recurring_id=template.id
-        )
 
 
 async def generate_due(

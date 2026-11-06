@@ -30,7 +30,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import crud, models, schemas
 from app.ai import recurring_detection as ai
 from app.core.config import settings
-from app.core.recurrence import RecurringType
 from app.core.recurrence_detection import (
     AMOUNT_TOLERANCE,
     MAX_SUGGESTIONS,
@@ -56,6 +55,7 @@ from app.services.errors import (
     NotFoundError,
     ServiceError,
 )
+from app.services.transaction_kinds import KINDS
 
 logger = logging.getLogger(__name__)
 
@@ -308,115 +308,36 @@ async def load_points(
     """Unlinked transactions from the last 25 months, one query per type."""
     since = today - timedelta(days=YEARLY_WINDOW_DAYS)
     points: list[TxPoint] = []
-
-    expense = models.Expense
-    rows = await db.execute(
-        select(
-            expense.id,
-            expense.date,
-            expense.amount,
-            expense.description,
-            expense.account_id,
-            expense.category_id,
-            expense.subcategory_id,
-            expense.place_id,
-            models.Place.name,
-            models.Category.name,
+    for kind in KINDS.values():
+        model = kind.model
+        query = select(
+            model.id.label("id"),
+            model.date.label("date"),
+            model.amount.label("amount"),
+            model.description.label("description"),
+            *(kind.column(field).label(field) for field in kind.columns),
         )
-        .outerjoin(models.Place, models.Place.id == expense.place_id)
-        .outerjoin(models.Category, models.Category.id == expense.category_id)
-        .where(
-            expense.owner_id == user.id,
-            expense.recurring_id.is_(None),
-            expense.date >= since,
-            expense.date <= today,
-            expense.amount > 0,
-        )
-    )
-    for row in rows:
-        points.append(
-            TxPoint(
-                id=row[0],
-                type=RecurringType.expense,
-                date=row[1],
-                amount=float(row[2]),
-                description=row[3],
-                account_id=row[4],
-                category_id=row[5],
-                subcategory_id=row[6],
-                place_id=row[7],
-                place_name=row[8],
-                category_name=row[9],
+        if "place_id" in kind.columns:
+            query = query.add_columns(models.Place.name.label("place_name")).outerjoin(
+                models.Place, models.Place.id == kind.column("place_id")
+            )
+        if kind.name_source:
+            field, named = kind.name_source
+            query = query.add_columns(named.name.label("category_name")).outerjoin(
+                named, named.id == kind.column(field)
+            )
+        rows = await db.execute(
+            query.where(
+                model.owner_id == user.id,
+                model.recurring_id.is_(None),
+                model.date >= since,
+                model.date <= today,
+                model.amount > 0,
             )
         )
-
-    income = models.Income
-    rows = await db.execute(
-        select(
-            income.id,
-            income.date,
-            income.amount,
-            income.description,
-            income.account_id,
-            income.subcategory_id,
-            income.place_id,
-            models.Place.name,
-            models.Subcategory.name,
-        )
-        .outerjoin(models.Place, models.Place.id == income.place_id)
-        .outerjoin(models.Subcategory, models.Subcategory.id == income.subcategory_id)
-        .where(
-            income.owner_id == user.id,
-            income.recurring_id.is_(None),
-            income.date >= since,
-            income.date <= today,
-            income.amount > 0,
-        )
-    )
-    for row in rows:
-        points.append(
-            TxPoint(
-                id=row[0],
-                type=RecurringType.income,
-                date=row[1],
-                amount=float(row[2]),
-                description=row[3],
-                account_id=row[4],
-                subcategory_id=row[5],
-                place_id=row[6],
-                place_name=row[7],
-                category_name=row[8],
-            )
-        )
-
-    transfer = models.Transfer
-    rows = await db.execute(
-        select(
-            transfer.id,
-            transfer.date,
-            transfer.amount,
-            transfer.description,
-            transfer.from_acc,
-            transfer.to_acc,
-        ).where(
-            transfer.owner_id == user.id,
-            transfer.recurring_id.is_(None),
-            transfer.date >= since,
-            transfer.date <= today,
-            transfer.amount > 0,
-        )
-    )
-    for row in rows:
-        points.append(
-            TxPoint(
-                id=row[0],
-                type=RecurringType.transfer,
-                date=row[1],
-                amount=float(row[2]),
-                description=row[3],
-                account_id=row[4],
-                to_account_id=row[5],
-            )
+        points.extend(
+            TxPoint(type=kind.type, **{**row._mapping, "amount": float(row.amount)})
+            for row in rows
         )
     return points
 
@@ -444,7 +365,7 @@ async def _load_templates(db: AsyncSession, user: models.User) -> list[TxPoint]:
     return [
         TxPoint(
             id=row[0],
-            type=RecurringType(row[1]),
+            type=row[1],
             date=date.min,
             amount=float(row[2]),
             description=row[3],
@@ -621,7 +542,7 @@ def _drop_covered(
             merchant = merchants.get(text) or _fallback(text)
             key = group_key(template, merchant)
             matches = by_key.get(key, [])
-            if not matches and template.type == RecurringType.transfer:
+            if not matches and template.type == TransactionType.transfer:
                 # A described transfer template still covers an undescribed series.
                 matches = by_key.get(key[:3] + (None,), [])
             cover(matches, template.amount)
@@ -633,7 +554,7 @@ def _drop_covered(
             if c.type == template.type
             and c.latest.account_id == template.account_id
             and (
-                template.type != RecurringType.transfer
+                template.type != TransactionType.transfer
                 or c.latest.to_account_id == template.to_account_id
             )
             and abs(template.amount - c.median_amount)
@@ -891,31 +812,6 @@ async def last_result(
 # ---------------------------------------------------------------------------
 # Accept / dismiss
 # ---------------------------------------------------------------------------
-_TYPE_MODELS = {
-    TransactionType.expense: models.Expense,
-    TransactionType.income: models.Income,
-    TransactionType.transfer: models.Transfer,
-}
-
-
-def _point_from(
-    transaction_type: TransactionType, tx: Any, place_name: str | None
-) -> TxPoint:
-    is_transfer = transaction_type == TransactionType.transfer
-    return TxPoint(
-        id=tx.id,
-        type=RecurringType(transaction_type.value),
-        date=tx.date,
-        amount=float(tx.amount),
-        description=tx.description,
-        place_name=place_name,
-        account_id=tx.from_acc if is_transfer else tx.account_id,
-        to_account_id=tx.to_acc if is_transfer else None,
-        category_id=getattr(tx, "category_id", None),
-        subcategory_id=None if is_transfer else tx.subcategory_id,
-    )
-
-
 async def _place_names(db: AsyncSession, ids: set[int]) -> dict[int, str]:
     if not ids:
         return {}
@@ -956,7 +852,8 @@ async def _newer_in_group(
 ) -> TxPoint | None:
     """Fallback for a transaction outside any detected series: a newer one
     from the same merchant within the amount tolerance."""
-    model = _TYPE_MODELS[item.transaction_type]
+    kind = KINDS[item.transaction_type]
+    model = kind.model
     newer = (
         (
             await db.execute(
@@ -982,9 +879,7 @@ async def _newer_in_group(
     places = await _place_names(db, place_ids)
 
     def point(row: Any) -> TxPoint:
-        return _point_from(
-            item.transaction_type, row, places.get(getattr(row, "place_id", None))
-        )
+        return kind.to_point(row, places.get(getattr(row, "place_id", None)))
 
     source = point(tx)
     others = [point(row) for row in newer]
@@ -1018,7 +913,7 @@ async def _check_latest(
     user already has. The series is the detected one, so it spans price
     changes but not the same merchant's other plans.
     """
-    model = _TYPE_MODELS[item.transaction_type]
+    model = KINDS[item.transaction_type].model
     tx = (
         await db.execute(
             select(model).where(
@@ -1030,7 +925,7 @@ async def _check_latest(
         raise NotFoundError("Transaction not found")
     if tx.recurring_id:
         raise DomainError("This transaction already belongs to a recurring series")
-    series = index.series_of((RecurringType(item.transaction_type.value), tx.id))
+    series = index.series_of((item.transaction_type, tx.id))
     if series is not None:
         if item.fingerprint != series.fingerprint:
             raise DomainError("The suggestion does not match this transaction")

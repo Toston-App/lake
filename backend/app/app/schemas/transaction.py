@@ -4,16 +4,11 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel
 
+from app.core.transaction_type import TransactionType  # noqa: F401
 from app.schemas.account import Account
 from app.schemas.category import Category
 from app.schemas.place import Place
 from app.schemas.subcategory import Subcategory
-
-
-class TransactionType(str, Enum):
-    expense = "expense"
-    income = "income"
-    transfer = "transfer"
 
 
 class AmountOperator(str, Enum):

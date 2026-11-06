@@ -22,7 +22,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import schemas
+from app import crud, schemas
 from tests.utils import create_test_account, create_test_expense, create_test_user
 
 TODAY = datetime.now(timezone.utc).date()
@@ -310,10 +310,10 @@ async def test_accept_fails_when_the_transaction_is_linked_after_the_check(
             start_date=TODAY + timedelta(days=1),
         ),
     )
-    get_expense = recurring_service.transaction_service.get_expense
+    get_expense = crud.expense.get
 
-    async def linked_meanwhile(db, owner, transaction_id):
-        transaction = await get_expense(db, owner, transaction_id)
+    async def linked_meanwhile(db, transaction_id):
+        transaction = await get_expense(db, transaction_id)
         if transaction_id == contested:
             # The loaded transaction keeps its stale, unlinked state.
             await db.execute(
@@ -325,9 +325,7 @@ async def test_accept_fails_when_the_transaction_is_linked_after_the_check(
             await db.commit()
         return transaction
 
-    monkeypatch.setattr(
-        recurring_service.transaction_service, "get_expense", linked_meanwhile
-    )
+    monkeypatch.setattr(crud.expense, "get", linked_meanwhile)
 
     results = await detection.accept_suggestions(
         db_session, test_user, [accept_item(netflix), accept_item(spotify)]

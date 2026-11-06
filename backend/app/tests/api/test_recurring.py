@@ -19,11 +19,11 @@ from app.models import (
     Transfer,
     User,
 )
-from app.services import transactions as transaction_service
 from httpx import AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import crud
 from tests.utils import (
     create_test_account,
     create_test_category,
@@ -433,12 +433,12 @@ class TestFromTransaction:
         winner = await client.post(PREFIX, json=_weekly_expense())
         assert winner.status_code == 200, winner.text
         winner_id = winner.json()["id"]
-        get_expense = transaction_service.get_expense
+        get_expense = crud.expense.get
 
-        async def linked_meanwhile(db, owner, transaction_id):
+        async def linked_meanwhile(db, transaction_id):
             # The request reads the expense unlinked, then the concurrent
             # request links it before this one writes.
-            transaction = await get_expense(db, owner, transaction_id)
+            transaction = await get_expense(db, transaction_id)
             await db.execute(
                 update(Expense)
                 .where(Expense.id == transaction_id)
@@ -448,7 +448,7 @@ class TestFromTransaction:
             await db.commit()
             return transaction
 
-        monkeypatch.setattr(transaction_service, "get_expense", linked_meanwhile)
+        monkeypatch.setattr(crud.expense, "get", linked_meanwhile)
         resp = await client.post(
             f"{PREFIX}/from-transaction",
             json={

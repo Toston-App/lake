@@ -9,7 +9,6 @@ from app.core.recurrence import (
     BusinessDayAdjustment,
     Frequency,
     MonthlyMode,
-    RecurringType,
 )
 from app.schemas.transaction import TransactionType
 
@@ -97,14 +96,14 @@ class RecurringTransactionFields(RecurrenceRule, TemplateFields):
 
 
 class RecurringTransactionCreate(RecurringTransactionFields):
-    type: RecurringType
+    type: TransactionType
     amount: float = Field(gt=0, le=MAX_AMOUNT, allow_inf_nan=False)
     frequency: Frequency
     start_date: date
 
     @model_validator(mode="after")
     def validate_accounts(self) -> "RecurringTransactionCreate":
-        if self.type == RecurringType.transfer:
+        if self.type == TransactionType.transfer:
             if not self.account_id or not self.to_account_id:
                 raise ValueError("Transfers need account_id and to_account_id")
         return self
@@ -136,7 +135,7 @@ class RecurringTransaction(BaseModel):
 
     id: int
     owner_id: int
-    type: RecurringType
+    type: TransactionType
     description: str | None = None
     amount: float
     account_id: int | None = None
@@ -200,7 +199,7 @@ class SuggestionOccurrence(BaseModel):
 
 class RecurringSuggestion(BaseModel):
     fingerprint: str
-    type: RecurringType
+    type: TransactionType
     merchant_name: str
     description: str | None = None
     amount: float

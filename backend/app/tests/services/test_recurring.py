@@ -16,7 +16,7 @@ from app.worker import recurring_worker
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import schemas
+from app import crud, schemas
 from tests.utils import (
     create_test_account,
     create_test_category,
@@ -727,16 +727,14 @@ async def test_concurrent_marks_of_one_transaction_create_one_template(
     # Hold both requests right after they read the transaction, so each one
     # checks `recurring_id` before either of them links it.
     both_read = asyncio.Barrier(2)
-    get_expense = recurring_service.transaction_service.get_expense
+    get_expense = crud.expense.get
 
-    async def get_then_wait(db, owner, transaction_id):
-        transaction = await get_expense(db, owner, transaction_id)
+    async def get_then_wait(db, transaction_id):
+        transaction = await get_expense(db, transaction_id)
         await both_read.wait()
         return transaction
 
-    monkeypatch.setattr(
-        recurring_service.transaction_service, "get_expense", get_then_wait
-    )
+    monkeypatch.setattr(crud.expense, "get", get_then_wait)
 
     async def mark():
         async with TestSessionLocal() as db:
@@ -784,10 +782,10 @@ async def test_mark_as_recurring_conflicts_when_linked_after_the_check(
     db_session.add(expense)
     await db_session.commit()
     winner = await _create(db_session, test_user)
-    get_expense = recurring_service.transaction_service.get_expense
+    get_expense = crud.expense.get
 
-    async def linked_meanwhile(db, owner, transaction_id):
-        transaction = await get_expense(db, owner, transaction_id)
+    async def linked_meanwhile(db, transaction_id):
+        transaction = await get_expense(db, transaction_id)
         # Another request links it; this one keeps its stale read.
         await db.execute(
             update(Expense)
@@ -798,9 +796,7 @@ async def test_mark_as_recurring_conflicts_when_linked_after_the_check(
         await db.commit()
         return transaction
 
-    monkeypatch.setattr(
-        recurring_service.transaction_service, "get_expense", linked_meanwhile
-    )
+    monkeypatch.setattr(crud.expense, "get", linked_meanwhile)
 
     with pytest.raises(ConflictError):
         await recurring_service.create_from_transaction(

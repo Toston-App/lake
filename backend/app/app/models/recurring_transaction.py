@@ -21,8 +21,8 @@ from app.core.recurrence import (
     BusinessDayAdjustment,
     Frequency,
     MonthlyMode,
-    RecurringType,
 )
+from app.core.transaction_type import TransactionType
 from app.db.base_class import Base
 
 if TYPE_CHECKING:
@@ -57,8 +57,8 @@ class RecurringTransaction(Base):
         Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=False, index=True
     )
     owner: "User" = relationship("User", back_populates="recurring_transactions")
-    type: RecurringType = Column(
-        _enum(RecurringType, "recurringtransactiontype"), nullable=False
+    type: TransactionType = Column(
+        _enum(TransactionType, "recurringtransactiontype"), nullable=False
     )
 
     # Fields copied to every generated transaction.

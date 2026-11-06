@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
 
+from app.core.transaction_type import TransactionType
+
 LAST_DAY = -1
 SATURDAY = 5
 # Hard stop for scans over pathological rules (e.g. Feb 30 never matching).
@@ -23,10 +25,9 @@ MAX_PERIODS_SCANNED = 5000
 DAY_TOLERANCE = 3
 
 
-class RecurringType(str, Enum):
-    expense = "expense"
-    income = "income"
-    transfer = "transfer"
+# Templates have the same types as transactions; the old name is kept for
+# modules that still import it.
+RecurringType = TransactionType
 
 
 class Frequency(str, Enum):
