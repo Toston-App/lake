@@ -19,6 +19,8 @@ LAST_DAY = -1
 SATURDAY = 5
 # Hard stop for scans over pathological rules (e.g. Feb 30 never matching).
 MAX_PERIODS_SCANNED = 5000
+# How far (in days) an actual date may sit from the nominal date it belongs to.
+DAY_TOLERANCE = 3
 
 
 class RecurringType(str, Enum):
@@ -68,13 +70,13 @@ class Occurrence:
     actual: date
 
 
-def _last_day(year: int, month: int) -> int:
+def last_day(year: int, month: int) -> int:
     return calendar.monthrange(year, month)[1]
 
 
-def _resolve_month_day(year: int, month: int, day: int) -> date:
+def resolve_month_day(year: int, month: int, day: int) -> date:
     """Day of month, clamped to the month's length (31 -> 30, 28 or 29)."""
-    last = _last_day(year, month)
+    last = last_day(year, month)
     if day == LAST_DAY or day > last:
         return date(year, month, last)
     return date(year, month, day)
@@ -82,14 +84,14 @@ def _resolve_month_day(year: int, month: int, day: int) -> date:
 
 def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
     if n == LAST_DAY:
-        last = date(year, month, _last_day(year, month))
+        last = date(year, month, last_day(year, month))
         return last - timedelta(days=(last.weekday() - weekday) % 7)
     first = date(year, month, 1)
     day = first + timedelta(days=(weekday - first.weekday()) % 7)
     return day + timedelta(weeks=n - 1)
 
 
-def _add_months(year: int, month: int, months: int) -> tuple[int, int]:
+def add_months(year: int, month: int, months: int) -> tuple[int, int]:
     index = year * 12 + (month - 1) + months
     return index // 12, index % 12 + 1
 
@@ -121,7 +123,7 @@ def _period_dates(rule: Rule, k: int) -> list[date]:
         weekdays = rule.weekdays or (start.weekday(),)
         return [week_start + timedelta(days=d) for d in weekdays]
     if rule.frequency in (Frequency.monthly, Frequency.semimonthly):
-        year, month = _add_months(start.year, start.month, step)
+        year, month = add_months(start.year, start.month, step)
         if (
             rule.frequency == Frequency.monthly
             and rule.monthly_mode == MonthlyMode.nth_weekday
@@ -129,10 +131,10 @@ def _period_dates(rule: Rule, k: int) -> list[date]:
             weekday = rule.weekdays[0] if rule.weekdays else start.weekday()
             n = rule.week_of_month or 1
             return [_nth_weekday(year, month, weekday, n)]
-        return [_resolve_month_day(year, month, d) for d in _month_days(rule)]
+        return [resolve_month_day(year, month, d) for d in _month_days(rule)]
     # yearly: Feb 29 falls back to Feb 28 in non-leap years.
     year = start.year + step
-    return [_resolve_month_day(year, start.month, start.day)]
+    return [resolve_month_day(year, start.month, start.day)]
 
 
 def _first_period(rule: Rule, from_date: date) -> int:
@@ -167,6 +169,19 @@ def iter_nominal(rule: Rule, from_date: date | None = None) -> Iterator[date]:
                 return
             yield day
         k += 1
+
+
+def snap_to_nominal(rule: Rule, actual: date) -> date | None:
+    """The rule's nominal date that `actual` was recorded for (within ±3 days)."""
+    best = None
+    for nominal in iter_nominal(rule, actual - timedelta(days=DAY_TOLERANCE + 2)):
+        if nominal > actual + timedelta(days=DAY_TOLERANCE + 2):
+            break
+        if best is None or abs((nominal - actual).days) < abs((best - actual).days):
+            best = nominal
+    if best is not None and abs((best - actual).days) <= DAY_TOLERANCE:
+        return best
+    return None
 
 
 def next_occurrence(

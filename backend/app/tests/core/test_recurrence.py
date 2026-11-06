@@ -1,17 +1,27 @@
 """Date math for recurring transaction rules."""
 
+import ast
 from datetime import date
+from pathlib import Path
 
+import pytest
 from app.core.recurrence import (
+    LAST_DAY,
     BusinessDayAdjustment,
     Frequency,
     MonthlyMode,
     Occurrence,
     Rule,
+    add_months,
     adjust_for_weekend,
+    last_day,
     next_occurrence,
+    resolve_month_day,
+    snap_to_nominal,
     upcoming,
 )
+
+APP_DIR = Path(__file__).resolve().parents[2] / "app"
 
 
 def _actual(rule: Rule, count: int, **kwargs) -> list[date]:
@@ -194,3 +204,88 @@ def test_series_stops_at_the_last_representable_date():
     daily = Rule(Frequency.daily, date(9999, 12, 30))
     assert _actual(daily, 5) == [date(9999, 12, 30), date(9999, 12, 31)]
     assert next_occurrence(daily, after_nominal=date(9999, 12, 31)) is None
+
+
+@pytest.mark.parametrize(
+    ("year", "month", "expected"),
+    [
+        (2024, 2, 29),
+        (2025, 2, 28),
+        (2100, 2, 28),
+        (2000, 2, 29),
+        (2025, 4, 30),
+        (2025, 12, 31),
+    ],
+)
+def test_last_day(year, month, expected):
+    assert last_day(year, month) == expected
+
+
+@pytest.mark.parametrize(
+    ("year", "month", "day", "expected"),
+    [
+        (2025, 4, 31, date(2025, 4, 30)),  # day 31 in a 30-day month
+        (2025, 2, 31, date(2025, 2, 28)),
+        (2024, 2, 30, date(2024, 2, 29)),  # leap year keeps Feb 29
+        (2025, 2, 29, date(2025, 2, 28)),  # Feb 29 outside a leap year
+        (2024, 2, LAST_DAY, date(2024, 2, 29)),
+        (2025, 6, LAST_DAY, date(2025, 6, 30)),
+        (2025, 7, LAST_DAY, date(2025, 7, 31)),
+        (2025, 6, 15, date(2025, 6, 15)),
+    ],
+)
+def test_resolve_month_day_clamps_to_month_length(year, month, day, expected):
+    assert resolve_month_day(year, month, day) == expected
+
+
+@pytest.mark.parametrize(
+    ("year", "month", "months", "expected"),
+    [
+        (2025, 1, 1, (2025, 2)),
+        (2025, 12, 1, (2026, 1)),
+        (2025, 1, -1, (2024, 12)),
+        (2025, 6, 0, (2025, 6)),
+        (2025, 3, 25, (2027, 4)),
+        (2025, 3, -27, (2022, 12)),
+    ],
+)
+def test_add_months_wraps_years(year, month, months, expected):
+    assert add_months(year, month, months) == expected
+
+
+def test_snap_to_nominal_finds_the_date_a_charge_was_due():
+    month_end = Rule(Frequency.monthly, date(2025, 1, 1), month_days=(LAST_DAY,))
+    # Charged on Friday for a Sunday month end.
+    assert snap_to_nominal(month_end, date(2025, 8, 29)) == date(2025, 8, 31)
+    # Charged the Monday after a Saturday month end, across the month boundary.
+    assert snap_to_nominal(month_end, date(2025, 6, 2)) == date(2025, 5, 31)
+    # Exactly three days off still snaps; four days off does not.
+    on_15 = Rule(Frequency.monthly, date(2025, 1, 15))
+    assert snap_to_nominal(on_15, date(2025, 3, 18)) == date(2025, 3, 15)
+    assert snap_to_nominal(on_15, date(2025, 3, 19)) is None
+    # Day 31 in a 30-day month resolves to the 30th.
+    on_31 = Rule(Frequency.monthly, date(2025, 1, 31))
+    assert snap_to_nominal(on_31, date(2025, 4, 30)) == date(2025, 4, 30)
+    # Feb 29 yearly falls back to Feb 28 in non-leap years.
+    leap = Rule(Frequency.yearly, date(2024, 2, 29))
+    assert snap_to_nominal(leap, date(2025, 3, 1)) == date(2025, 2, 28)
+    assert snap_to_nominal(leap, date(2028, 3, 1)) == date(2028, 2, 29)
+    # Before the rule starts there is nothing to snap to.
+    assert snap_to_nominal(on_15, date(2024, 12, 1)) is None
+
+
+def _imported_modules(path: Path) -> set[str]:
+    modules = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+            modules.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+    return modules
+
+
+@pytest.mark.parametrize("module", ["core/recurrence.py", "services/recurring.py"])
+def test_scheduling_does_not_depend_on_detection(module):
+    imported = _imported_modules(APP_DIR / module)
+    assert not any(m.startswith("app.core.recurrence_detection") for m in imported)

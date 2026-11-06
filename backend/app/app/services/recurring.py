@@ -31,9 +31,9 @@ from app.core.recurrence import (
     RecurringType,
     Rule,
     next_occurrence,
+    snap_to_nominal,
     upcoming,
 )
-from app.core.recurrence_detection import snap_to_nominal
 from app.schemas.transaction import TransactionType
 from app.services import transactions as transaction_service
 from app.services.errors import (

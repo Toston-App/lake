@@ -18,15 +18,19 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 from app.core.recurrence import (
+    DAY_TOLERANCE,
     LAST_DAY,
     BusinessDayAdjustment,
     Frequency,
     MonthlyMode,
     RecurringType,
     Rule,
+    add_months,
     adjust_for_weekend,
-    iter_nominal,
+    last_day,
     next_occurrence,
+    resolve_month_day,
+    snap_to_nominal,
 )
 
 # Windows: yearly series need two years of history, the rest one year.
@@ -39,7 +43,6 @@ MIN_FIT = 0.75
 AMOUNT_TOLERANCE = 0.10
 # Groups without any text (no description, no place) only match exact amounts.
 EXACT_AMOUNT_TOLERANCE = 0.01
-DAY_TOLERANCE = 3
 # A series is considered stopped once this many periods pass without a charge.
 STALE_PERIODS = 1.5
 MAX_SUGGESTIONS = 50
@@ -334,30 +337,18 @@ def _share(values: list[bool]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
-def _last_day(day: date) -> int:
-    return calendar.monthrange(day.year, day.month)[1]
-
-
-def _resolve_day(year: int, month: int, day: int) -> date:
-    last = calendar.monthrange(year, month)[1]
-    if day == LAST_DAY or day > last:
-        return date(year, month, last)
-    return date(year, month, day)
-
-
 def _day_distance(day: date, month_day: int) -> int:
     """Days to the nearest `month_day`, looking at the adjacent months too."""
     distances = []
     for offset in (-1, 0, 1):
-        index = day.year * 12 + day.month - 1 + offset
-        nominal = _resolve_day(index // 12, index % 12 + 1, month_day)
+        nominal = resolve_month_day(*add_months(day.year, day.month, offset), month_day)
         distances.append(abs((day - nominal).days))
     return min(distances)
 
 
 def _is_month_end(day: date) -> bool:
     """The month's last day, or the Friday before a month end on a weekend."""
-    last = date(day.year, day.month, _last_day(day))
+    last = date(day.year, day.month, last_day(day.year, day.month))
     return day == last or day == adjust_for_weekend(
         last, BusinessDayAdjustment.previous
     )
@@ -373,7 +364,7 @@ def _month_day_mode(dates: list[date]) -> int | None:
         return None
     mode = Counter(d.day for d in dates).most_common(1)[0][0]
     month_end = [_is_month_end(d) for d in dates]
-    lengths = {_last_day(d) for d in dates}
+    lengths = {last_day(d.year, d.month) for d in dates}
     if mode >= 28 and _share(month_end) >= MIN_FIT and (len(lengths) > 1 or mode == 31):
         return LAST_DAY
     if _share([_day_distance(d, mode) <= DAY_TOLERANCE for d in dates]) >= MIN_FIT:
@@ -388,7 +379,7 @@ def _adjustment(
     previous = following = weekend = 0
     for day in dates:
         nominal = min(
-            (_resolve_day(day.year, day.month, d) for d in month_days),
+            (resolve_month_day(day.year, day.month, d) for d in month_days),
             key=lambda n: abs((n - day).days),
         )
         if nominal.weekday() < 5:
@@ -496,19 +487,6 @@ def detect_rule(dates: list[date]) -> DetectedRule | None:
     return max(
         found, key=lambda r: (r.fit, -abs(statistics.mean(gaps) - r.period_days))
     )
-
-
-def snap_to_nominal(rule: Rule, actual: date) -> date | None:
-    """The rule's nominal date that `actual` was recorded for (within ±3 days)."""
-    best = None
-    for nominal in iter_nominal(rule, actual - timedelta(days=DAY_TOLERANCE + 2)):
-        if nominal > actual + timedelta(days=DAY_TOLERANCE + 2):
-            break
-        if best is None or abs((nominal - actual).days) < abs((best - actual).days):
-            best = nominal
-    if best is not None and abs((best - actual).days) <= DAY_TOLERANCE:
-        return best
-    return None
 
 
 def missed_dates(detected: DetectedRule, last_date: date, today: date) -> list[date]:

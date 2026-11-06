@@ -11,6 +11,7 @@ from app.core.recurrence import (
 from app.core.recurrence_detection import (
     Merchant,
     TxPoint,
+    _day_distance,
     detect_series,
     normalize_description,
     point_key,
@@ -263,3 +264,16 @@ def test_next_expected_date_skips_missed_dates():
     [found] = _detect([_point(d) for d in dates])
     assert found.next_expected_date == date(2026, 11, 24)
     assert "nothing recorded on 2026-10-24" in found.reasons
+
+
+def test_day_distance_looks_at_adjacent_months():
+    # Due on the 31st: the 30th of April is that month's due date.
+    assert _day_distance(date(2025, 4, 30), 31) == 0
+    # Feb 28 is Feb's 31st outside a leap year; Feb 28, 2024 is a day early.
+    assert _day_distance(date(2025, 2, 28), 31) == 0
+    assert _day_distance(date(2024, 2, 28), 31) == 1
+    # Across the year boundary: Jan 1 is one day after Dec 31.
+    assert _day_distance(date(2026, 1, 1), 31) == 1
+    assert _day_distance(date(2025, 12, 30), 1) == 2
+    assert _day_distance(date(2025, 3, 2), -1) == 2
+    assert _day_distance(date(2025, 6, 15), 1) == 14
