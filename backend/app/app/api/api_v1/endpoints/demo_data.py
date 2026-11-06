@@ -92,7 +92,19 @@ async def _create_demo_recurring(
     income_subcategories: list[models.Subcategory],
     expense_subcategories: list[models.Subcategory],
 ) -> int:
-    """Create a few typical recurring transactions, starting tomorrow."""
+    """Create a few typical recurring transactions, starting tomorrow.
+
+    Skipped when the user already has recurring transactions, so generating
+    demo data again doesn't duplicate them.
+    """
+    existing = await db.execute(
+        select(models.RecurringTransaction.id)
+        .where(models.RecurringTransaction.owner_id == user.id)
+        .limit(1)
+    )
+    if existing.first() is not None:
+        return 0
+
     tomorrow = datetime.date.today() + datetime.timedelta(days=1)
     checking, savings = accounts[0], accounts[1]
     salary = income_subcategories[0]
@@ -132,7 +144,7 @@ async def generate_fake_user_data(
     num_transactions: int = Body(50, ge=1, le=5000, embed=True, description="Number of transactions to generate."),
     start_date_str: Optional[str] = Body(None, embed=True, description="Start date for transactions (YYYY-MM-DD). Defaults to 1 year ago."),
     end_date_str: Optional[str] = Body(None, embed=True, description="End date for transactions (YYYY-MM-DD). Defaults to today."),
-    include_recurring: bool = Body(True, embed=True, description="Also create example recurring transactions starting tomorrow."),
+    include_recurring: bool = Body(True, embed=True, description="Also create example recurring transactions starting tomorrow (skipped if the user already has recurring transactions)."),
     current_superuser: models.User = Depends(deps.get_current_active_superuser) # needed to access this endpoint
 ) -> Any:
     """
@@ -268,7 +280,7 @@ async def delete_user_financial_data(
     current_superuser: models.User = Depends(deps.get_current_active_superuser)
 ) -> Any:
     """
-    Delete all financial data (recurring transactions, accounts, places, incomes,
+    Delete all financial data (recurring transactions and detection state, accounts, places, incomes,
     expenses, transfers) for a specified user.
     Only accessible by superusers.
     """
@@ -290,6 +302,16 @@ async def delete_user_financial_data(
             models.RecurringTransaction.owner_id == user_id
         )
     )
+    # delete_recurring_detection (scan usage, merchant aliases, dismissals;
+    # each references only the user):
+    for detection_model in (
+        models.RecurringDetectionUsage,
+        models.RecurringMerchantAlias,
+        models.RecurringSuggestionDismissal,
+    ):
+        await db.execute(
+            delete(detection_model).where(detection_model.owner_id == user_id)
+        )
 
     # delete_transfers:
     user_accounts_stmt = select(models.Account.id).where(models.Account.owner_id == user_id)
