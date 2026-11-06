@@ -1,9 +1,12 @@
 import logging
+import math
 import os
 import random
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -42,6 +45,29 @@ async def provider_unavailable_handler(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": "Market data is temporarily unavailable"},
         headers={"Retry-After": "30"},
+    )
+
+
+def _json_safe(value):
+    """Non-finite floats as strings: JSON has no Infinity or NaN."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(
+    _request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    # Like FastAPI's default, but a body with `Infinity` or `NaN` (which the
+    # JSON parser accepts) can't make the 422 itself fail to serialize.
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": _json_safe(jsonable_encoder(exc.errors()))},
     )
 
 

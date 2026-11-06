@@ -56,6 +56,11 @@ LEASE_POLL_SECONDS = 0.2
 # Missed occurrences created per template in one run; the rest wait for the next run.
 MAX_OCCURRENCES_PER_RUN = 60
 UPCOMING_PREVIEW = 5
+# A series may start at most this far back: it back-fills from its start date.
+MAX_PAST_YEARS = 2
+# Start and end dates further ahead than this are rejected.
+MAX_FUTURE_YEARS = 10
+MAX_TEMPLATES_PER_USER = 500
 
 SCHEDULE_FIELDS = frozenset(
     {
@@ -83,6 +88,36 @@ TRANSACTION_MODELS = {
 
 def local_today(tz: str) -> date:
     return datetime.now(ZoneInfo(tz)).date()
+
+
+def _shift_years(day: date, years: int) -> date:
+    try:
+        return day.replace(year=day.year + years)
+    except ValueError:  # Feb 29 in a non-leap year
+        return day.replace(year=day.year + years, day=28)
+
+
+def earliest_start(today: date) -> date:
+    return _shift_years(today, -MAX_PAST_YEARS)
+
+
+def _validate_dates(fields: dict, keys=("start_date", "end_date")) -> None:
+    """Keep start and end dates within MAX_PAST_YEARS / MAX_FUTURE_YEARS of today."""
+    today = local_today(fields.get("timezone") or "UTC")
+    latest = _shift_years(today, MAX_FUTURE_YEARS)
+    start = fields.get("start_date")
+    if "start_date" in keys and start is not None:
+        if start < earliest_start(today):
+            raise DomainError(
+                f"start_date can't be more than {MAX_PAST_YEARS} years in the past"
+            )
+        if start > latest:
+            raise DomainError(
+                f"start_date can't be more than {MAX_FUTURE_YEARS} years ahead"
+            )
+    end = fields.get("end_date")
+    if "end_date" in keys and end is not None and end > latest:
+        raise DomainError(f"end_date can't be more than {MAX_FUTURE_YEARS} years ahead")
 
 
 def rule_for(template: RecurringTransaction) -> Rule:
@@ -175,7 +210,9 @@ def to_detail(template: RecurringTransaction) -> schemas.RecurringTransactionDet
 
 
 def preview(data: schemas.RecurringPreviewRequest) -> schemas.RecurringPreview:
-    rule = _rule_from_fields(data.model_dump())
+    fields = data.model_dump()
+    _validate_dates(fields)
+    rule = _rule_from_fields(fields)
     _validate_rule(rule)
     count = min(UPCOMING_PREVIEW, data.max_occurrences or UPCOMING_PREVIEW)
     after = data.start_date if data.exclude_start else None
@@ -367,8 +404,18 @@ async def create_recurring(
     """
     fields = data.model_dump(exclude_none=True)
     fields.setdefault("timezone", "UTC")
+    _validate_dates(fields)
     _validate_rule(_rule_from_fields(fields))
     fields = await _validate_fields(db, user, data.type, fields)
+    count = await db.scalar(
+        select(func.count())
+        .select_from(RecurringTransaction)
+        .where(RecurringTransaction.owner_id == user.id)
+    )
+    if count >= MAX_TEMPLATES_PER_USER:
+        raise DomainError(
+            f"You can have at most {MAX_TEMPLATES_PER_USER} recurring transactions"
+        )
 
     template = RecurringTransaction(
         owner_id=user.id,
@@ -443,6 +490,12 @@ async def _apply_update(
         )
     }
     merged.update(changes)
+    # Only the dates being changed: an older series keeps its start date, even
+    # when a client sends it back unchanged with the rest of the form.
+    _validate_dates(
+        merged,
+        keys=[k for k, v in changes.items() if v != getattr(template, k, None)],
+    )
     _validate_rule(_rule_from_fields(merged))
     merged = await _validate_fields(db, user, template.type, merged)
     changes.update(
@@ -583,6 +636,12 @@ async def create_from_transaction(
         raise DomainError("This transaction already belongs to a recurring series")
     if transaction.owner_id != user.id:
         raise PermissionDeniedError("Not enough permissions")
+    tz = data.timezone or "UTC"
+    if transaction.date and transaction.date < earliest_start(local_today(tz)):
+        raise DomainError(
+            f"Only transactions from the last {MAX_PAST_YEARS} years can be "
+            "marked as recurring"
+        )
 
     recurring_type = RecurringType(data.transaction_type.value)
     if recurring_type == RecurringType.transfer:

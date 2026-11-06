@@ -182,3 +182,15 @@ def test_adjust_for_weekend():
     )
     assert adjust_for_weekend(saturday, BusinessDayAdjustment.next) == date(2025, 2, 17)
     assert adjust_for_weekend(sunday, BusinessDayAdjustment.next) == date(2025, 2, 17)
+
+
+def test_series_stops_at_the_last_representable_date():
+    # Past year 9999 there are no more dates: the series ends instead of raising.
+    for frequency in (Frequency.monthly, Frequency.yearly):
+        rule = Rule(frequency, date(9999, 12, 20))
+        assert _actual(rule, 5) == [date(9999, 12, 20)]
+    weekly = Rule(Frequency.weekly, date(9999, 12, 20))
+    assert _actual(weekly, 5) == [date(9999, 12, 20), date(9999, 12, 27)]
+    daily = Rule(Frequency.daily, date(9999, 12, 30))
+    assert _actual(daily, 5) == [date(9999, 12, 30), date(9999, 12, 31)]
+    assert next_occurrence(daily, after_nominal=date(9999, 12, 31)) is None

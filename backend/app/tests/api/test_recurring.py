@@ -646,3 +646,168 @@ class TestReadRecurring:
         assert ExpenseTransaction.model_validate(expense).recurring_id == created["id"]
         resp = await client.get(f"/api/v1/expenses/{expense.id}")
         assert resp.json()["recurring_id"] == created["id"]
+
+
+def _years_ago(years: int, days: int = 0) -> date:
+    from app.services.recurring import _shift_years
+
+    return _shift_years(TODAY, -years) + timedelta(days=days)
+
+
+class TestLimits:
+    async def test_start_date_at_most_two_years_back(
+        self, client: AsyncClient, db_session: AsyncSession
+    ):
+        too_old = _years_ago(2, days=-1)
+        resp = await client.post(
+            PREFIX, json=_weekly_expense(start_date=too_old.isoformat())
+        )
+        assert resp.status_code == 400
+        assert "2 years" in resp.json()["detail"]
+        preview = await client.post(
+            f"{PREFIX}/preview",
+            json={"frequency": "yearly", "start_date": too_old.isoformat()},
+        )
+        assert preview.status_code == 400
+
+        oldest = _years_ago(2, days=1)
+        resp = await client.post(
+            PREFIX,
+            json=_weekly_expense(frequency="yearly", start_date=oldest.isoformat()),
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(await _expenses(db_session, resp.json()["id"])) == 2
+
+    async def test_update_checks_only_changed_dates(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        from app.models import RecurringTransaction
+
+        # A series that started long ago (it aged past the limit) stays editable.
+        old = RecurringTransaction(
+            owner_id=test_user.id,
+            type="expense",
+            amount=1,
+            frequency="yearly",
+            start_date=_years_ago(5),
+            is_active=False,
+        )
+        db_session.add(old)
+        await db_session.commit()
+        url = f"{PREFIX}/{old.id}"
+        assert (await client.put(url, json={"amount": 2})).status_code == 200
+        # The dashboard sends the whole form back, unchanged start date included.
+        resp = await client.put(
+            url, json={"amount": 3, "start_date": _years_ago(5).isoformat()}
+        )
+        assert resp.status_code == 200, resp.text
+        resp = await client.put(url, json={"start_date": _years_ago(3).isoformat()})
+        assert resp.status_code == 400
+
+    async def test_far_future_dates_are_rejected(self, client: AsyncClient):
+        for payload in [
+            _weekly_expense(frequency="monthly", start_date="9999-12-20"),
+            _weekly_expense(start_date=_years_ago(-11).isoformat()),
+            _weekly_expense(end_date=_years_ago(-11).isoformat()),
+        ]:
+            assert (await client.post(PREFIX, json=payload)).status_code == 400
+        preview = await client.post(
+            f"{PREFIX}/preview",
+            json={"frequency": "monthly", "start_date": "9999-12-20"},
+        )
+        assert preview.status_code == 400
+        # Nothing was saved that would break the list.
+        listed = await client.get(PREFIX)
+        assert listed.status_code == 200
+        assert listed.json() == []
+
+    async def test_series_ending_at_year_9999_stops(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        from app.models import RecurringTransaction
+
+        # Stored before the date limits existed: the list must still load.
+        db_session.add(
+            RecurringTransaction(
+                owner_id=test_user.id,
+                type="expense",
+                amount=1,
+                frequency="monthly",
+                start_date=date(9999, 12, 20),
+                next_nominal_date=date(9999, 12, 20),
+                next_run_date=date(9999, 12, 20),
+            )
+        )
+        await db_session.commit()
+        listed = await client.get(PREFIX)
+        assert listed.status_code == 200
+        assert [o["date"] for o in listed.json()[0]["upcoming"]] == ["9999-12-20"]
+
+    async def test_only_iana_timezones(self, client: AsyncClient):
+        for tz in ("posixrules", "utc", "Europe/../UTC", "localtime"):
+            resp = await client.post(PREFIX, json=_weekly_expense(timezone=tz))
+            assert resp.status_code == 422, tz
+        resp = await client.post(
+            PREFIX, json=_weekly_expense(timezone="America/Mexico_City")
+        )
+        assert resp.status_code == 200
+
+    async def test_amount_must_be_finite_and_bounded(self, client: AsyncClient):
+        import json
+
+        for amount in ("Infinity", "NaN", "1e13"):
+            body = json.dumps(_weekly_expense()).replace(
+                '"amount": 10', f'"amount": {amount}'
+            )
+            resp = await client.post(
+                PREFIX, content=body, headers={"content-type": "application/json"}
+            )
+            assert resp.status_code == 422, amount
+        created = (await client.post(PREFIX, json=_weekly_expense())).json()
+        body = '{"amount": Infinity}'
+        resp = await client.put(
+            f"{PREFIX}/{created['id']}",
+            content=body,
+            headers={"content-type": "application/json"},
+        )
+        assert resp.status_code == 422
+
+    async def test_description_length_is_limited(self, client: AsyncClient):
+        resp = await client.post(PREFIX, json=_weekly_expense(description="x" * 501))
+        assert resp.status_code == 422
+
+    async def test_templates_per_user_are_capped(
+        self, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        from app.services import recurring as recurring_service
+
+        monkeypatch.setattr(recurring_service, "MAX_TEMPLATES_PER_USER", 1)
+        future = (TODAY + timedelta(days=3)).isoformat()
+        payload = _weekly_expense(start_date=future)
+        assert (await client.post(PREFIX, json=payload)).status_code == 200
+        resp = await client.post(PREFIX, json=payload)
+        assert resp.status_code == 400
+        assert "at most 1" in resp.json()["detail"]
+
+    async def test_mark_as_recurring_up_to_two_years_back(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        def body(expense: Expense) -> dict:
+            return {
+                "transaction_type": "expense",
+                "transaction_id": expense.id,
+                "frequency": "yearly",
+            }
+
+        old = await create_test_expense(
+            db_session, owner_id=test_user.id, expense_date=_years_ago(2, days=-1)
+        )
+        resp = await client.post(f"{PREFIX}/from-transaction", json=body(old))
+        assert resp.status_code == 400
+        assert "last 2 years" in resp.json()["detail"]
+
+        recent = await create_test_expense(
+            db_session, owner_id=test_user.id, expense_date=_years_ago(2, days=1)
+        )
+        resp = await client.post(f"{PREFIX}/from-transaction", json=body(recent))
+        assert resp.status_code == 200, resp.text

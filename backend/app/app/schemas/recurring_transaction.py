@@ -1,5 +1,6 @@
 from datetime import date, datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from functools import cache
+from zoneinfo import available_timezones
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -13,6 +14,13 @@ from app.core.recurrence import (
 from app.schemas.transaction import TransactionType
 
 MAX_INTERVAL = 365
+MAX_AMOUNT = 1_000_000_000_000
+MAX_DESCRIPTION_LENGTH = 500
+
+
+@cache
+def _known_timezones() -> frozenset[str]:
+    return frozenset(available_timezones())
 
 
 class RecurrenceRule(BaseModel):
@@ -59,20 +67,19 @@ class RecurrenceRule(BaseModel):
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        try:
-            ZoneInfo(v)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise ValueError("Unknown timezone") from exc
+        # Only IANA names: ZoneInfo also loads files such as "posixrules"
+        # that Postgres may not know, and the worker's due query evaluates
+        # every template's timezone in SQL.
+        if v is not None and v not in _known_timezones():
+            raise ValueError("Unknown timezone")
         return v
 
 
 class TemplateFields(BaseModel):
     """What every generated transaction copies from its template."""
 
-    description: str | None = None
-    amount: float | None = Field(default=None, gt=0)
+    description: str | None = Field(default=None, max_length=MAX_DESCRIPTION_LENGTH)
+    amount: float | None = Field(default=None, gt=0, le=MAX_AMOUNT, allow_inf_nan=False)
     account_id: int | None = None
     to_account_id: int | None = None
     category_id: int | None = None
@@ -91,7 +98,7 @@ class RecurringTransactionFields(RecurrenceRule, TemplateFields):
 
 class RecurringTransactionCreate(RecurringTransactionFields):
     type: RecurringType
-    amount: float = Field(gt=0)
+    amount: float = Field(gt=0, le=MAX_AMOUNT, allow_inf_nan=False)
     frequency: Frequency
     start_date: date
 

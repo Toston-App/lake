@@ -155,7 +155,12 @@ def iter_nominal(rule: Rule, from_date: date | None = None) -> Iterator[date]:
     lower = max(from_date or rule.start_date, rule.start_date)
     k = _first_period(rule, lower)
     for _ in range(MAX_PERIODS_SCANNED):
-        for day in sorted(set(_period_dates(rule, k))):
+        try:
+            days = _period_dates(rule, k)
+        except (ValueError, OverflowError):
+            # Past the last representable date (year 9999): the series ends.
+            return
+        for day in sorted(set(days)):
             if day < lower:
                 continue
             if rule.end_date and day > rule.end_date:
@@ -180,6 +185,27 @@ def next_occurrence(
     Friday that has already come keeps the start date instead, so a new
     series never records a date before it starts and the day it was set up.
     """
+    try:
+        return _next_occurrence(
+            rule,
+            after_nominal=after_nominal,
+            last_actual=last_actual,
+            from_date=from_date,
+            today=today,
+        )
+    except OverflowError:
+        # A date moved past year 9999 (or before year 1): no next date.
+        return None
+
+
+def _next_occurrence(
+    rule: Rule,
+    *,
+    after_nominal: date | None,
+    last_actual: date | None,
+    from_date: date | None,
+    today: date | None,
+) -> Occurrence | None:
     lower = from_date
     if after_nominal is not None:
         candidate = after_nominal + timedelta(days=1)
