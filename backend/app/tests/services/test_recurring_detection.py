@@ -478,6 +478,141 @@ async def test_no_transaction_is_open_during_ai_calls(
     assert (await _usage(db_session, test_user)).scan_count == 1
 
 
+def recording_model(prompts: list[str], inner: FunctionModel) -> FunctionModel:
+    """Wrap a model and keep the raw prompt text it was sent."""
+
+    def fn(messages, info: AgentInfo) -> ModelResponse:
+        for message in reversed(messages):
+            parts = [p for p in message.parts if isinstance(p, UserPromptPart)]
+            if parts:
+                prompts.append(parts[-1].content)
+                break
+        return inner.function(messages, info)
+
+    return FunctionModel(fn)
+
+
+def empty_model() -> FunctionModel:
+    def fn(messages, info: AgentInfo) -> ModelResponse:  # noqa: ARG001
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"items": []})]
+        )
+
+    return FunctionModel(fn)
+
+
+async def test_ai_prompts_are_pinned(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    """The JSON sent to the model is a contract with the prompt: keep it exact.
+
+    One series, so the order of loaded points can't change the payload.
+    """
+    await add_series(db_session, test_user, description="Café Ñandú", amount=4.5)
+    merchant_prompts: list[str] = []
+    classify_prompts: list[str] = []
+    with (
+        ai.merchant_agent.override(
+            model=recording_model(
+                merchant_prompts, merchant_model({"cafe nandu": "café ñandú"}, [])
+            )
+        ),
+        ai.classify_agent.override(
+            model=recording_model(
+                classify_prompts, label_model("subscription", True, 0.9)
+            )
+        ),
+    ):
+        await detection.detect(db_session, test_user)
+
+    assert merchant_prompts == [
+        '[{"i": 0, "type": "expense", "text": "cafe nandu", "place": null}]'
+    ]
+    assert classify_prompts == [
+        '[{"i": 0, "type": "expense", "merchant_name": "Café Ñandú", '
+        '"category_name": null, "frequency": "monthly", "interval": 1, '
+        '"occurrences": 6, "amount_min": 4.5, "amount_max": 4.5}]'
+    ]
+
+
+async def test_classify_failure_keeps_the_deterministic_result(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    await add_series(db_session, test_user)
+    baseline = await detection.detect(db_session, test_user, use_ai=False)
+    with (
+        ai.merchant_agent.override(model=merchant_model({}, [])),
+        ai.classify_agent.override(model=failing_model()),
+    ):
+        scan = await detection.detect(db_session, test_user)
+
+    [found] = scan.result.suggestions
+    [expected] = baseline.result.suggestions
+    assert found.kind is None
+    assert found.confidence == expected.confidence
+    assert scan.stats.calls == 2
+    assert scan.stats.errors == 1
+    assert scan.result.ai_used is False
+
+
+async def test_empty_classify_answers_are_not_a_failure(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    await add_series(db_session, test_user)
+    baseline = await detection.detect(db_session, test_user, use_ai=False)
+    with (
+        ai.merchant_agent.override(model=merchant_model({}, [])),
+        ai.classify_agent.override(model=empty_model()),
+    ):
+        scan = await detection.detect(db_session, test_user)
+
+    [found] = scan.result.suggestions
+    assert found.kind is None
+    assert found.confidence == baseline.result.suggestions[0].confidence
+    assert scan.stats.calls == 2
+    assert scan.stats.errors == 0
+    assert scan.result.ai_used is True
+
+
+async def test_habit_commitment_is_reported_as_other(
+    db_session: AsyncSession,
+    test_user: User,
+    ai_enabled: None,  # noqa: ARG001
+):
+    await add_series(db_session, test_user, description="Gym membership")
+    with (
+        ai.merchant_agent.override(model=merchant_model({}, [])),
+        ai.classify_agent.override(model=label_model("habit", True, 0.9)),
+    ):
+        scan = await detection.detect(db_session, test_user)
+    [found] = scan.result.suggestions
+    assert found.kind == "other"
+
+
+def test_classify_detects_failure_without_diffing_error_counts():
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(detection._classify))
+    stats_reads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "errors"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "stats"
+    ]
+    assert stats_reads == []
+    suggestion = inspect.getsource(detection._to_suggestion)
+    assert "habit" not in suggestion
+
+
 # -- access ----------------------------------------------------------------------
 async def _usage(db: AsyncSession, user: User) -> RecurringDetectionUsage:
     result = await db.execute(

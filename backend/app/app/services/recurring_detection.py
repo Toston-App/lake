@@ -437,55 +437,67 @@ async def resolve_merchants(
             samples[text] = point
     resolved = await _load_aliases(db, user, set(samples))
     missing = [text for text in samples if text not in resolved]
-
     if use_ai and missing:
-        limit = AI_MERCHANT_CHUNK * AI_MERCHANT_MAX_CHUNKS
-        batch = missing[:limit]
-        for start in range(0, len(batch), AI_MERCHANT_CHUNK):
-            chunk = batch[start : start + AI_MERCHANT_CHUNK]
-            payload = [
-                {
-                    "i": i,
-                    "type": samples[text].type.value,
-                    "text": text,
-                    "place": samples[text].place_name,
-                }
-                for i, text in enumerate(chunk)
-            ]
-            await _release_connection(db)
-            answers = await ai.resolve_merchants(payload, stats)
-            new_rows = []
-            for i, text in enumerate(chunk):
-                answer = answers.get(i)
-                if answer is None:
-                    continue
-                key = slugify(answer.merchant_key)
-                name = answer.merchant_name.strip()[:120]
-                if not key or not name:
-                    continue
-                resolved[text] = Merchant(key, name)
-                new_rows.append(
-                    {
-                        "owner_id": user.id,
-                        "normalized_description": text,
-                        "merchant_key": key,
-                        "merchant_name": name,
-                        "source": "ai",
-                    }
-                )
-            if new_rows:
-                await db.execute(
-                    insert(Alias)
-                    .values(new_rows)
-                    .on_conflict_do_nothing(
-                        index_elements=[Alias.owner_id, Alias.normalized_description]
-                    )
-                )
-                await db.commit()
-
+        resolved |= await _resolve_with_ai(db, user, samples, missing, stats)
     # Not saved: the AI gets another try on the next scan.
     for text in missing:
         resolved.setdefault(text, _fallback(text))
+    return resolved
+
+
+async def _resolve_with_ai(
+    db: AsyncSession,
+    user: models.User,
+    samples: dict[str, TxPoint],
+    texts: list[str],
+    stats: ai.AiStats,
+) -> dict[str, Merchant]:
+    """Ask the AI in chunks and save its answers as aliases; texts it fails or
+    doesn't answer are left out."""
+    resolved: dict[str, Merchant] = {}
+    batch = texts[: AI_MERCHANT_CHUNK * AI_MERCHANT_MAX_CHUNKS]
+    for start in range(0, len(batch), AI_MERCHANT_CHUNK):
+        chunk = batch[start : start + AI_MERCHANT_CHUNK]
+        queries = [
+            ai.MerchantQuery(
+                type=samples[text].type.value,
+                text=text,
+                place=samples[text].place_name,
+            )
+            for text in chunk
+        ]
+        await _release_connection(db)
+        answers = await ai.resolve_merchants(queries, stats)
+        if answers is None:
+            continue
+        new_rows = []
+        for i, text in enumerate(chunk):
+            answer = answers.get(i)
+            if answer is None:
+                continue
+            key = slugify(answer.merchant_key)
+            name = answer.merchant_name.strip()[:120]
+            if not key or not name:
+                continue
+            resolved[text] = Merchant(key, name)
+            new_rows.append(
+                {
+                    "owner_id": user.id,
+                    "normalized_description": text,
+                    "merchant_key": key,
+                    "merchant_name": name,
+                    "source": "ai",
+                }
+            )
+        if new_rows:
+            await db.execute(
+                insert(Alias)
+                .values(new_rows)
+                .on_conflict_do_nothing(
+                    index_elements=[Alias.owner_id, Alias.normalized_description]
+                )
+            )
+            await db.commit()
     return resolved
 
 
@@ -570,9 +582,6 @@ def _drop_covered(
 def _to_suggestion(candidate: Candidate) -> schemas.RecurringSuggestion:
     latest = candidate.latest
     detected = candidate.detected
-    kind = candidate.kind
-    if kind == "habit":
-        kind = "other"
     return schemas.RecurringSuggestion(
         fingerprint=candidate.fingerprint,
         type=candidate.type,
@@ -600,7 +609,7 @@ def _to_suggestion(candidate: Candidate) -> schemas.RecurringSuggestion:
         last_date=latest.date,
         next_expected_date=candidate.next_expected_date,
         confidence=round(candidate.confidence, 3),
-        kind=kind,
+        kind=candidate.kind,
         reasons=candidate.reasons,
     )
 
@@ -608,24 +617,22 @@ def _to_suggestion(candidate: Candidate) -> schemas.RecurringSuggestion:
 async def _classify(
     db: AsyncSession, candidates: list[Candidate], stats: ai.AiStats
 ) -> list[Candidate] | None:
-    payload = [
-        {
-            "i": i,
-            "type": c.type.value,
-            "merchant_name": c.merchant_name,
-            "category_name": c.latest.category_name,
-            "frequency": c.detected.frequency.value,
-            "interval": c.detected.interval,
-            "occurrences": len(c.points),
-            "amount_min": round(min(c.amounts), 2),
-            "amount_max": round(max(c.amounts), 2),
-        }
-        for i, c in enumerate(candidates)
+    summaries = [
+        ai.CandidateSummary(
+            type=c.type.value,
+            merchant_name=c.merchant_name,
+            category_name=c.latest.category_name,
+            frequency=c.detected.frequency.value,
+            interval=c.detected.interval,
+            occurrences=len(c.points),
+            amount_min=round(min(c.amounts), 2),
+            amount_max=round(max(c.amounts), 2),
+        )
+        for c in candidates
     ]
-    errors = stats.errors
     await _release_connection(db)
-    labels = await ai.classify_candidates(payload, stats)
-    if stats.errors > errors:
+    labels = await ai.classify_candidates(summaries, stats)
+    if labels is None:
         return None
     out = []
     for i, candidate in enumerate(candidates):

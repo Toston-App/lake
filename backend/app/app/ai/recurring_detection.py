@@ -1,7 +1,8 @@
 """AI steps of recurring detection: merchant resolution and classification.
 
-Both are optional. Callers get an empty answer when the AI is disabled, slow or
-failing, and detection carries on with the deterministic fallback.
+Both are optional. Callers get None when the AI call fails (timeout, provider
+or validation error) and detection carries on with the deterministic fallback,
+as it does for any item the AI left unanswered.
 
 Privacy: only normalized descriptions, place names, category names, the
 transaction type and the series' amounts and schedule are sent; never account
@@ -15,8 +16,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
-from typing import Any, Literal
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -32,25 +34,57 @@ logger = logging.getLogger(__name__)
 MAX_OUTPUT_TOKENS = 8_192
 
 
-class MerchantItem(BaseModel):
+@dataclass(frozen=True)
+class MerchantQuery:
+    """One normalized description to resolve to a merchant."""
+
+    type: str
+    text: str
+    place: str | None
+
+
+@dataclass(frozen=True)
+class CandidateSummary:
+    """What the classifier sees of one detected series."""
+
+    type: str
+    merchant_name: str
+    category_name: str | None
+    frequency: str
+    interval: int
+    occurrences: int
+    amount_min: float
+    amount_max: float
+
+
+class _Indexed(BaseModel):
     i: int
+
+
+T = TypeVar("T", bound=_Indexed)
+
+
+class _Batch(BaseModel, Generic[T]):
+    items: list[T]
+
+
+class MerchantItem(_Indexed):
     merchant_key: str = Field(description='Lowercase ascii slug, e.g. "netflix"')
     merchant_name: str = Field(description='Display name, e.g. "Netflix"')
 
 
-class MerchantBatch(BaseModel):
-    items: list[MerchantItem]
+class MerchantBatch(_Batch[MerchantItem]):
+    pass
 
 
-class CandidateLabel(BaseModel):
-    i: int
+class CandidateLabel(_Indexed):
     kind: Literal["subscription", "bill", "salary", "transfer", "habit", "other"]
     is_commitment: bool
     confidence: float = Field(ge=0, le=1)
 
 
-class CandidateBatch(BaseModel):
-    items: list[CandidateLabel]
+class CandidateBatch(_Batch[CandidateLabel]):
+    pass
 
 
 MERCHANT_INSTRUCTIONS = """\
@@ -139,12 +173,12 @@ def build_model() -> OpenRouterModel:
     )
 
 
-async def _run(agent: Agent, payload: list[dict], stats: AiStats) -> Any | None:
+async def _run(agent: Agent, prompt: str, stats: AiStats) -> Any | None:
     stats.calls += 1
     stats.model = model_name()
     try:
         result = await asyncio.wait_for(
-            agent.run(json.dumps(payload, ensure_ascii=False), model=build_model()),
+            agent.run(prompt, model=build_model()),
             timeout=settings.RECURRING_DETECTION_AI_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # timeouts, provider and validation errors
@@ -160,26 +194,44 @@ async def _run(agent: Agent, payload: list[dict], stats: AiStats) -> Any | None:
     return result.output
 
 
-async def resolve_merchants(
-    items: list[dict], stats: AiStats
-) -> dict[int, MerchantItem]:
-    """Map item index -> merchant; missing or unknown indexes are left out."""
+async def _run_indexed(
+    agent: Agent[None, _Batch[T]], items: Sequence[Any], stats: AiStats
+) -> dict[int, T] | None:
+    """Send `items` by position; map index -> answer, or None if the call failed.
+
+    Each item goes out as `{"i": index, **fields}`. Missing answers and
+    answers for indexes that weren't sent are left out. No items, no call.
+    """
     if not items:
         return {}
-    output = await _run(merchant_agent, items, stats)
+    payload = [{"i": i, **asdict(item)} for i, item in enumerate(items)]
+    output = await _run(agent, json.dumps(payload, ensure_ascii=False), stats)
     if output is None:
-        return {}
-    known = {item["i"] for item in items}
-    return {item.i: item for item in output.items if item.i in known}
+        return None
+    return {item.i: item for item in output.items if 0 <= item.i < len(items)}
+
+
+async def resolve_merchants(
+    items: Sequence[MerchantQuery], stats: AiStats
+) -> dict[int, MerchantItem] | None:
+    """Map item index -> merchant; None if the call failed."""
+    return await _run_indexed(merchant_agent, items, stats)
+
+
+# The classifier may call a series a habit; suggestions only tell commitments
+# apart, so a habit is reported as "other".
+_REPORTED_KIND = {"habit": "other"}
 
 
 async def classify_candidates(
-    items: list[dict], stats: AiStats
-) -> dict[int, CandidateLabel]:
-    if not items:
-        return {}
-    output = await _run(classify_agent, items, stats)
-    if output is None:
-        return {}
-    known = {item["i"] for item in items}
-    return {item.i: item for item in output.items if item.i in known}
+    items: Sequence[CandidateSummary], stats: AiStats
+) -> dict[int, CandidateLabel] | None:
+    """Map item index -> label with the kind as reported; None if the call
+    failed."""
+    labels = await _run_indexed(classify_agent, items, stats)
+    if labels is None:
+        return None
+    return {
+        i: label.model_copy(update={"kind": _REPORTED_KIND.get(label.kind, label.kind)})
+        for i, label in labels.items()
+    }
