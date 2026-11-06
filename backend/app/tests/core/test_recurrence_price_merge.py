@@ -6,7 +6,8 @@ import random
 from datetime import date, timedelta
 
 from app.core import recurrence_detection as rd
-from app.core.recurrence import Frequency, RecurringType
+from app.core.recurrence import Frequency
+from app.core.transaction_type import TransactionType
 
 TODAY = date(2026, 11, 3)
 _ids = iter(range(1, 1_000_000))
@@ -14,7 +15,7 @@ _ids = iter(range(1, 1_000_000))
 
 def _point(day: date, amount: float) -> rd.TxPoint:
     return rd.TxPoint(
-        id=next(_ids), type=RecurringType.expense, date=day, amount=amount
+        id=next(_ids), type=TransactionType.expense, date=day, amount=amount
     )
 
 

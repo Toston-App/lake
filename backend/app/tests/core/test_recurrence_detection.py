@@ -5,7 +5,6 @@ from datetime import date, timedelta
 from app.core.recurrence import (
     BusinessDayAdjustment,
     Frequency,
-    RecurringType,
     adjust_for_weekend,
 )
 from app.core.recurrence_detection import (
@@ -16,6 +15,7 @@ from app.core.recurrence_detection import (
     normalize_description,
     point_key,
 )
+from app.core.transaction_type import TransactionType
 
 TODAY = date(2026, 11, 3)
 _ids = iter(range(1, 100_000))
@@ -24,7 +24,7 @@ _ids = iter(range(1, 100_000))
 def _point(day: date, amount: float = 10.0, **kw) -> TxPoint:
     return TxPoint(
         id=next(_ids),
-        type=kw.pop("type", RecurringType.expense),
+        type=kw.pop("type", TransactionType.expense),
         date=day,
         amount=amount,
         description=kw.pop("description", "netflix"),
@@ -128,7 +128,7 @@ def test_every_two_weeks_last_charged_a_month_ago_is_dropped():
 
 def test_semimonthly_on_1st_and_15th():
     dates = sorted(_monthly(1, 6) + _monthly(15, 6))
-    [found] = _detect([_point(d, type=RecurringType.income) for d in dates], "salary")
+    [found] = _detect([_point(d, type=TransactionType.income) for d in dates], "salary")
     assert found.detected.frequency == Frequency.semimonthly
     assert found.detected.month_days == (1, 15)
 
@@ -244,7 +244,7 @@ def test_points_of_different_types_can_share_ids():
     gifts = [
         TxPoint(
             id=p.id,
-            type=RecurringType.income,
+            type=TransactionType.income,
             date=p.date - timedelta(days=700),
             amount=50,
             description="gift",

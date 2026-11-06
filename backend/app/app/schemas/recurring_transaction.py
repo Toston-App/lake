@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from functools import cache
+from typing import Literal
 from zoneinfo import available_timezones
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -15,6 +16,9 @@ from app.schemas.transaction import TransactionType
 MAX_INTERVAL = 365
 MAX_AMOUNT = 1_000_000_000_000
 MAX_DESCRIPTION_LENGTH = 500
+
+# The kinds the classifier reports (a habit is reported as "other").
+SuggestionKind = Literal["subscription", "bill", "salary", "transfer", "other"]
 
 
 @cache
@@ -220,7 +224,7 @@ class RecurringSuggestion(BaseModel):
     last_date: date
     next_expected_date: date | None = None
     confidence: float
-    kind: str | None = None
+    kind: SuggestionKind | None = None
     reasons: list[str] = []
 
 
@@ -265,7 +269,7 @@ class RecurringSuggestionAcceptRequest(BaseModel):
 
 class RecurringSuggestionAcceptResult(BaseModel):
     fingerprint: str
-    status: str  # "created" | "error"
+    status: Literal["created", "error"]
     recurring: RecurringTransactionDetail | None = None
     error: str | None = None
 

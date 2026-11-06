@@ -15,19 +15,12 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import Enum
 
-from app.core.transaction_type import TransactionType
-
 LAST_DAY = -1
 SATURDAY = 5
 # Hard stop for scans over pathological rules (e.g. Feb 30 never matching).
 MAX_PERIODS_SCANNED = 5000
 # How far (in days) an actual date may sit from the nominal date it belongs to.
 DAY_TOLERANCE = 3
-
-
-# Templates have the same types as transactions; the old name is kept for
-# modules that still import it.
-RecurringType = TransactionType
 
 
 class Frequency(str, Enum):

@@ -24,7 +24,6 @@ from app.core.recurrence import (
     BusinessDayAdjustment,
     Frequency,
     MonthlyMode,
-    RecurringType,
     Rule,
     add_months,
     adjust_for_weekend,
@@ -33,6 +32,7 @@ from app.core.recurrence import (
     resolve_month_day,
     snap_to_nominal,
 )
+from app.core.transaction_type import TransactionType
 
 # Windows: yearly series need two years of history, the rest one year.
 WINDOW_DAYS = 395  # ~13 months
@@ -148,7 +148,7 @@ def slugify(text: str) -> str:
 @dataclass(frozen=True)
 class TxPoint:
     id: int
-    type: RecurringType
+    type: TransactionType
     date: date
     amount: float
     description: str | None = None
@@ -167,7 +167,7 @@ class Merchant:
     name: str
 
 
-PointKey = tuple[RecurringType, int]
+PointKey = tuple[TransactionType, int]
 
 
 def point_key(point: TxPoint) -> PointKey:
@@ -207,7 +207,7 @@ class DetectedRule:
 
 @dataclass
 class Candidate:
-    type: RecurringType
+    type: TransactionType
     merchant_key: str
     merchant_name: str
     has_text: bool
@@ -236,7 +236,7 @@ class Candidate:
 # Grouping and amount clustering
 # ---------------------------------------------------------------------------
 def group_key(point: TxPoint, merchant: Merchant | None) -> tuple:
-    if point.type == RecurringType.transfer:
+    if point.type == TransactionType.transfer:
         return (
             point.type,
             point.account_id,
@@ -569,7 +569,7 @@ def base_confidence(
 
 
 def fingerprint(
-    type_: RecurringType,
+    type_: TransactionType,
     merchant_key: str,
     account_id: int | None,
     to_account_id: int | None,
@@ -740,11 +740,11 @@ def _ordinal(day: int) -> str:
     return f"the {day}{suffix}"
 
 
-def _schedule_reason(detected: DetectedRule, count: int, type_: RecurringType) -> str:
+def _schedule_reason(detected: DetectedRule, count: int, type_: TransactionType) -> str:
     noun = {
-        RecurringType.expense: "charges",
-        RecurringType.income: "payments",
-        RecurringType.transfer: "transfers",
+        TransactionType.expense: "charges",
+        TransactionType.income: "payments",
+        TransactionType.transfer: "transfers",
     }[type_]
     if detected.frequency == Frequency.weekly:
         every = "every week" if detected.interval == 1 else "every 2 weeks"
@@ -759,7 +759,7 @@ def _reasons(
     detected: DetectedRule,
     series: list[TxPoint],
     price_changes: list[date],
-    type_: RecurringType,
+    type_: TransactionType,
     today: date,
 ) -> list[str]:
     """Why a series is suggested: its schedule, price changes and missed dates."""
@@ -845,7 +845,7 @@ def _assign_fingerprints(candidates: list[Candidate]) -> None:
 
 def _fingerprint_for(candidate: Candidate, extra: str = "") -> str:
     latest = candidate.latest
-    is_transfer = candidate.type == RecurringType.transfer
+    is_transfer = candidate.type == TransactionType.transfer
     return fingerprint(
         candidate.type,
         candidate.merchant_key,

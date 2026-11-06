@@ -681,14 +681,14 @@ def test_single_type_registry():
 
 
 def test_no_recurring_type_conversions():
-    from app.core.recurrence import RecurringType
-    from app.schemas.transaction import TransactionType
+    from app.core import recurrence
 
-    assert RecurringType is TransactionType
+    # Templates use TransactionType directly; the old alias is gone.
+    assert not hasattr(recurrence, "Recurring" + "Type")
     for path in APP_DIR.rglob("*.py"):
         if "tests" in path.parts:
             continue
-        assert "RecurringType(" not in path.read_text(), path
+        assert "Recurring" + "Type(" not in path.read_text(), path
 
 
 def test_single_ownership_helper():

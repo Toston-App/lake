@@ -942,7 +942,10 @@ async def test_release_leaves_a_claim_taken_over_by_a_newer_scan(
 async def test_cancel_cooldown_expires(db_session: AsyncSession, test_user: User):
     claimed_at = await detection.claim_scan(db_session, test_user, unlimited=True)
     await detection._finish_scan(
-        db_session, test_user.id, claimed_at=claimed_at, status=detection.CANCELLED
+        db_session,
+        test_user.id,
+        claimed_at=claimed_at,
+        status=detection.ScanStatus.cancelled,
     )
     with pytest.raises(detection.ScanCooldownError):
         await detection.claim_scan(db_session, test_user, unlimited=True)

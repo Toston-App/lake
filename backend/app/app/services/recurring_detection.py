@@ -20,6 +20,7 @@ from collections import defaultdict
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from enum import Enum
 from typing import Any
 
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -38,6 +39,7 @@ from app.core.recurrence_detection import (
     Merchant,
     PointKey,
     TxPoint,
+    _within,
     apply_classification,
     detect_series,
     group_key,
@@ -77,9 +79,16 @@ CANCEL_COOLDOWN = timedelta(minutes=1)
 # The release after a cancel gives up after this, rather than holding a
 # connection while it waits on a row lock.
 RELEASE_TIMEOUT_S = 10
-RUNNING = "running"
-DONE = "done"
-CANCELLED = "cancelled"
+# Scans a free user gets.
+FREE_SCANS = 1
+
+
+class ScanStatus(str, Enum):
+    """`recurring_detection_usage.status`; stored as these strings."""
+
+    running = "running"
+    done = "done"
+    cancelled = "cancelled"
 
 
 class ScanLimitError(ServiceError):
@@ -138,18 +147,29 @@ async def _usage(db: AsyncSession, user: models.User) -> Usage | None:
     return result.scalar_one_or_none()
 
 
-def _remaining(unlimited: bool, usage: Usage | None) -> int | None:
+def _remaining(unlimited: bool, scan_count: int) -> int | None:
+    """Scans left after `scan_count` counted ones: 1 or 0 for free users,
+    None when the user's tier is unlimited."""
     if unlimited:
         return None
-    return 0 if usage is not None and usage.scan_count > 0 else 1
+    return max(0, FREE_SCANS - scan_count)
+
+
+def _scan_count(usage: Usage | None) -> int:
+    return usage.scan_count if usage is not None else 0
+
+
+def _check_limit(unlimited: bool, usage: Usage | None) -> None:
+    """Raise ScanLimitError when a free user has no scan left."""
+    if _remaining(unlimited, _scan_count(usage)) == 0:
+        raise ScanLimitError(usage.last_scan_at if usage else None)
 
 
 async def scans_remaining(db: AsyncSession, user: models.User) -> int | None:
     """1 or 0 for free users, None when the user's tier is unlimited."""
     unlimited = await has_unlimited_scans(db, user)
-    if unlimited:
-        return None
-    return _remaining(False, await _usage(db, user))
+    usage = None if unlimited else await _usage(db, user)
+    return _remaining(unlimited, _scan_count(usage))
 
 
 async def claim_scan(
@@ -166,16 +186,24 @@ async def claim_scan(
     """
     now = datetime.now(timezone.utc)
     not_running = and_(
-        or_(Usage.status != RUNNING, Usage.claimed_at < now - STALE_CLAIM),
-        or_(Usage.status != CANCELLED, Usage.claimed_at < now - CANCEL_COOLDOWN),
+        or_(Usage.status != ScanStatus.running, Usage.claimed_at < now - STALE_CLAIM),
+        or_(
+            Usage.status != ScanStatus.cancelled,
+            Usage.claimed_at < now - CANCEL_COOLDOWN,
+        ),
     )
-    allowed = not_running if unlimited else and_(Usage.scan_count == 0, not_running)
+    # The SQL side of `_check_limit`, so the claim is atomic.
+    allowed = (
+        not_running if unlimited else and_(Usage.scan_count < FREE_SCANS, not_running)
+    )
     stmt = (
         insert(Usage)
-        .values(owner_id=user.id, status=RUNNING, scan_count=0, claimed_at=now)
+        .values(
+            owner_id=user.id, status=ScanStatus.running, scan_count=0, claimed_at=now
+        )
         .on_conflict_do_update(
             index_elements=[Usage.owner_id],
-            set_={"status": RUNNING, "claimed_at": now},
+            set_={"status": ScanStatus.running, "claimed_at": now},
             where=allowed,
         )
         .returning(Usage.owner_id)
@@ -195,9 +223,8 @@ async def claim_scan(
     usage = await _usage(db, user)
     if usage is not None:
         await db.refresh(usage)
-    if not unlimited and usage is not None and usage.scan_count > 0:
-        raise ScanLimitError(usage.last_scan_at)
-    if usage is not None and usage.status == CANCELLED and usage.claimed_at:
+    _check_limit(unlimited, usage)
+    if usage is not None and usage.status == ScanStatus.cancelled and usage.claimed_at:
         wait = usage.claimed_at + CANCEL_COOLDOWN - now
         raise ScanCooldownError(max(1, math.ceil(wait.total_seconds())))
     raise ConflictError("A scan is already running")
@@ -210,7 +237,7 @@ async def _finish_scan(
     claimed_at: datetime,
     result: dict[str, Any] | None = None,
     counted: bool = False,
-    status: str = DONE,
+    status: ScanStatus = ScanStatus.done,
 ) -> bool:
     """End the scan holding `claimed_at`. False if that claim was lost.
 
@@ -222,14 +249,14 @@ async def _finish_scan(
         values.update(last_result=result, last_scan_at=datetime.now(timezone.utc))
     if counted:
         values["scan_count"] = Usage.scan_count + 1
-    if status == CANCELLED:
+    if status == ScanStatus.cancelled:
         # The cooldown counts from the cancel, not from the scan's start.
         values["claimed_at"] = datetime.now(timezone.utc)
     updated = await db.execute(
         update(Usage)
         .where(
             Usage.owner_id == user_id,
-            Usage.status == RUNNING,
+            Usage.status == ScanStatus.running,
             Usage.claimed_at == claimed_at,
         )
         .values(**values)
@@ -254,7 +281,9 @@ _cleanup_tasks: set[asyncio.Task] = set()
 async def _release_after_cancel(user_id: int, claimed_at: datetime) -> None:
     async def release() -> None:
         async with _cleanup_session() as db:
-            await _finish_scan(db, user_id, claimed_at=claimed_at, status=CANCELLED)
+            await _finish_scan(
+                db, user_id, claimed_at=claimed_at, status=ScanStatus.cancelled
+            )
 
     try:
         await asyncio.wait_for(release(), RELEASE_TIMEOUT_S)
@@ -305,7 +334,12 @@ async def release_scan(db: AsyncSession, user_id: int, claimed_at: datetime) -> 
 async def load_points(
     db: AsyncSession, user: models.User, today: date
 ) -> list[TxPoint]:
-    """Unlinked transactions from the last 25 months, one query per type."""
+    """Unlinked transactions from the last 25 months, one query per type.
+
+    Ordered by type (as in KINDS), then date and id: the order decides how
+    series are grouped and what is sent to the AI, so it must not change
+    from one scan to the next.
+    """
     since = today - timedelta(days=YEARLY_WINDOW_DAYS)
     points: list[TxPoint] = []
     for kind in KINDS.values():
@@ -333,7 +367,7 @@ async def load_points(
                 model.date >= since,
                 model.date <= today,
                 model.amount > 0,
-            )
+            ).order_by(model.date, model.id)
         )
         points.extend(
             TxPoint(type=kind.type, **{**row._mapping, "amount": float(row.amount)})
@@ -569,8 +603,7 @@ def _drop_covered(
                 template.type != TransactionType.transfer
                 or c.latest.to_account_id == template.to_account_id
             )
-            and abs(template.amount - c.median_amount)
-            <= AMOUNT_TOLERANCE * c.median_amount
+            and _within(template.amount, c.median_amount, AMOUNT_TOLERANCE, False)
         ]
         cover(matches, template.amount)
     return [c for c in candidates if id(c) not in covered]
@@ -726,9 +759,7 @@ async def check_access(db: AsyncSession, user: models.User) -> bool:
     """
     unlimited = await has_unlimited_scans(db, user)
     if not unlimited:
-        usage = await _usage(db, user)
-        if usage is not None and usage.scan_count > 0:
-            raise ScanLimitError(usage.last_scan_at)
+        _check_limit(False, await _usage(db, user))
     return unlimited
 
 
@@ -758,7 +789,8 @@ async def run_scan(
     try:
         scan = await detect(db, user, use_ai=use_ai and ai_allowed, today=today)
         counted = bool(scan.result.suggestions)
-        scan.result.scans_remaining = None if unlimited else (0 if counted else 1)
+        # The claim only lets a free user in with no counted scan.
+        scan.result.scans_remaining = _remaining(unlimited, int(counted))
         saved = await _finish_scan(
             db,
             user_id,
@@ -789,7 +821,7 @@ async def scan_status(
     stale_before = datetime.now(timezone.utc) - STALE_CLAIM
     running = (
         usage is not None
-        and usage.status == RUNNING
+        and usage.status == ScanStatus.running
         and usage.claimed_at is not None
         and usage.claimed_at >= stale_before
     )
@@ -797,7 +829,7 @@ async def scan_status(
     return schemas.RecurringDetectionStatus(
         running=running,
         last_scan_at=usage.last_scan_at if usage else None,
-        scans_remaining=_remaining(unlimited, usage),
+        scans_remaining=_remaining(unlimited, _scan_count(usage)),
     )
 
 
@@ -812,7 +844,7 @@ async def last_result(
     skipped = await _skipped_fingerprints(db, user)
     result.suggestions = [s for s in result.suggestions if s.fingerprint not in skipped]
     unlimited = await has_unlimited_scans(db, user)
-    result.scans_remaining = _remaining(unlimited, usage)
+    result.scans_remaining = _remaining(unlimited, _scan_count(usage))
     return result
 
 
@@ -951,6 +983,12 @@ async def _check_latest(
         )
 
 
+def _failed(fingerprint: str, error: str) -> schemas.RecurringSuggestionAcceptResult:
+    return schemas.RecurringSuggestionAcceptResult(
+        fingerprint=fingerprint, status="error", error=error
+    )
+
+
 async def accept_suggestions(
     db: AsyncSession,
     user: models.User,
@@ -982,30 +1020,18 @@ async def accept_suggestions(
             )
         except ServiceError as exc:
             # Validation fails before anything is written.
-            results.append(
-                schemas.RecurringSuggestionAcceptResult(
-                    fingerprint=item.fingerprint, status="error", error=exc.message
-                )
-            )
+            results.append(_failed(item.fingerprint, exc.message))
         except IntegrityError:
             # A concurrent accept of the same suggestion won the unique index.
             await _rollback(db, user)
             results.append(
-                schemas.RecurringSuggestionAcceptResult(
-                    fingerprint=item.fingerprint,
-                    status="error",
-                    error="This suggestion was already added",
-                )
+                _failed(item.fingerprint, "This suggestion was already added")
             )
         except Exception:
             logger.exception("accepting recurring suggestion failed")
             await _rollback(db, user)
             results.append(
-                schemas.RecurringSuggestionAcceptResult(
-                    fingerprint=item.fingerprint,
-                    status="error",
-                    error="Could not create this recurring transaction",
-                )
+                _failed(item.fingerprint, "Could not create this recurring transaction")
             )
     return results
 
