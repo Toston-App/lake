@@ -8,7 +8,12 @@ import os
 from datetime import datetime
 
 from app.db.session import async_session
-from app.services.recurring import claim_due, generate_due, release_leases
+from app.services.recurring import (
+    claim_due,
+    generate_due,
+    release_leases,
+    report_unknown_timezones,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("recurring_worker")
@@ -21,6 +26,7 @@ BATCH_SIZE = 50
 async def tick() -> bool:
     """Generate one batch of due templates; returns True when a batch was claimed."""
     async with async_session() as db:
+        await report_unknown_timezones(db)
         leases = await claim_due(db, limit=BATCH_SIZE)
     if not leases:
         return False

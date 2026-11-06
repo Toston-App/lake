@@ -93,6 +93,8 @@ LIMIT_FIELDS = frozenset({"end_date", "max_occurrences", "timezone"})
 
 
 _postgres_timezones: frozenset[str] | None = None
+# Templates already reported as skipped for an unknown timezone.
+_reported_unknown_timezones: set[int] = set()
 
 
 class InvalidTimezoneError(DomainError):
@@ -802,7 +804,8 @@ async def _release_lease(db: AsyncSession, recurring_id: int, lease: datetime) -
 async def claim_due(db: AsyncSession, *, limit: int = 50) -> dict[int, datetime]:
     """Lease up to `limit` templates that have an occurrence due today or earlier.
 
-    Returns the lease token of each claimed template, to pass to `generate_due`.
+    Returns the lease token of each claimed template, to pass to `generate_due`,
+    in the order to generate them: oldest due date first, then by id.
     """
     now = datetime.now(timezone.utc)
     known = sorted(await postgres_timezones(db))
@@ -825,7 +828,7 @@ async def claim_due(db: AsyncSession, *, limit: int = 50) -> dict[int, datetime]
                 RecurringTransaction.locked_until < now,
             ),
         )
-        .order_by(RecurringTransaction.next_run_date)
+        .order_by(RecurringTransaction.next_run_date, RecurringTransaction.id)
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
@@ -833,12 +836,40 @@ async def claim_due(db: AsyncSession, *, limit: int = 50) -> dict[int, datetime]
         update(RecurringTransaction)
         .where(RecurringTransaction.id.in_(due.scalar_subquery()))
         .values(locked_until=now + LEASE)
-        .returning(RecurringTransaction.id)
+        .returning(RecurringTransaction.id, RecurringTransaction.next_run_date)
         .execution_options(synchronize_session=False)
     )
-    leases = {row.id: now + LEASE for row in result}
+    # RETURNING follows storage order, not the subquery's ORDER BY.
+    rows = sorted(result, key=lambda row: (row.next_run_date, row.id))
+    leases = {row.id: now + LEASE for row in rows}
     await db.commit()
     return leases
+
+
+async def report_unknown_timezones(db: AsyncSession) -> list[int]:
+    """Warn about active templates `claim_due` skips for their timezone.
+
+    Each template is reported once per process; returns the newly reported ids.
+    """
+    known = sorted(await postgres_timezones(db))
+    result = await db.execute(
+        select(RecurringTransaction.id)
+        .where(
+            RecurringTransaction.is_active.is_(True),
+            RecurringTransaction.next_run_date.is_not(None),
+            RecurringTransaction.timezone.not_in(known),
+        )
+        .order_by(RecurringTransaction.id)
+    )
+    new = [id_ for id_ in result.scalars() if id_ not in _reported_unknown_timezones]
+    if new:
+        _reported_unknown_timezones.update(new)
+        logger.warning(
+            "Recurring transactions %s are not generated: the database "
+            "doesn't know their timezone",
+            new,
+        )
+    return new
 
 
 async def release_leases(db: AsyncSession, leases: dict[int, datetime]) -> None:

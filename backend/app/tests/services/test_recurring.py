@@ -182,6 +182,54 @@ async def test_claim_due_survives_a_timezone_postgres_does_not_know(
     assert unknown.id not in claimed
 
 
+async def test_templates_skipped_for_their_timezone_are_reported_once(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.setattr(recurring_service, "_reported_unknown_timezones", set())
+    unknown = await _create(db_session, test_user)
+    known = await _create(db_session, test_user)
+    for template in (unknown, known):
+        template.next_run_date = TODAY - timedelta(days=1)
+    unknown.timezone = "Mars/Olympus"
+    await db_session.commit()
+
+    with caplog.at_level("WARNING", logger=recurring_service.logger.name):
+        assert await recurring_service.report_unknown_timezones(db_session) == [
+            unknown.id
+        ]
+        assert await recurring_service.report_unknown_timezones(db_session) == []
+    [record] = caplog.records
+    assert str(unknown.id) in record.getMessage()
+    assert str(known.id) not in record.getMessage()
+    # Only ids are logged, nothing the user entered.
+    assert "Mars" not in record.getMessage()
+
+
+async def test_worker_reports_templates_skipped_for_their_timezone(
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.setattr(recurring_service, "_reported_unknown_timezones", set())
+    unknown, due = await _claimed_batch(db_session, test_user, monkeypatch, 2)
+    unknown.timezone = "Mars/Olympus"
+    await db_session.commit()
+
+    with caplog.at_level("WARNING", logger=recurring_service.logger.name):
+        assert await recurring_worker.tick() is True
+    assert any(
+        str(unknown.id) in r.getMessage() and "timezone" in r.getMessage()
+        for r in caplog.records
+    )
+    # The other template is still generated.
+    assert await _count(db_session, Expense, due.id) == 1
+    assert await _count(db_session, Expense, unknown.id) == 0
+
+
 def _python_knows(monkeypatch: pytest.MonkeyPatch, tz: str) -> None:
     from app.schemas import recurring_transaction as recurring_schemas
 
@@ -680,12 +728,33 @@ async def test_worker_continues_batch_after_a_template_fails(
     assert await _locked_until(db_session, failing.id) is not None
 
 
+async def _rewrite_first(db: AsyncSession, templates: list[RecurringTransaction]):
+    """Write the first template's row again, so it is stored after the others.
+
+    Postgres returns tied rows in storage order, so a claim ordered only by
+    date would hand this template out last.
+    """
+    templates[0].amount += 1
+    await db.commit()
+
+
+async def test_claim_due_orders_ties_by_id(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    templates = await _claimed_batch(db_session, test_user, monkeypatch, 3)
+    await _rewrite_first(db_session, templates)
+
+    claimed = await recurring_service.claim_due(db_session)
+    assert list(claimed) == sorted(t.id for t in templates)
+
+
 async def test_worker_releases_leases_of_unreached_templates(
     db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
 ):
-    interrupted, *unreached = await _claimed_batch(
-        db_session, test_user, monkeypatch, 3
-    )
+    templates = await _claimed_batch(db_session, test_user, monkeypatch, 3)
+    await _rewrite_first(db_session, templates)
+    # Templates due the same day are claimed, and so processed, by id.
+    interrupted, *unreached = sorted(templates, key=lambda t: t.id)
 
     async def cancelled(*_args, **_kwargs):
         raise asyncio.CancelledError
