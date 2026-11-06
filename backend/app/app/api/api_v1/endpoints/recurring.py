@@ -272,6 +272,12 @@ async def accept_recurring_suggestions(
         current_user,
         {"type": "recurring_accept_suggestions", "items": len(accept_in.items)},
     )
+    # Each request re-runs detection over the history (no AI): throttle it.
+    # Fails open; without AI it costs only database time.
+    await _enforce_rate_limit(
+        f"recurring_accept:{current_user.id}",
+        settings.RECURRING_ACCEPT_RATE_LIMIT_PER_HOUR,
+    )
     results = await detection_service.accept_suggestions(
         db, current_user, accept_in.items
     )
@@ -301,9 +307,12 @@ async def dismiss_recurring_suggestions(
         current_user,
         {"type": "recurring_dismiss_suggestions", "items": len(dismiss_in.items)},
     )
-    dismissed = await detection_service.dismiss_suggestions(
-        db, current_user, dismiss_in.items
-    )
+    try:
+        dismissed = await detection_service.dismiss_suggestions(
+            db, current_user, dismiss_in.items
+        )
+    except ServiceError as exc:
+        raise_http(exc)
     return schemas.RecurringSuggestionDismissResult(dismissed=dismissed)
 
 

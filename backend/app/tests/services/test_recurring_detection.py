@@ -753,3 +753,48 @@ async def test_cancel_release_uses_a_session_of_its_own(
         async with TestSessionLocal() as cleanup:
             await cleanup.execute(delete(User).where(User.id == user_id))
             await cleanup.commit()
+
+
+async def test_newer_in_group_query_is_bounded(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    # Only the newest NEWER_IN_GROUP_LIMIT transactions are compared; the
+    # newest same-merchant charge is still found.
+    monkeypatch.setattr(detection, "NEWER_IN_GROUP_LIMIT", 1)
+    old = await create_test_expense(
+        db_session,
+        owner_id=test_user.id,
+        amount=30,
+        expense_date=TODAY - timedelta(days=60),
+        description="Gym",
+    )
+    for days in (40, 20):
+        await create_test_expense(
+            db_session,
+            owner_id=test_user.id,
+            amount=5,
+            expense_date=TODAY - timedelta(days=days),
+            description="Coffee",
+        )
+    newest = await create_test_expense(
+        db_session,
+        owner_id=test_user.id,
+        amount=30,
+        expense_date=TODAY - timedelta(days=1),
+        description="Gym",
+    )
+    item = schemas.RecurringSuggestionAccept(
+        fingerprint="e" * 32,
+        transaction_type="expense",
+        transaction_id=old.id,
+        frequency="monthly",
+    )
+    found = await detection._newer_in_group(db_session, test_user, item, old)
+    assert found is not None and found.id == newest.id
+
+
+def test_ai_requests_deny_data_collection():
+    from app.ai import recurring_detection as ai
+
+    settings_ = ai.build_model().settings
+    assert settings_["openrouter_provider"] == {"data_collection": "deny"}

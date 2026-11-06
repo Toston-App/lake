@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,6 +65,9 @@ Dismissal = models.RecurringSuggestionDismissal
 Template = models.RecurringTransaction
 
 AI_MERCHANT_CHUNK = 150
+# Newer transactions compared when an accepted one is outside any series.
+NEWER_IN_GROUP_LIMIT = 500
+MAX_DISMISSALS_PER_USER = 1000
 AI_MERCHANT_MAX_CHUNKS = 4
 # A claim older than this belongs to a scan that crashed; it can be taken over.
 STALE_CLAIM = timedelta(minutes=10)
@@ -894,6 +897,8 @@ class _SeriesIndex:
             for point in candidate.points:
                 self._series[point_key(point)] = candidate
 
+        self.fingerprints = {c.fingerprint for c in candidates}
+
     def series_of(self, key: PointKey) -> Candidate | None:
         return self._series.get(key)
 
@@ -918,12 +923,15 @@ async def _newer_in_group(
     newer = (
         (
             await db.execute(
-                select(model).where(
+                select(model)
+                .where(
                     model.owner_id == user.id,
                     model.recurring_id.is_(None),
                     model.date > tx.date,
                     model.id != tx.id,
                 )
+                .order_by(model.date.desc(), model.id.desc())
+                .limit(NEWER_IN_GROUP_LIMIT)
             )
         )
         .scalars()
@@ -987,8 +995,15 @@ async def _check_latest(
         raise DomainError("This transaction already belongs to a recurring series")
     series = index.series_of((RecurringType(item.transaction_type.value), tx.id))
     if series is not None:
+        if item.fingerprint != series.fingerprint:
+            raise DomainError("The suggestion does not match this transaction")
         newer = series.latest if series.latest.id != tx.id else None
     else:
+        # No detected series (e.g. the history changed since the scan). The
+        # fingerprint can't be checked, but it must not be another series'
+        # one, which would hide that series from later scans.
+        if item.fingerprint in index.fingerprints:
+            raise DomainError("The suggestion does not match this transaction")
         newer = await _newer_in_group(db, user, item, tx)
     if newer is not None:
         raise DomainError(
@@ -1061,6 +1076,20 @@ async def dismiss_suggestions(
     user: models.User,
     items: list[schemas.RecurringSuggestionDismissItem],
 ) -> int:
+    fingerprints = {item.fingerprint for item in items}
+    stored = await db.scalar(
+        select(func.count()).select_from(Dismissal).where(Dismissal.owner_id == user.id)
+    )
+    already = await db.scalar(
+        select(func.count())
+        .select_from(Dismissal)
+        .where(Dismissal.owner_id == user.id, Dismissal.fingerprint.in_(fingerprints))
+    )
+    if stored + len(fingerprints) - already > MAX_DISMISSALS_PER_USER:
+        raise DomainError(
+            f"You can dismiss at most {MAX_DISMISSALS_PER_USER} suggestions; "
+            "undo some dismissals first"
+        )
     rows = list(
         {
             item.fingerprint: {

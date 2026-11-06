@@ -184,6 +184,7 @@ class RecurringPreview(BaseModel):
 # Detection of recurring series
 # ---------------------------------------------------------------------------
 FINGERPRINT_LENGTH = 32
+FINGERPRINT_PATTERN = r"^[0-9a-f]{32}$"
 MAX_SUGGESTION_ITEMS = 50
 
 
@@ -251,7 +252,9 @@ class RecurringSuggestionAccept(RecurringFromTransaction):
     """
 
     fingerprint: str = Field(
-        min_length=FINGERPRINT_LENGTH, max_length=FINGERPRINT_LENGTH
+        min_length=FINGERPRINT_LENGTH,
+        max_length=FINGERPRINT_LENGTH,
+        pattern=FINGERPRINT_PATTERN,
     )
 
 
@@ -270,7 +273,9 @@ class RecurringSuggestionAcceptResult(BaseModel):
 
 class RecurringSuggestionDismissItem(BaseModel):
     fingerprint: str = Field(
-        min_length=FINGERPRINT_LENGTH, max_length=FINGERPRINT_LENGTH
+        min_length=FINGERPRINT_LENGTH,
+        max_length=FINGERPRINT_LENGTH,
+        pattern=FINGERPRINT_PATTERN,
     )
     label: str | None = Field(default=None, max_length=200)
 

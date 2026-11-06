@@ -259,3 +259,94 @@ async def test_cancelled_scan_releases_the_claim(
     assert response.status_code == 429
     assert response.json()["detail"]["reason"] == "cancel_cooldown"
     assert 0 < int(response.headers["Retry-After"]) <= 60
+
+
+async def test_accept_is_rate_limited(client: AsyncClient, _isolate: AsyncMock):
+    _isolate.return_value = (61, 300)
+    response = await client.post(
+        f"{PREFIX}/suggestions/accept",
+        json={
+            "items": [
+                {
+                    "fingerprint": "a" * 32,
+                    "transaction_type": "expense",
+                    "transaction_id": 1,
+                    "frequency": "monthly",
+                }
+            ]
+        },
+    )
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "300"
+    assert _isolate.await_args.args[0].startswith("recurring_accept:")
+
+
+async def test_accept_rejects_a_fingerprint_of_another_series(
+    client: AsyncClient, db_session: AsyncSession, test_user: User
+):
+    await add_series(db_session, test_user)
+    await add_series(db_session, test_user, description="Spotify", amount=9.99, day=20)
+    netflix, spotify = sorted(
+        (await client.post(f"{PREFIX}/detect")).json()["suggestions"],
+        key=lambda s: s["merchant_name"],
+    )
+    response = await client.post(
+        f"{PREFIX}/suggestions/accept",
+        json={
+            "items": [
+                # Netflix's charge with a made-up fingerprint, and with Spotify's.
+                _accept(netflix, fingerprint="a" * 32),
+                _accept(netflix, fingerprint=spotify["fingerprint"]),
+            ]
+        },
+    )
+    assert [r["status"] for r in response.json()] == ["error", "error"]
+    assert all("does not match" in r["error"] for r in response.json())
+    # Spotify's suggestion is still there.
+    last = (await client.get(f"{PREFIX}/detect/last")).json()["suggestions"]
+    assert {s["fingerprint"] for s in last} == {
+        netflix["fingerprint"],
+        spotify["fingerprint"],
+    }
+
+
+async def test_accept_outside_a_series_cant_take_a_series_fingerprint(
+    client: AsyncClient, db_session: AsyncSession, test_user: User
+):
+    from tests.utils import create_test_expense
+
+    await add_series(db_session, test_user)
+    [netflix] = (await client.post(f"{PREFIX}/detect")).json()["suggestions"]
+    loose = await create_test_expense(
+        db_session, owner_id=test_user.id, description="Gym", amount=30
+    )
+    response = await client.post(
+        f"{PREFIX}/suggestions/accept",
+        json={"items": [_accept(netflix, transaction_id=loose.id)]},
+    )
+    [result] = response.json()
+    assert result["status"] == "error"
+    assert "does not match" in result["error"]
+
+
+async def test_fingerprints_must_be_hex(client: AsyncClient):
+    response = await client.post(
+        f"{PREFIX}/suggestions/dismiss", json={"items": [{"fingerprint": "Z" * 32}]}
+    )
+    assert response.status_code == 422
+
+
+async def test_dismissals_per_user_are_capped(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    from app.services import recurring_detection as detection
+
+    monkeypatch.setattr(detection, "MAX_DISMISSALS_PER_USER", 1)
+    url = f"{PREFIX}/suggestions/dismiss"
+    first = {"items": [{"fingerprint": "b" * 32}]}
+    assert (await client.post(url, json=first)).json() == {"dismissed": 1}
+    # Dismissing the same one again is still a no-op, not an error.
+    assert (await client.post(url, json=first)).json() == {"dismissed": 0}
+    second = await client.post(url, json={"items": [{"fingerprint": "c" * 32}]})
+    assert second.status_code == 400
+    assert "at most 1" in second.json()["detail"]
