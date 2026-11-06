@@ -14,6 +14,7 @@ import re
 import statistics
 import unicodedata
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
@@ -430,6 +431,46 @@ def _semimonthly_days(dates: list[date]) -> tuple[int, int] | None:
     return a, b
 
 
+# What a schedule needs besides its gaps: (weekdays, month_days, adjustment),
+# or None when the dates don't have the frequency's shape.
+_Shape = tuple[tuple[int, ...], tuple[int, ...], BusinessDayAdjustment]
+
+
+def _weekly_shape(dates: list[date]) -> _Shape | None:
+    weekday, count = Counter(d.weekday() for d in dates).most_common(1)[0]
+    if count / len(dates) < MIN_FIT:
+        return None
+    return (weekday,), (), BusinessDayAdjustment.none
+
+
+def _semimonthly_shape(dates: list[date]) -> _Shape | None:
+    pair = _semimonthly_days(dates)
+    if pair is None:
+        return None
+    return (), pair, _adjustment(dates, pair)
+
+
+def _monthly_shape(dates: list[date]) -> _Shape | None:
+    day = _month_day_mode(dates)
+    if day is None:
+        return None
+    return (), (day,), _adjustment(dates, (day,))
+
+
+def _yearly_shape(dates: list[date]) -> _Shape | None:
+    if len({d.month for d in dates}) > 2:
+        return None
+    return (), (), BusinessDayAdjustment.none
+
+
+_SHAPES: dict[Frequency, Callable[[list[date]], _Shape | None]] = {
+    Frequency.weekly: _weekly_shape,
+    Frequency.semimonthly: _semimonthly_shape,
+    Frequency.monthly: _monthly_shape,
+    Frequency.yearly: _yearly_shape,
+}
+
+
 def detect_rule(dates: list[date]) -> DetectedRule | None:
     """Find the schedule that best explains a sorted list of distinct dates."""
     gaps = _gaps(dates)
@@ -446,30 +487,10 @@ def detect_rule(dates: list[date]) -> DetectedRule | None:
         fit = _fit(gaps, spec)
         if fit < MIN_FIT:
             continue
-        weekdays: tuple[int, ...] = ()
-        month_days: tuple[int, ...] = ()
-        adjustment = BusinessDayAdjustment.none
-        if spec.frequency == Frequency.weekly:
-            weekday, count = Counter(d.weekday() for d in dates).most_common(1)[0]
-            if count / len(dates) < MIN_FIT:
-                continue
-            weekdays = (weekday,)
-        elif spec.frequency == Frequency.monthly:
-            day = _month_day_mode(dates)
-            if day is None:
-                continue
-            month_days = (day,)
-            adjustment = _adjustment(dates, month_days)
-        elif spec.frequency == Frequency.semimonthly:
-            pair = _semimonthly_days(dates)
-            if pair is None:
-                continue
-            month_days = pair
-            adjustment = _adjustment(dates, month_days)
-        else:  # yearly
-            months = {d.month for d in dates}
-            if len(months) > 2:
-                continue
+        shape = _SHAPES[spec.frequency](dates)
+        if shape is None:
+            continue
+        weekdays, month_days, adjustment = shape
         found.append(
             DetectedRule(
                 frequency=spec.frequency,
@@ -602,44 +623,92 @@ def _month_label(day: date) -> str:
     return f"{calendar.month_abbr[day.month]} {day.year}"
 
 
+@dataclass(eq=False)
+class _Series:
+    """Clusters joined so far, the dates their price changed and their rule."""
+
+    points: list[TxPoint]  # ascending by date
+    price_changes: list[date]
+    detected: DetectedRule | None
+
+
+def _can_merge(a: _Series, b: _Series, today: date) -> DetectedRule | None:
+    """The rule of `a` followed by `b` when both are one series, else None."""
+    if not a.points[-1].date < b.points[0].date:
+        return None
+    detected = _detect_cluster(a.points + b.points, today)
+    if detected is None:
+        return None
+    if any(
+        own is not None and own.frequency != detected.frequency
+        for own in (a.detected, b.detected)
+    ):
+        return None
+    if not _gap_matches((b.points[0].date - a.points[-1].date).days, detected):
+        return None
+    return detected
+
+
 def _merge_price_changes(
     clusters: list[list[TxPoint]], today: date
 ) -> list[tuple[list[TxPoint], list[date]]]:
-    """Join consecutive clusters of one series whose price changed.
+    """Join the clusters of one series whose price changed.
 
-    Returns each series with the dates its price changed on.
+    Clusters are ordered by start date and the earliest pair that continues
+    one schedule is joined first, repeatedly. A cluster may join a later one
+    that is not next to it: clusters in between that overlap it in time are
+    another plan of the same merchant. Returns each series with the dates its
+    price changed on.
     """
-    items: list[tuple[list[TxPoint], list[date]]] = [
-        (sorted(c, key=lambda p: p.date), []) for c in clusters
+    items = [
+        _Series(points, [], _detect_cluster(points, today))
+        for points in sorted(
+            (sorted(c, key=lambda p: p.date) for c in clusters),
+            key=lambda points: points[0].date,
+        )
     ]
-    merged = True
-    while merged:
-        merged = False
-        items.sort(key=lambda item: item[0][0].date)
-        for i, (a, a_reasons) in enumerate(items):
-            for j in range(i + 1, len(items)):
-                b, b_reasons = items[j]
-                if not a[-1].date < b[0].date:
-                    continue
-                combined = a + b
-                detected = _detect_cluster(combined, today)
-                if detected is None:
-                    continue
-                spec_gap = (b[0].date - a[-1].date).days
-                own = [_detect_cluster(a, today), _detect_cluster(b, today)]
-                if any(
-                    r is not None and r.frequency != detected.frequency for r in own
-                ):
-                    continue
-                if not _gap_matches(spec_gap, detected):
-                    continue
-                items[i] = (combined, a_reasons + [b[0].date] + b_reasons)
-                del items[j]
-                merged = True
-                break
-            if merged:
-                break
-    return items
+    # Each pair is tried once: joining builds a new series, so a stale entry
+    # never matches again.
+    tried: dict[tuple[_Series, _Series], DetectedRule | None] = {}
+
+    def can_merge(a: _Series, b: _Series) -> DetectedRule | None:
+        if (a, b) not in tried:
+            tried[(a, b)] = _can_merge(a, b, today)
+        return tried[(a, b)]
+
+    def join(i: int, j: int, detected: DetectedRule) -> None:
+        a, b = items[i], items[j]
+        items[i] = _Series(
+            a.points + b.points,
+            a.price_changes + [b.points[0].date] + b.price_changes,
+            detected,
+        )
+        del items[j]
+
+    def earlier_partner(i: int) -> tuple[int, DetectedRule] | None:
+        """The first series before `i` that the (changed) series `i` continues."""
+        for k in range(i):
+            detected = can_merge(items[k], items[i])
+            if detected is not None:
+                return k, detected
+        return None
+
+    i = 0
+    while i < len(items):
+        j = i + 1
+        while j < len(items):
+            detected = can_merge(items[i], items[j])
+            if detected is None:
+                j += 1
+                continue
+            join(i, j, detected)
+            # Series before `i` only failed against what `i` was before.
+            while (partner := earlier_partner(i)) is not None:
+                k, detected = partner
+                join(k, i, detected)
+                i, j = k, i
+        i += 1
+    return [(series.points, series.price_changes) for series in items]
 
 
 def _gap_matches(gap: int, detected: DetectedRule) -> bool:
@@ -684,6 +753,28 @@ def _schedule_reason(detected: DetectedRule, count: int, type_: RecurringType) -
         days = " and ".join(_ordinal(d) for d in detected.month_days)
         return f"{count} {noun} on {days}"
     return f"{count} {noun}, once a year"
+
+
+def _reasons(
+    detected: DetectedRule,
+    series: list[TxPoint],
+    price_changes: list[date],
+    type_: RecurringType,
+    today: date,
+) -> list[str]:
+    """Why a series is suggested: its schedule, price changes and missed dates."""
+    return (
+        [_schedule_reason(detected, len(series), type_)]
+        + [
+            f"price changed in {_month_label(changed)}"
+            for changed in price_changes
+            if changed > series[0].date
+        ]
+        + [
+            f"nothing recorded on {missed.isoformat()}"
+            for missed in missed_dates(detected, series[-1].date, today)
+        ]
+    )
 
 
 def detect_series(
@@ -731,16 +822,9 @@ def detect_series(
                         detected, [p.amount for p in series], last.date, today
                     ),
                     next_expected_date=next_expected(detected, last.date, today),
-                    reasons=[_schedule_reason(detected, len(series), sample.type)]
-                    + [
-                        f"price changed in {_month_label(changed)}"
-                        for changed in price_changes
-                        if changed > series[0].date
-                    ]
-                    + [
-                        f"nothing recorded on {missed.isoformat()}"
-                        for missed in missed_dates(detected, last.date, today)
-                    ],
+                    reasons=_reasons(
+                        detected, series, price_changes, sample.type, today
+                    ),
                 )
             )
     _assign_fingerprints(candidates)
