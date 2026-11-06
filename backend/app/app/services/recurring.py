@@ -19,7 +19,19 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Date, and_, cast, exists, func, or_, select, tuple_, update
+from sqlalchemy import (
+    Date,
+    and_,
+    case,
+    cast,
+    exists,
+    func,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -87,8 +99,32 @@ TRANSACTION_MODELS = {
 }
 
 
+_postgres_timezones: frozenset[str] | None = None
+
+
+class InvalidTimezoneError(DomainError):
+    # Same status as a timezone the request schema rejects.
+    status_code = 422
+
+
 def local_today(tz: str) -> date:
     return datetime.now(ZoneInfo(tz)).date()
+
+
+async def postgres_timezones(db: AsyncSession) -> frozenset[str]:
+    """Timezone names the database knows, loaded once per process."""
+    global _postgres_timezones
+    if _postgres_timezones is None:
+        result = await db.execute(text("SELECT name FROM pg_timezone_names"))
+        _postgres_timezones = frozenset(result.scalars())
+    return _postgres_timezones
+
+
+async def _validate_timezone(db: AsyncSession, tz: str) -> None:
+    # Python's tzdata may know zones the database doesn't, and the worker's
+    # due query evaluates every template's timezone in SQL.
+    if tz not in await postgres_timezones(db):
+        raise InvalidTimezoneError("Unknown timezone")
 
 
 def _shift_years(day: date, years: int) -> date:
@@ -407,6 +443,7 @@ async def create_recurring(
     """
     fields = data.model_dump(exclude_none=True)
     fields.setdefault("timezone", "UTC")
+    await _validate_timezone(db, fields["timezone"])
     _validate_dates(fields)
     _validate_rule(_rule_from_fields(fields))
     fields = await _validate_fields(db, user, data.type, fields)
@@ -512,6 +549,8 @@ async def _apply_update(
     template: RecurringTransaction,
     changes: dict,
 ) -> None:
+    if changes.get("timezone") not in (None, template.timezone):
+        await _validate_timezone(db, changes["timezone"])
     merged = {
         column: getattr(template, column)
         for column in (
@@ -784,7 +823,15 @@ async def claim_due(db: AsyncSession, *, limit: int = 50) -> dict[int, datetime]
     Returns the lease token of each claimed template, to pass to `generate_due`.
     """
     now = datetime.now(timezone.utc)
-    local_date = cast(func.timezone(RecurringTransaction.timezone, func.now()), Date)
+    known = sorted(await postgres_timezones(db))
+    # A timezone the database doesn't know would fail the whole query, and so
+    # stop generation for every user: such templates are skipped instead.
+    local_date = case(
+        (
+            RecurringTransaction.timezone.in_(known),
+            cast(func.timezone(RecurringTransaction.timezone, func.now()), Date),
+        )
+    )
     due = (
         select(RecurringTransaction.id)
         .where(

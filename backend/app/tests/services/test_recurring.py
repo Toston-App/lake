@@ -11,7 +11,7 @@ from app.models import Expense, Income, RecurringTransaction, Transfer, User
 from app.services import accounts as account_service
 from app.services import catalog as catalog_service
 from app.services import recurring as recurring_service
-from app.services.errors import ConflictError
+from app.services.errors import ConflictError, ServiceError
 from app.worker import recurring_worker
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -163,6 +163,54 @@ async def test_claim_due_leases_only_due_templates(
     assert paused.id not in claimed
     # Leased templates are not claimed twice.
     assert due.id not in await recurring_service.claim_due(db_session)
+
+
+async def test_claim_due_survives_a_timezone_postgres_does_not_know(
+    db_session: AsyncSession, test_user: User
+):
+    # Python's tzdata may know a zone the database doesn't (e.g. a new one).
+    stranger = await create_test_user(db_session, email="stranger@example.com")
+    unknown = await _create(db_session, stranger)
+    due = await _create(db_session, test_user)
+    for template in (unknown, due):
+        template.next_run_date = TODAY - timedelta(days=1)
+    unknown.timezone = "Mars/Olympus"
+    await db_session.commit()
+
+    claimed = await recurring_service.claim_due(db_session)
+    assert due.id in claimed
+    assert unknown.id not in claimed
+
+
+def _python_knows(monkeypatch: pytest.MonkeyPatch, tz: str) -> None:
+    from app.schemas import recurring_transaction as recurring_schemas
+
+    known = recurring_schemas._known_timezones() | {tz}
+    monkeypatch.setattr(recurring_schemas, "_known_timezones", lambda: known)
+    local_today = recurring_service.local_today
+    monkeypatch.setattr(
+        recurring_service,
+        "local_today",
+        lambda zone: local_today("UTC" if zone == tz else zone),
+    )
+
+
+async def test_timezone_unknown_to_postgres_is_rejected(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    _python_knows(monkeypatch, "Mars/Olympus")
+    with pytest.raises(ServiceError) as rejected:
+        await _create(db_session, test_user, timezone="Mars/Olympus")
+    # Same status as a timezone the schema rejects.
+    assert rejected.value.status_code == 422
+
+    template = await _create(db_session, test_user)
+    # Called directly: the leased update's rollback would end the test's
+    # outer transaction.
+    with pytest.raises(ServiceError):
+        await recurring_service._apply_update(
+            db_session, test_user, template, {"timezone": "Mars/Olympus"}
+        )
 
 
 async def test_leased_template_is_not_generated_by_requests(
