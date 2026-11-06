@@ -4,8 +4,10 @@ Both are optional. Callers get an empty answer when the AI is disabled, slow or
 failing, and detection carries on with the deterministic fallback.
 
 Privacy: only normalized descriptions, place names, category names, the
-transaction type and the series' amounts and schedule are sent. Never account
-names, ids, emails or the user's name.
+transaction type and the series' amounts and schedule are sent; never account
+names, ids or the user's email. Descriptions are free text the user wrote or
+imported, so they may still contain names (e.g. "transfer to Ana"). Requests
+are routed only to providers that don't store data (`data_collection: deny`).
 """
 
 from __future__ import annotations
@@ -129,6 +131,8 @@ def build_model() -> OpenRouterModel:
         ),
         settings={
             "openrouter_usage": {"include": True},
+            # Only providers that don't retain or train on the prompts.
+            "openrouter_provider": {"data_collection": "deny"},
             "max_tokens": MAX_OUTPUT_TOKENS,
             "temperature": 0,
         },
