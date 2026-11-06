@@ -238,7 +238,10 @@ requests can't both use the free scan:
    `Retry-After`; otherwise 409 "a scan is already running" (two parallel
    first scans: one runs, one gets 409).
 3. On success: `status='done'`, `last_scan_at`, `last_result`, and
-   `scan_count += 1` when the scan returned suggestions; commit.
+   `scan_count += 1` when the scan returned suggestions; commit. If the claim
+   was taken over meanwhile (no row matched), nothing is saved or counted and
+   the scan returns 409 "this result was not saved"; `GET /detect/last` shows
+   the newer scan's result once it finishes.
 4. On any error during the scan: reset `status='done'` without touching
    `scan_count`, so a failed scan doesn't use the free one. AI fallback is not an
    error: a scan that completes without AI counts.
@@ -248,7 +251,8 @@ requests can't both use the free scan:
    runs as a background task on a session of its own, gives up after 10 s
    (the claim then goes stale on its own) and is awaited on shutdown. The
    1-minute cooldown keeps cancelling from being a way to start scans back to
-   back.
+   back. A cancel during the claim's own commit releases the claim the same
+   way, since the commit may have reached the server.
 
 402 body, same shape as the chat quota:
 
@@ -600,6 +604,8 @@ AI calls are replaced with `pydantic_ai.models.function.FunctionModel` via
 - `GET /detect/status`: running while claimed, not running once released or stale
 - cancelled scan: claim released from its own session, free scan not used, next scan 429 until the cooldown ends
 - a stale scan that fails or is cancelled leaves the claim of the newer scan that took it over
+- a stale scan that finishes after a takeover → 409, nothing saved or counted
+- a cancel right after the claim commits → claim released, not running
 
 ## 10. Implementation order
 

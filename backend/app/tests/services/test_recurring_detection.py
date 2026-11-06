@@ -853,6 +853,67 @@ async def test_cancel_release_uses_a_session_of_its_own(
             await cleanup.commit()
 
 
+async def test_scan_whose_claim_was_taken_over_raises_conflict(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    await add_series(db_session, test_user)
+    real_detect = detection.detect
+    newer_claim = datetime.now(timezone.utc) + timedelta(seconds=1)
+
+    async def slow_detect(db, user, **kwargs):
+        scan = await real_detect(db, user, **kwargs)
+        # Meanwhile the claim went stale and a newer scan took it over.
+        await db.execute(
+            update(RecurringDetectionUsage)
+            .where(RecurringDetectionUsage.owner_id == user.id)
+            .values(claimed_at=newer_claim)
+        )
+        await db.commit()
+        return scan
+
+    monkeypatch.setattr(detection, "detect", slow_detect)
+    with pytest.raises(ConflictError):
+        await detection.run_scan(db_session, test_user)
+
+    # Nothing was saved or counted, and the newer scan keeps its claim.
+    usage = await _usage(db_session, test_user)
+    assert (usage.status, usage.scan_count) == ("running", 0)
+    assert usage.claimed_at == newer_claim
+    assert usage.last_result is None
+    assert await detection.scans_remaining(db_session, test_user) == 1
+
+
+async def test_cancel_right_after_the_claim_commits_releases_it(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def test_session():
+        yield db_session
+
+    real_commit = db_session.commit
+
+    async def commit_then_cancel():
+        # The claim reached the server, then the request was cancelled.
+        await real_commit()
+        monkeypatch.setattr(db_session, "commit", real_commit)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(detection, "_cleanup_session", test_session)
+    monkeypatch.setattr(db_session, "commit", commit_then_cancel)
+    with pytest.raises(asyncio.CancelledError):
+        await detection.run_scan(db_session, test_user, unlimited=False)
+    await detection.wait_for_cleanup()
+
+    status = await detection.scan_status(db_session, test_user)
+    assert status.running is False
+    assert status.scans_remaining == 1
+    usage = await _usage(db_session, test_user)
+    assert (usage.status, usage.scan_count) == ("cancelled", 0)
+
+
 async def test_newer_in_group_query_is_bounded(
     db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
 ):

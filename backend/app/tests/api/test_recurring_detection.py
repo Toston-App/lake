@@ -194,6 +194,21 @@ async def test_scan_already_running_returns_409(
     assert response.status_code == 409
 
 
+async def test_scan_whose_claim_was_taken_over_returns_409(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    test_user: User,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.services import recurring_detection as detection
+
+    await add_series(db_session, test_user)
+    monkeypatch.setattr(detection, "_finish_scan", AsyncMock(return_value=False))
+    response = await client.post(f"{PREFIX}/detect")
+    assert response.status_code == 409
+    assert "not saved" in response.json()["detail"]
+
+
 async def test_status_reports_a_running_scan(
     client: AsyncClient, db_session: AsyncSession, test_user: User
 ):

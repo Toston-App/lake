@@ -150,7 +150,9 @@ async def detect_recurring_transactions(
 
     Paid plans scan without limit. The free plan gets one scan that finds
     suggestions (402 after that); a scan that finds nothing doesn't count.
-    The last result stays available at `GET /detect/last`.
+    The last result stays available at `GET /detect/last`. 409 when another
+    scan is running, or when this one ran so long that a newer scan took
+    over; its result is then not saved.
 
     With `use_ai`, descriptions, place and category names, and each series'
     schedule and amounts are sent to the AI provider to group merchants and

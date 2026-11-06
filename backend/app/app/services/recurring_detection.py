@@ -181,7 +181,15 @@ async def claim_scan(
         .returning(Usage.owner_id)
     )
     claimed = (await db.execute(stmt)).scalar_one_or_none()
-    await db.commit()
+    try:
+        await db.commit()
+    except asyncio.CancelledError:
+        # The commit may have reached the server before the cancel did: free
+        # the claim, or it would block scans until it goes stale. The release
+        # only touches a row holding this claim, so it's a no-op otherwise.
+        if claimed is not None:
+            _release_in_background(user.id, now)
+        raise
     if claimed is not None:
         return now
     usage = await _usage(db, user)
@@ -807,7 +815,8 @@ async def run_scan(
 
     A scan only uses up the free scan when it returns suggestions. If the scan
     or saving its result fails, or the request is cancelled, the slot is
-    released without counting.
+    released without counting. Raises ConflictError, without saving, when
+    the claim went stale and a newer scan took it over.
     """
     user_id = user.id
     if unlimited is None:
@@ -817,7 +826,7 @@ async def run_scan(
         scan = await detect(db, user, use_ai=use_ai, today=today)
         counted = bool(scan.result.suggestions)
         scan.result.scans_remaining = None if unlimited else (0 if counted else 1)
-        await _finish_scan(
+        saved = await _finish_scan(
             db,
             user_id,
             claimed_at=claimed_at,
@@ -832,6 +841,10 @@ async def run_scan(
     except Exception:
         await release_scan(db, user_id, claimed_at)
         raise
+    if not saved:
+        # The claim went stale and a newer scan took it over: nothing was
+        # saved or counted, and `/detect/last` will show the newer scan.
+        raise ConflictError("Another scan took over; this result was not saved")
     return scan
 
 
