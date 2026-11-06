@@ -14,6 +14,7 @@ from app.models import (
     RecurringTransaction,
     User,
 )
+from app.services import recurring as recurring_service
 from app.services import recurring_detection as detection
 from app.services.errors import ConflictError, NotFoundError
 from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
@@ -286,6 +287,62 @@ async def test_accept_with_an_older_transaction_fails_only_that_item(
     )
     assert [r.status for r in results] == ["error", "created"]
     assert "latest transaction" in results[0].error
+
+
+async def test_accept_fails_when_the_transaction_is_linked_after_the_check(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    """A concurrent mark-as-recurring links the transaction after it was checked."""
+    await add_series(db_session, test_user)
+    await add_series(db_session, test_user, description="Spotify", amount=9.99, day=20)
+    netflix, spotify = sorted(
+        (await detection.detect(db_session, test_user)).result.suggestions,
+        key=lambda s: s.merchant_name,
+    )
+    contested = netflix.occurrences[0].transaction_id
+    winner = await recurring_service.create_recurring(
+        db_session,
+        test_user,
+        schemas.RecurringTransactionCreate(
+            type="expense",
+            amount=15.99,
+            frequency="monthly",
+            start_date=TODAY + timedelta(days=1),
+        ),
+    )
+    get_expense = recurring_service.transaction_service.get_expense
+
+    async def linked_meanwhile(db, owner, transaction_id):
+        transaction = await get_expense(db, owner, transaction_id)
+        if transaction_id == contested:
+            # The loaded transaction keeps its stale, unlinked state.
+            await db.execute(
+                update(Expense)
+                .where(Expense.id == contested)
+                .values(recurring_id=winner.id)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+        return transaction
+
+    monkeypatch.setattr(
+        recurring_service.transaction_service, "get_expense", linked_meanwhile
+    )
+
+    results = await detection.accept_suggestions(
+        db_session, test_user, [accept_item(netflix), accept_item(spotify)]
+    )
+    assert [r.status for r in results] == ["error", "created"]
+    assert "already belongs" in results[0].error
+    templates = await db_session.execute(
+        select(RecurringTransaction.id).where(
+            RecurringTransaction.owner_id == test_user.id,
+            RecurringTransaction.detection_fingerprint == netflix.fingerprint,
+        )
+    )
+    assert templates.scalars().all() == []
+    expense = await db_session.get(Expense, contested, populate_existing=True)
+    assert expense.recurring_id == winner.id
 
 
 async def test_accepted_suggestion_stays_hidden_after_rename(

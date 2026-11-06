@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from app.models import Expense, Income, RecurringTransaction, Transfer, User
@@ -12,7 +13,7 @@ from app.services import catalog as catalog_service
 from app.services import recurring as recurring_service
 from app.services.errors import ConflictError
 from app.worker import recurring_worker
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import schemas
@@ -648,3 +649,121 @@ async def test_worker_releases_leases_of_unreached_templates(
     assert await _locked_until(db_session, interrupted.id) is not None
     for template in unreached:
         assert await _locked_until(db_session, template.id) is None
+
+
+# -- marking a transaction as recurring -----------------------------------------
+def _from_expense(expense_id: int) -> schemas.RecurringFromTransaction:
+    return schemas.RecurringFromTransaction(
+        transaction_type="expense",
+        transaction_id=expense_id,
+        frequency="monthly",
+        timezone="UTC",
+    )
+
+
+async def test_concurrent_marks_of_one_transaction_create_one_template(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Two requests (a double click) both see the transaction unlinked."""
+    from tests.conftest import TestSessionLocal
+
+    async with TestSessionLocal() as setup:
+        user = User(email=f"race-{uuid4()}@example.com", country="USD")
+        setup.add(user)
+        await setup.commit()
+        expense = Expense(owner_id=user.id, amount=9.99, date=TODAY - timedelta(days=1))
+        setup.add(expense)
+        await setup.commit()
+        user_id, expense_id = user.id, expense.id
+
+    # Hold both requests right after they read the transaction, so each one
+    # checks `recurring_id` before either of them links it.
+    both_read = asyncio.Barrier(2)
+    get_expense = recurring_service.transaction_service.get_expense
+
+    async def get_then_wait(db, owner, transaction_id):
+        transaction = await get_expense(db, owner, transaction_id)
+        await both_read.wait()
+        return transaction
+
+    monkeypatch.setattr(
+        recurring_service.transaction_service, "get_expense", get_then_wait
+    )
+
+    async def mark():
+        async with TestSessionLocal() as db:
+            owner = await db.get(User, user_id)
+            return await recurring_service.create_from_transaction(
+                db, owner, _from_expense(expense_id)
+            )
+
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(mark(), mark(), return_exceptions=True), timeout=30
+        )
+        created = [r for r in results if isinstance(r, RecurringTransaction)]
+        conflicts = [r for r in results if isinstance(r, ConflictError)]
+        assert (len(created), len(conflicts)) == (1, 1), results
+
+        async with TestSessionLocal() as verify:
+            templates = await verify.execute(
+                select(RecurringTransaction.id).where(
+                    RecurringTransaction.owner_id == user_id
+                )
+            )
+            assert templates.scalars().all() == [created[0].id]
+            linked = await verify.get(Expense, expense_id)
+            assert linked.recurring_id == created[0].id
+    finally:
+        async with TestSessionLocal() as cleanup:
+            await cleanup.execute(delete(Expense).where(Expense.owner_id == user_id))
+            await cleanup.execute(
+                delete(RecurringTransaction).where(
+                    RecurringTransaction.owner_id == user_id
+                )
+            )
+            await cleanup.execute(delete(User).where(User.id == user_id))
+            await cleanup.commit()
+
+
+async def test_mark_as_recurring_conflicts_when_linked_after_the_check(
+    db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
+):
+    """The transaction read as unlinked is linked by another request meanwhile."""
+    expense = Expense(
+        owner_id=test_user.id, amount=9.99, date=TODAY - timedelta(days=1)
+    )
+    db_session.add(expense)
+    await db_session.commit()
+    winner = await _create(db_session, test_user)
+    get_expense = recurring_service.transaction_service.get_expense
+
+    async def linked_meanwhile(db, owner, transaction_id):
+        transaction = await get_expense(db, owner, transaction_id)
+        # Another request links it; this one keeps its stale read.
+        await db.execute(
+            update(Expense)
+            .where(Expense.id == transaction_id)
+            .values(recurring_id=winner.id)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        return transaction
+
+    monkeypatch.setattr(
+        recurring_service.transaction_service, "get_expense", linked_meanwhile
+    )
+
+    with pytest.raises(ConflictError):
+        await recurring_service.create_from_transaction(
+            db_session, test_user, _from_expense(expense.id)
+        )
+
+    templates = await db_session.execute(
+        select(RecurringTransaction.id).where(
+            RecurringTransaction.owner_id == test_user.id
+        )
+    )
+    assert templates.scalars().all() == [winner.id]
+    expense = await db_session.get(Expense, expense.id, populate_existing=True)
+    assert expense.recurring_id == winner.id

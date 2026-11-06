@@ -10,9 +10,18 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
-from app.models import Account, Category, Expense, Income, Transfer, User
+from app.models import (
+    Account,
+    Category,
+    Expense,
+    Income,
+    RecurringTransaction,
+    Transfer,
+    User,
+)
+from app.services import transactions as transaction_service
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.utils import (
@@ -384,6 +393,74 @@ class TestFromTransaction:
         )
         # Reported as missing, so another user's ids can't be probed.
         assert resp.status_code == 404
+
+    async def _templates(self, db: AsyncSession, user: User) -> list[int]:
+        result = await db.execute(
+            select(RecurringTransaction.id).where(
+                RecurringTransaction.owner_id == user.id
+            )
+        )
+        return list(result.scalars().all())
+
+    async def test_marking_a_linked_transaction_again_is_rejected(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        expense = await create_test_expense(
+            db_session, owner_id=test_user.id, expense_date=TODAY - timedelta(days=1)
+        )
+        body = {
+            "transaction_type": "expense",
+            "transaction_id": expense.id,
+            "frequency": "monthly",
+        }
+        first = await client.post(f"{PREFIX}/from-transaction", json=body)
+        assert first.status_code == 200, first.text
+        again = await client.post(f"{PREFIX}/from-transaction", json=body)
+        assert again.status_code == 400
+        assert "already belongs" in again.json()["detail"]
+        assert await self._templates(db_session, test_user) == [first.json()["id"]]
+
+    async def test_mark_linked_by_a_concurrent_request_conflicts(
+        self,
+        client: AsyncClient,
+        db_session: AsyncSession,
+        test_user: User,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        expense = await create_test_expense(
+            db_session, owner_id=test_user.id, expense_date=TODAY - timedelta(days=1)
+        )
+        winner = await client.post(PREFIX, json=_weekly_expense())
+        assert winner.status_code == 200, winner.text
+        winner_id = winner.json()["id"]
+        get_expense = transaction_service.get_expense
+
+        async def linked_meanwhile(db, owner, transaction_id):
+            # The request reads the expense unlinked, then the concurrent
+            # request links it before this one writes.
+            transaction = await get_expense(db, owner, transaction_id)
+            await db.execute(
+                update(Expense)
+                .where(Expense.id == transaction_id)
+                .values(recurring_id=winner_id)
+                .execution_options(synchronize_session=False)
+            )
+            await db.commit()
+            return transaction
+
+        monkeypatch.setattr(transaction_service, "get_expense", linked_meanwhile)
+        resp = await client.post(
+            f"{PREFIX}/from-transaction",
+            json={
+                "transaction_type": "expense",
+                "transaction_id": expense.id,
+                "frequency": "monthly",
+            },
+        )
+        assert resp.status_code == 409, resp.text
+        assert await self._templates(db_session, test_user) == [winner_id]
+        expense = await _reload(db_session, Expense, expense.id)
+        assert expense.recurring_id == winner_id
 
 
 class TestUpdateRecurring:

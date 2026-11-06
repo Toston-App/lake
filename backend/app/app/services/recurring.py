@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import Date, and_, cast, exists, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app import crud, models, schemas
 from app.core.recurrence import (
@@ -395,7 +396,8 @@ async def create_recurring(
     """Create a template and generate anything already due.
 
     With `source_transaction`, that transaction becomes the first occurrence
-    of the series (it is linked in the same commit, so it is never duplicated).
+    of the series (it is linked in the same commit, so it is never duplicated);
+    `ConflictError` if another series linked it since the caller checked.
     With `from_suggestion` (a detected series being accepted):
     - the transaction counts as the rule's nearest date (within a few days),
       so a charge on Friday the 13th for a series due on the 15th doesn't
@@ -443,13 +445,44 @@ async def create_recurring(
         )
     else:
         _reschedule(template)
-    db.add(template)
-    await db.flush()
-    if source_transaction is not None:
-        source_transaction.recurring_id = template.id
+    # A savepoint, so losing the source transaction to another series undoes
+    # only this template and leaves the caller's session usable.
+    async with db.begin_nested():
+        db.add(template)
+        await db.flush()
+        if source_transaction is not None:
+            await _link_source(db, user, source_transaction, template.id)
     await db.commit()
     await generate_due(db, template.id)
     return await get_recurring(db, user, template.id)
+
+
+async def _link_source(
+    db: AsyncSession, user: models.User, transaction, recurring_id: int
+) -> None:
+    """Make `transaction` the first occurrence, unless a series already has it.
+
+    The caller checked `recurring_id` on a row it read earlier; a concurrent
+    request (a double click, or accepting the same transaction as a suggestion)
+    may have linked it since. The conditional update waits for that request's
+    row lock and then matches nothing, so only one template ever gets the
+    transaction.
+    """
+    model = type(transaction)
+    result = await db.execute(
+        update(model)
+        .where(
+            model.id == transaction.id,
+            model.owner_id == user.id,
+            model.recurring_id.is_(None),
+        )
+        .values(recurring_id=recurring_id)
+        .returning(model.id)
+        .execution_options(synchronize_session=False)
+    )
+    if result.first() is None:
+        raise ConflictError("This transaction already belongs to a recurring series")
+    set_committed_value(transaction, "recurring_id", recurring_id)
 
 
 async def update_recurring(
