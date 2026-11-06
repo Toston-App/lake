@@ -572,11 +572,12 @@ async def resolve_merchants(
 # Skipping what the user already has
 # ---------------------------------------------------------------------------
 def _series_key(candidate: Candidate) -> tuple:
-    latest = candidate.latest
-    merchant = candidate.merchant_key if candidate.has_text else None
-    if candidate.type == RecurringType.transfer:
-        return (candidate.type, latest.account_id, latest.to_account_id, merchant)
-    return (candidate.type, merchant)
+    merchant = (
+        Merchant(candidate.merchant_key, candidate.merchant_name)
+        if candidate.has_text
+        else None
+    )
+    return group_key(candidate.latest, merchant)
 
 
 def _amount_distance(candidate: Candidate, amount: float) -> float:
