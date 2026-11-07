@@ -11,6 +11,7 @@ import ast
 import inspect
 import textwrap
 from datetime import datetime, timedelta, timezone
+from importlib import import_module
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -19,6 +20,8 @@ from app.models import Expense, Income, RecurringTransaction, Transfer, User
 from app.schemas.transaction import TransactionType
 from app.services import recurring as recurring_service
 from app.services import recurring_detection as detection
+from app.services.recurring_detection import history as detection_history
+from app.services.recurring_detection import suggestions as detection_suggestions
 from httpx import AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -374,7 +377,7 @@ async def test_load_points_maps_each_type(db_session: AsyncSession, test_user: U
     by_type = {p.type.value: p for p in points}
     assert len(points) == 3
     common = {"date": day, "to_account_id": None}
-    assert by_type["expense"] == detection.TxPoint(
+    assert by_type["expense"] == detection_history.TxPoint(
         id=expense.id,
         type="expense",
         amount=9.0,
@@ -387,7 +390,7 @@ async def test_load_points_maps_each_type(db_session: AsyncSession, test_user: U
         category_name="Food",
         **common,
     )
-    assert by_type["income"] == detection.TxPoint(
+    assert by_type["income"] == detection_history.TxPoint(
         id=income.id,
         type="income",
         amount=900.0,
@@ -400,7 +403,7 @@ async def test_load_points_maps_each_type(db_session: AsyncSession, test_user: U
         category_name="Groceries",
         **common,
     )
-    assert by_type["transfer"] == detection.TxPoint(
+    assert by_type["transfer"] == detection_history.TxPoint(
         id=transfer.id,
         type="transfer",
         date=day,
@@ -443,7 +446,10 @@ async def test_accept_transfer_compares_accounts(
         transaction_id=old.id,
         frequency="monthly",
     )
-    assert await detection._newer_in_group(db_session, test_user, item, old) is None
+    assert (
+        await detection_suggestions._newer_in_group(db_session, test_user, item, old)
+        is None
+    )
     newer = await create_test_transfer(
         db_session,
         owner_id=test_user.id,
@@ -453,7 +459,9 @@ async def test_accept_transfer_compares_accounts(
         transfer_date=TODAY - timedelta(days=1),
         description="Savings",
     )
-    found = await detection._newer_in_group(db_session, test_user, item, old)
+    found = await detection_suggestions._newer_in_group(
+        db_session, test_user, item, old
+    )
     assert found is not None
     assert (found.id, found.account_id, found.to_account_id) == (
         newer.id,
@@ -682,9 +690,18 @@ def test_single_type_registry():
     from app.services import transaction_kinds
 
     assert set(transaction_kinds.KINDS) == set(TransactionType)
-    assert not hasattr(detection, "_TYPE_MODELS")
+    detection_paths = sorted(
+        (APP_DIR / "services" / "recurring_detection").glob("*.py")
+    )
+    assert detection_paths
+    detection_modules = [str(path.relative_to(APP_DIR)) for path in detection_paths]
+    for path in detection_paths:
+        name = detection.__name__
+        if path.stem != "__init__":
+            name = f"{name}.{path.stem}"
+        assert not hasattr(import_module(name), "_TYPE_MODELS")
     assert not hasattr(recurring_service, "TRANSACTION_MODELS")
-    for relative in (*RECURRING_SOURCES, "services/recurring_detection.py"):
+    for relative in (*RECURRING_SOURCES, *detection_modules):
         source = _source(relative)
         for name in ("models.Expense", "delete_expense", "get_expense", "from_acc"):
             assert name not in source, (relative, name)

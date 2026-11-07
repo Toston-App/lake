@@ -88,16 +88,16 @@ def _skips(enriched: list[dict]) -> list[dict]:
 @pytest.fixture
 def detect_use_ai(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
     """The use_ai each detection pass actually ran with."""
-    from app.services import recurring_detection as detection
+    from app.services.recurring_detection import scan as detection_scan
 
     seen: list[bool] = []
-    detect = detection.detect
+    detect = detection_scan.detect
 
     async def spy(*args, **kwargs):
         seen.append(kwargs["use_ai"])
         return await detect(*args, **kwargs)
 
-    monkeypatch.setattr(detection, "detect", spy)
+    monkeypatch.setattr(detection_scan, "detect", spy)
     return seen
 
 

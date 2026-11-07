@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.models import RecurringTransaction, User
 from app.services import recurring_detection as detection
 from app.services.errors import ConflictError, DomainError, ServiceError, raise_http
+from app.services.recurring_detection import suggestions as detection_suggestions
 from app.utilities import wide_events
 from fastapi import HTTPException
 from httpx import AsyncClient
@@ -297,7 +298,7 @@ async def test_detect_last_not_found(client: AsyncClient):
 
 
 async def test_dismiss_cap(client: AsyncClient, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(detection, "MAX_DISMISSALS_PER_USER", 0)
+    monkeypatch.setattr(detection_suggestions, "MAX_DISMISSALS_PER_USER", 0)
     response = await client.post(
         f"{PREFIX}/suggestions/dismiss", json={"items": [{"fingerprint": "c" * 32}]}
     )

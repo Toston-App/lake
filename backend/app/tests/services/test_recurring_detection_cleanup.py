@@ -18,6 +18,8 @@ from app.core.recurrence_detection import AMOUNT_TOLERANCE
 from app.models import User
 from app.models.recurring_detection import RecurringDetectionUsage
 from app.services import recurring_detection as detection
+from app.services.recurring_detection import access as detection_access
+from app.services.recurring_detection import suggestions as detection_suggestions
 from app.services.transaction_kinds import KINDS
 from httpx import AsyncClient
 from pydantic import ValidationError
@@ -40,9 +42,17 @@ from tests.utils import (
 )
 
 PREFIX = "/api/v1/recurring"
-APP_DIR = Path(detection.__file__).resolve().parents[1]
-SERVICE_SOURCE = Path(detection.__file__).read_text()
-SERVICE_TREE = ast.parse(SERVICE_SOURCE)
+PACKAGE_DIR = Path(detection.__file__).resolve().parent
+APP_DIR = PACKAGE_DIR.parents[1]
+# The whole package as one tree, so the checks see every module.
+SERVICE_TREE = ast.Module(
+    body=[
+        node
+        for path in sorted(PACKAGE_DIR.glob("*.py"))
+        for node in ast.parse(path.read_text()).body
+    ],
+    type_ignores=[],
+)
 
 
 @pytest.fixture(autouse=True)
@@ -203,10 +213,12 @@ async def test_unexpected_accept_error_json_is_pinned(
     async def boom(*args, **kwargs):  # noqa: ARG001
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(detection.recurring_service, "create_from_transaction", boom)
+    monkeypatch.setattr(
+        detection_suggestions.recurring_service, "create_from_transaction", boom
+    )
     # The test session can't roll back without losing the fixtures; the
     # rollback itself isn't what's pinned here.
-    monkeypatch.setattr(detection, "_rollback", AsyncMock())
+    monkeypatch.setattr(detection_suggestions, "_rollback", AsyncMock())
     item = schemas.RecurringSuggestionAccept(
         fingerprint=suggestion.fingerprint,
         transaction_type=suggestion.type.value,
@@ -230,7 +242,7 @@ async def test_stored_scan_statuses_are_plain_strings(
 ):
     claimed_at = await detection.claim_scan(db_session, test_user, unlimited=True)
     assert await _stored_status(db_session, test_user) == "running"
-    await detection._finish_scan(
+    await detection_access._finish_scan(
         db_session, test_user.id, claimed_at=claimed_at, status="cancelled"
     )
     assert await _stored_status(db_session, test_user) == "cancelled"
@@ -334,6 +346,7 @@ def test_scan_statuses_are_an_enum_with_the_stored_values():
     assert sorted(literals(SERVICE_TREE)) == sorted(literals(enum_class))
     for name in ("RUNNING", "DONE", "CANCELLED"):
         assert not hasattr(detection, name)
+        assert not hasattr(detection_access, name)
 
 
 def test_recurring_type_alias_is_gone():

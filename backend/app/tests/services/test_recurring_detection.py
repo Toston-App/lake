@@ -17,6 +17,9 @@ from app.models import (
 from app.services import recurring as recurring_service
 from app.services import recurring_detection as detection
 from app.services.errors import ConflictError, NotFoundError
+from app.services.recurring_detection import access as detection_access
+from app.services.recurring_detection import scan as detection_scan
+from app.services.recurring_detection import suggestions as detection_suggestions
 from pydantic_ai.messages import ModelResponse, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from sqlalchemy import select, update
@@ -599,7 +602,7 @@ def test_classify_detects_failure_without_diffing_error_counts():
     import ast
     import inspect
 
-    tree = ast.parse(inspect.getsource(detection._classify))
+    tree = ast.parse(inspect.getsource(detection_scan._classify))
     stats_reads = [
         node
         for node in ast.walk(tree)
@@ -609,7 +612,7 @@ def test_classify_detects_failure_without_diffing_error_counts():
         and node.value.id == "stats"
     ]
     assert stats_reads == []
-    suggestion = inspect.getsource(detection._to_suggestion)
+    suggestion = inspect.getsource(detection_scan._to_suggestion)
     assert "habit" not in suggestion
 
 
@@ -657,7 +660,7 @@ async def test_failed_scan_does_not_use_the_free_scan(
     db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
 ):
     await add_series(db_session, test_user)
-    monkeypatch.setattr(detection, "detect", AsyncMock(side_effect=RuntimeError))
+    monkeypatch.setattr(detection_scan, "detect", AsyncMock(side_effect=RuntimeError))
     with pytest.raises(RuntimeError):
         await detection.run_scan(db_session, test_user)
     usage = await _usage(db_session, test_user)
@@ -892,7 +895,7 @@ async def test_failed_save_releases_the_scan(
     db_session: AsyncSession, test_user: User, monkeypatch: pytest.MonkeyPatch
 ):
     await add_series(db_session, test_user)
-    real_finish = detection._finish_scan
+    real_finish = detection_access._finish_scan
     calls = {"n": 0}
 
     async def flaky(db, user_id, **kwargs):
@@ -901,7 +904,7 @@ async def test_failed_save_releases_the_scan(
             raise RuntimeError("db hiccup")
         return await real_finish(db, user_id, **kwargs)
 
-    monkeypatch.setattr(detection, "_finish_scan", flaky)
+    monkeypatch.setattr(detection_scan, "_finish_scan", flaky)
     with pytest.raises(RuntimeError):
         await detection.run_scan(db_session, test_user)
     usage = await _usage(db_session, test_user)
@@ -941,7 +944,7 @@ async def test_release_leaves_a_claim_taken_over_by_a_newer_scan(
 
 async def test_cancel_cooldown_expires(db_session: AsyncSession, test_user: User):
     claimed_at = await detection.claim_scan(db_session, test_user, unlimited=True)
-    await detection._finish_scan(
+    await detection_access._finish_scan(
         db_session,
         test_user.id,
         claimed_at=claimed_at,
@@ -969,7 +972,7 @@ async def test_cancel_release_uses_a_session_of_its_own(
 
     from tests.conftest import TestSessionLocal
 
-    monkeypatch.setattr(detection, "async_session", TestSessionLocal)
+    monkeypatch.setattr(detection_access, "async_session", TestSessionLocal)
     async with TestSessionLocal() as setup:
         user = User(email=f"cancel-{uuid4()}@example.com", country="USD")
         setup.add(user)
@@ -978,7 +981,7 @@ async def test_cancel_release_uses_a_session_of_its_own(
         claimed_at = await detection.claim_scan(setup, user, unlimited=False)
 
     try:
-        detection._release_in_background(user_id, claimed_at)
+        detection_access._release_in_background(user_id, claimed_at)
         await detection.wait_for_cleanup()
         async with TestSessionLocal() as verify:
             usage = await verify.get(RecurringDetectionUsage, user_id)
@@ -1007,7 +1010,7 @@ async def test_scan_whose_claim_was_taken_over_raises_conflict(
         await db.commit()
         return scan
 
-    monkeypatch.setattr(detection, "detect", slow_detect)
+    monkeypatch.setattr(detection_scan, "detect", slow_detect)
     with pytest.raises(ConflictError):
         await detection.run_scan(db_session, test_user)
 
@@ -1037,7 +1040,7 @@ async def test_cancel_right_after_the_claim_commits_releases_it(
         monkeypatch.setattr(db_session, "commit", real_commit)
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(detection, "_cleanup_session", test_session)
+    monkeypatch.setattr(detection_access, "_cleanup_session", test_session)
     monkeypatch.setattr(db_session, "commit", commit_then_cancel)
     with pytest.raises(asyncio.CancelledError):
         await detection.run_scan(db_session, test_user, unlimited=False)
@@ -1055,7 +1058,7 @@ async def test_newer_in_group_query_is_bounded(
 ):
     # Only the newest NEWER_IN_GROUP_LIMIT transactions are compared; the
     # newest same-merchant charge is still found.
-    monkeypatch.setattr(detection, "NEWER_IN_GROUP_LIMIT", 1)
+    monkeypatch.setattr(detection_suggestions, "NEWER_IN_GROUP_LIMIT", 1)
     old = await create_test_expense(
         db_session,
         owner_id=test_user.id,
@@ -1084,7 +1087,9 @@ async def test_newer_in_group_query_is_bounded(
         transaction_id=old.id,
         frequency="monthly",
     )
-    found = await detection._newer_in_group(db_session, test_user, item, old)
+    found = await detection_suggestions._newer_in_group(
+        db_session, test_user, item, old
+    )
     assert found is not None and found.id == newest.id
 
 

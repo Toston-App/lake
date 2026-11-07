@@ -107,17 +107,17 @@ async def test_rate_limit_fails_open_without_ai(
     _isolate: AsyncMock,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from app.services import recurring_detection as detection
+    from app.services.recurring_detection import scan as detection_scan
 
     monkeypatch.setattr(settings, "RECURRING_DETECTION_AI_ENABLED", True)
     calls = []
-    detect = detection.detect
+    detect = detection_scan.detect
 
     async def spy(*args, **kwargs):
         calls.append(kwargs["use_ai"])
         return await detect(*args, **kwargs)
 
-    monkeypatch.setattr(detection, "detect", spy)
+    monkeypatch.setattr(detection_scan, "detect", spy)
     _isolate.side_effect = RuntimeError("redis down")
     assert (await client.post(f"{PREFIX}/detect")).status_code == 200
     # Without the limiter the scan still runs, but never calls the AI.
@@ -200,10 +200,10 @@ async def test_scan_whose_claim_was_taken_over_returns_409(
     test_user: User,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from app.services import recurring_detection as detection
+    from app.services.recurring_detection import scan as detection_scan
 
     await add_series(db_session, test_user)
-    monkeypatch.setattr(detection, "_finish_scan", AsyncMock(return_value=False))
+    monkeypatch.setattr(detection_scan, "_finish_scan", AsyncMock(return_value=False))
     response = await client.post(f"{PREFIX}/detect")
     assert response.status_code == 409
     assert "not saved" in response.json()["detail"]
@@ -250,6 +250,8 @@ async def test_cancelled_scan_releases_the_claim(
     from contextlib import asynccontextmanager
 
     from app.services import recurring_detection as detection
+    from app.services.recurring_detection import access as detection_access
+    from app.services.recurring_detection import scan as detection_scan
 
     @asynccontextmanager
     async def test_session():
@@ -258,12 +260,12 @@ async def test_cancelled_scan_releases_the_claim(
     async def cancelled(*_args, **_kwargs):
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(detection, "_cleanup_session", test_session)
-    monkeypatch.setattr(detection, "detect", cancelled)
+    monkeypatch.setattr(detection_access, "_cleanup_session", test_session)
+    monkeypatch.setattr(detection_scan, "detect", cancelled)
 
     with pytest.raises(asyncio.CancelledError):
         await detection.run_scan(db_session, test_user, unlimited=False)
-    await asyncio.gather(*detection._cleanup_tasks)
+    await asyncio.gather(*detection_access._cleanup_tasks)
 
     status = (await client.get(f"{PREFIX}/detect/status")).json()
     assert status["running"] is False
@@ -354,9 +356,9 @@ async def test_fingerprints_must_be_hex(client: AsyncClient):
 async def test_dismissals_per_user_are_capped(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ):
-    from app.services import recurring_detection as detection
+    from app.services.recurring_detection import suggestions as detection_suggestions
 
-    monkeypatch.setattr(detection, "MAX_DISMISSALS_PER_USER", 1)
+    monkeypatch.setattr(detection_suggestions, "MAX_DISMISSALS_PER_USER", 1)
     url = f"{PREFIX}/suggestions/dismiss"
     first = {"items": [{"fingerprint": "b" * 32}]}
     assert (await client.post(url, json=first)).json() == {"dismissed": 1}
