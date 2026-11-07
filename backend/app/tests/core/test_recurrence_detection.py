@@ -1,7 +1,10 @@
 """Pure recurring-series detection: normalization, schedules, amounts, scoring."""
 
+import ast
 from datetime import date, timedelta
+from pathlib import Path
 
+from app.core.merchant_text import normalize_description
 from app.core.recurrence import (
     BusinessDayAdjustment,
     Frequency,
@@ -12,7 +15,6 @@ from app.core.recurrence_detection import (
     TxPoint,
     _day_distance,
     detect_series,
-    normalize_description,
     point_key,
 )
 from app.core.transaction_type import TransactionType
@@ -277,3 +279,61 @@ def test_day_distance_looks_at_adjacent_months():
     assert _day_distance(date(2025, 12, 30), 1) == 2
     assert _day_distance(date(2025, 3, 2), -1) == 2
     assert _day_distance(date(2025, 6, 15), 1) == 14
+
+
+CORE_DIR = Path(__file__).resolve().parents[2] / "app" / "core"
+SPLIT_MODULES = ("merchant_text", "recurrence_scoring", "recurrence_detection")
+
+
+def _imported_modules(name: str) -> set[str]:
+    tree = ast.parse((CORE_DIR / f"{name}.py").read_text())
+    modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+        elif isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+    return modules
+
+
+def test_detection_is_split_into_small_modules():
+    sizes = {
+        name: len((CORE_DIR / f"{name}.py").read_text().splitlines())
+        for name in SPLIT_MODULES
+    }
+    assert sizes["merchant_text"] < 450, sizes
+    assert sizes["recurrence_scoring"] < 450, sizes
+    assert sizes["recurrence_detection"] < 520, sizes
+
+
+def test_split_modules_only_depend_downwards():
+    # merchant_text <- recurrence_scoring <- recurrence_detection: no cycles.
+    assert not {
+        "app.core.recurrence_detection",
+        "app.core.recurrence_scoring",
+    } & _imported_modules("merchant_text")
+    assert "app.core.recurrence_detection" not in _imported_modules(
+        "recurrence_scoring"
+    )
+
+
+def test_detection_keeps_the_names_the_service_imports():
+    import app.core.recurrence_detection as rd
+
+    for name in (
+        "AMOUNT_TOLERANCE",
+        "MAX_SUGGESTIONS",
+        "YEARLY_WINDOW_DAYS",
+        "Candidate",
+        "Merchant",
+        "PointKey",
+        "TxPoint",
+        "_within",
+        "apply_classification",
+        "detect_series",
+        "group_key",
+        "point_key",
+        "slugify",
+        "text_key",
+    ):
+        assert hasattr(rd, name), name

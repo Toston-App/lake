@@ -2,36 +2,47 @@
 
 The service loads transactions and resolves each description to a merchant;
 this module groups them, splits each group by amount, finds a schedule that
-fits the dates and scores the result. Nothing here touches the database or
-the network, so every threshold can be tested with plain dates.
+fits the dates and scores the result (`app.core.recurrence_scoring`; text
+normalization lives in `app.core.merchant_text`). Nothing here touches the
+database or the network, so every threshold can be tested with plain dates.
 """
 
 from __future__ import annotations
 
-import calendar
-import hashlib
-import re
 import statistics
-import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass
 from datetime import date, timedelta
 
+# `slugify`, `text_key` and `apply_classification` are re-exported for
+# `app.services.recurring_detection`, which imports them from here.
+from app.core.merchant_text import slugify as slugify
+from app.core.merchant_text import text_key as text_key
 from app.core.recurrence import (
     DAY_TOLERANCE,
     LAST_DAY,
     BusinessDayAdjustment,
     Frequency,
-    MonthlyMode,
-    Rule,
     add_months,
     adjust_for_weekend,
     last_day,
-    next_occurrence,
     resolve_month_day,
-    snap_to_nominal,
 )
+from app.core.recurrence_scoring import (
+    STALE_PERIODS,
+    Candidate,
+    DetectedRule,
+    Merchant,
+    PointKey,
+    TxPoint,
+    assign_fingerprints,
+    base_confidence,
+    next_expected,
+    point_key,
+    series_reasons,
+)
+from app.core.recurrence_scoring import apply_classification as apply_classification
 from app.core.transaction_type import TransactionType
 
 # Windows: yearly series need two years of history, the rest one year.
@@ -44,192 +55,7 @@ MIN_FIT = 0.75
 AMOUNT_TOLERANCE = 0.10
 # Groups without any text (no description, no place) only match exact amounts.
 EXACT_AMOUNT_TOLERANCE = 0.01
-# A series is considered stopped once this many periods pass without a charge.
-STALE_PERIODS = 1.5
 MAX_SUGGESTIONS = 50
-
-# Payment noise removed from descriptions before comparing them (es + en).
-NOISE_WORDS = frozenset(
-    {
-        "pago",
-        "pagos",
-        "payment",
-        "payments",
-        "pmt",
-        "compra",
-        "compras",
-        "purchase",
-        "pos",
-        "card",
-        "tarjeta",
-        "tdc",
-        "tdd",
-        "debit",
-        "debito",
-        "credit",
-        "credito",
-        "cargo",
-        "cargos",
-        "charge",
-        "transferencia",
-        "transfer",
-        "spei",
-        "recibo",
-        "ref",
-        "referencia",
-        "reference",
-        "visa",
-        "mastercard",
-        "mc",
-        "amex",
-        "online",
-        "en",
-        "linea",
-        "www",
-        "http",
-        "https",
-        "com",
-        "net",
-        "org",
-        "mx",
-        "es",
-        "io",
-    }
-)
-
-_URL_SCHEME = re.compile(r"\b(?:https?://|www\.)")
-_DOMAIN = re.compile(
-    r"\b([a-z0-9-]+)\.(?:com|net|org|io|co|mx|es|tv|app)(?:\.[a-z]{2})?\b"
-)
-_DATE = re.compile(r"\b\d{1,4}[/.-]\d{1,2}(?:[/.-]\d{1,4})?\b")
-_CARD = re.compile(r"(?:\*+|x{2,})\d{2,}")
-_DIGITS = re.compile(r"\b\d{3,}\b")
-_PUNCT = re.compile(r"[^a-z0-9]+")
-
-
-def _strip_accents(text: str) -> str:
-    decomposed = unicodedata.normalize("NFKD", text)
-    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-
-
-def _is_reference(token: str) -> bool:
-    """Mixed letters and digits, 6+ characters: an order or reference id."""
-    return (
-        len(token) >= 6
-        and any(ch.isdigit() for ch in token)
-        and any(ch.isalpha() for ch in token)
-    )
-
-
-def normalize_description(text: str | None) -> str:
-    """Reduce a bank description to the words that identify the counterparty."""
-    if not text:
-        return ""
-    value = _strip_accents(text.lower())
-    value = _URL_SCHEME.sub(" ", value)
-    value = _DOMAIN.sub(r"\1", value)
-    value = _CARD.sub(" ", value)
-    value = _DATE.sub(" ", value)
-    value = _DIGITS.sub(" ", value)
-    value = _PUNCT.sub(" ", value)
-    tokens = [
-        token
-        for token in value.split()
-        if token not in NOISE_WORDS and not _is_reference(token) and not token.isdigit()
-    ]
-    return " ".join(tokens)
-
-
-def slugify(text: str) -> str:
-    value = _PUNCT.sub("_", _strip_accents(text.lower())).strip("_")
-    return value[:64]
-
-
-@dataclass(frozen=True)
-class TxPoint:
-    id: int
-    type: TransactionType
-    date: date
-    amount: float
-    description: str | None = None
-    place_name: str | None = None
-    account_id: int | None = None
-    to_account_id: int | None = None  # transfers
-    category_id: int | None = None
-    subcategory_id: int | None = None
-    place_id: int | None = None
-    category_name: str | None = None
-
-
-@dataclass(frozen=True)
-class Merchant:
-    key: str
-    name: str
-
-
-PointKey = tuple[TransactionType, int]
-
-
-def point_key(point: TxPoint) -> PointKey:
-    """Ids are per table, so an expense and an income can share one."""
-    return (point.type, point.id)
-
-
-def text_key(point: TxPoint) -> str:
-    """Normalized text used to resolve the merchant; empty if there is none."""
-    return normalize_description(point.description) or normalize_description(
-        point.place_name
-    )
-
-
-@dataclass(frozen=True)
-class DetectedRule:
-    frequency: Frequency
-    interval: int
-    period_days: float
-    fit: float
-    gap_stdev: float
-    weekdays: tuple[int, ...] = ()
-    month_days: tuple[int, ...] = ()
-    adjustment: BusinessDayAdjustment = BusinessDayAdjustment.none
-
-    def rule(self, start: date) -> Rule:
-        return Rule(
-            frequency=self.frequency,
-            start_date=start,
-            interval=self.interval,
-            weekdays=self.weekdays,
-            monthly_mode=MonthlyMode.day_of_month,
-            month_days=self.month_days,
-            adjustment=self.adjustment,
-        )
-
-
-@dataclass
-class Candidate:
-    type: TransactionType
-    merchant_key: str
-    merchant_name: str
-    has_text: bool
-    points: list[TxPoint]  # ascending by date
-    detected: DetectedRule
-    confidence: float
-    next_expected_date: date | None
-    reasons: list[str] = field(default_factory=list)
-    fingerprint: str = ""
-    kind: str | None = None
-
-    @property
-    def latest(self) -> TxPoint:
-        return self.points[-1]
-
-    @property
-    def amounts(self) -> list[float]:
-        return [p.amount for p in self.points]
-
-    @property
-    def median_amount(self) -> float:
-        return statistics.median(self.amounts)
 
 
 # ---------------------------------------------------------------------------
@@ -510,86 +336,6 @@ def detect_rule(dates: list[date]) -> DetectedRule | None:
     )
 
 
-def missed_dates(detected: DetectedRule, last_date: date, today: date) -> list[date]:
-    """Dates the series was due on after its last charge and before today."""
-    rule = detected.rule(last_date)
-    nominal = snap_to_nominal(rule, last_date) or last_date
-    out = []
-    occurrence = next_occurrence(rule, after_nominal=nominal, last_actual=last_date)
-    while occurrence is not None and occurrence.actual < today:
-        out.append(occurrence.actual)
-        occurrence = next_occurrence(
-            rule, after_nominal=occurrence.nominal, last_actual=occurrence.actual
-        )
-    return out
-
-
-def next_expected(detected: DetectedRule, last_date: date, today: date) -> date | None:
-    """First date the template will create: missed dates before today are skipped."""
-    rule = detected.rule(last_date)
-    nominal = snap_to_nominal(rule, last_date) or last_date
-    occurrence = next_occurrence(
-        rule,
-        after_nominal=nominal,
-        last_actual=max(last_date, today - timedelta(days=1)),
-    )
-    return occurrence.actual if occurrence else None
-
-
-# ---------------------------------------------------------------------------
-# Scoring
-# ---------------------------------------------------------------------------
-def recency_score(last_date: date, period_days: float, today: date) -> float:
-    elapsed = (today - last_date).days
-    if elapsed <= period_days:
-        return 1.0
-    stale = period_days * STALE_PERIODS
-    if elapsed >= stale:
-        return 0.0
-    return (stale - elapsed) / (stale - period_days)
-
-
-def amount_stability(amounts: list[float]) -> float:
-    median = statistics.median(amounts)
-    if median <= 0 or len(amounts) < 2:
-        return 1.0
-    return 1 - min(statistics.pstdev(amounts) / median, 1.0)
-
-
-def base_confidence(
-    detected: DetectedRule, amounts: list[float], last_date: date, today: date
-) -> float:
-    return round(
-        0.45 * detected.fit
-        + 0.25 * amount_stability(amounts)
-        + 0.20 * min(len(amounts) / 6, 1.0)
-        + 0.10 * recency_score(last_date, detected.period_days, today),
-        4,
-    )
-
-
-def fingerprint(
-    type_: TransactionType,
-    merchant_key: str,
-    account_id: int | None,
-    to_account_id: int | None,
-    frequency: Frequency,
-    interval: int,
-    extra: str = "",
-) -> str:
-    parts = [
-        type_.value,
-        merchant_key,
-        str(account_id or ""),
-        str(to_account_id or ""),
-        frequency.value,
-        str(interval),
-    ]
-    if extra:
-        parts.append(extra)
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:32]
-
-
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -617,10 +363,6 @@ def _points_for(
 ) -> list[TxPoint]:
     days = YEARLY_WINDOW_DAYS if detected.frequency == Frequency.yearly else WINDOW_DAYS
     return _in_window(points, today, days)
-
-
-def _month_label(day: date) -> str:
-    return f"{calendar.month_abbr[day.month]} {day.year}"
 
 
 @dataclass(eq=False)
@@ -718,65 +460,6 @@ def _gap_matches(gap: int, detected: DetectedRule) -> bool:
     return False
 
 
-_WEEKDAYS = (
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-    "Sunday",
-)
-
-
-def _ordinal(day: int) -> str:
-    if day == LAST_DAY:
-        return "the last day of the month"
-    suffix = (
-        "th"
-        if 11 <= day % 100 <= 13
-        else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-    )
-    return f"the {day}{suffix}"
-
-
-def _schedule_reason(detected: DetectedRule, count: int, type_: TransactionType) -> str:
-    noun = {
-        TransactionType.expense: "charges",
-        TransactionType.income: "payments",
-        TransactionType.transfer: "transfers",
-    }[type_]
-    if detected.frequency == Frequency.weekly:
-        every = "every week" if detected.interval == 1 else "every 2 weeks"
-        return f"{count} {noun}, {every} on {_WEEKDAYS[detected.weekdays[0]]}"
-    if detected.frequency in (Frequency.monthly, Frequency.semimonthly):
-        days = " and ".join(_ordinal(d) for d in detected.month_days)
-        return f"{count} {noun} on {days}"
-    return f"{count} {noun}, once a year"
-
-
-def _reasons(
-    detected: DetectedRule,
-    series: list[TxPoint],
-    price_changes: list[date],
-    type_: TransactionType,
-    today: date,
-) -> list[str]:
-    """Why a series is suggested: its schedule, price changes and missed dates."""
-    return (
-        [_schedule_reason(detected, len(series), type_)]
-        + [
-            f"price changed in {_month_label(changed)}"
-            for changed in price_changes
-            if changed > series[0].date
-        ]
-        + [
-            f"nothing recorded on {missed.isoformat()}"
-            for missed in missed_dates(detected, series[-1].date, today)
-        ]
-    )
-
-
 def detect_series(
     points: list[TxPoint],
     merchants: dict[PointKey, Merchant],
@@ -822,47 +505,10 @@ def detect_series(
                         detected, [p.amount for p in series], last.date, today
                     ),
                     next_expected_date=next_expected(detected, last.date, today),
-                    reasons=_reasons(
+                    reasons=series_reasons(
                         detected, series, price_changes, sample.type, today
                     ),
                 )
             )
-    _assign_fingerprints(candidates)
+    assign_fingerprints(candidates)
     return candidates
-
-
-def _assign_fingerprints(candidates: list[Candidate]) -> None:
-    """Fingerprint each candidate; series sharing one get their amount added."""
-    for candidate in candidates:
-        candidate.fingerprint = _fingerprint_for(candidate)
-    counts = Counter(c.fingerprint for c in candidates)
-    for candidate in candidates:
-        if counts[candidate.fingerprint] > 1:
-            candidate.fingerprint = _fingerprint_for(
-                candidate, extra=str(round(candidate.median_amount))
-            )
-
-
-def _fingerprint_for(candidate: Candidate, extra: str = "") -> str:
-    latest = candidate.latest
-    is_transfer = candidate.type == TransactionType.transfer
-    return fingerprint(
-        candidate.type,
-        candidate.merchant_key,
-        latest.account_id if is_transfer else None,
-        latest.to_account_id if is_transfer else None,
-        candidate.detected.frequency,
-        candidate.detected.interval,
-        extra,
-    )
-
-
-def apply_classification(
-    candidate: Candidate, *, is_commitment: bool, confidence: float, kind: str
-) -> Candidate:
-    """Combine the deterministic score with the classifier's verdict."""
-    if is_commitment:
-        final = candidate.confidence * (0.6 + 0.4 * confidence)
-    else:
-        final = candidate.confidence * (1 - 0.7 * confidence)
-    return replace(candidate, confidence=round(final, 4), kind=kind)
