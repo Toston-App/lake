@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 
 from app.db.session import async_session
-from app.services.recurring import (
+from app.services.recurring_generation import (
     claim_due,
     generate_due,
     release_leases,

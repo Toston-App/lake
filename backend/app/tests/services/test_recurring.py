@@ -11,6 +11,7 @@ from app.models import Expense, Income, RecurringTransaction, Transfer, User
 from app.services import accounts as account_service
 from app.services import catalog as catalog_service
 from app.services import recurring as recurring_service
+from app.services import recurring_fields, recurring_generation, recurring_schedule
 from app.services.errors import ConflictError, ServiceError
 from app.worker import recurring_worker
 from sqlalchemy import delete, select, update
@@ -26,6 +27,20 @@ from tests.utils import (
 )
 
 TODAY = datetime.now(timezone.utc).date()
+
+# Every module that looks `local_today` up; patching only one of them would
+# leave the others on the real date.
+LOCAL_TODAY_MODULES = (
+    recurring_service,
+    recurring_fields,
+    recurring_generation,
+    recurring_schedule,
+)
+
+
+def patch_local_today(monkeypatch: pytest.MonkeyPatch, local_today) -> None:
+    for module in LOCAL_TODAY_MODULES:
+        monkeypatch.setattr(module, "local_today", local_today)
 
 
 @pytest.fixture(autouse=True)
@@ -188,7 +203,7 @@ async def test_templates_skipped_for_their_timezone_are_reported_once(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ):
-    monkeypatch.setattr(recurring_service, "_reported_unknown_timezones", set())
+    monkeypatch.setattr(recurring_generation, "_reported_unknown_timezones", set())
     unknown = await _create(db_session, test_user)
     known = await _create(db_session, test_user)
     for template in (unknown, known):
@@ -214,7 +229,7 @@ async def test_worker_reports_templates_skipped_for_their_timezone(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ):
-    monkeypatch.setattr(recurring_service, "_reported_unknown_timezones", set())
+    monkeypatch.setattr(recurring_generation, "_reported_unknown_timezones", set())
     unknown, due = await _claimed_batch(db_session, test_user, monkeypatch, 2)
     unknown.timezone = "Mars/Olympus"
     await db_session.commit()
@@ -236,10 +251,8 @@ def _python_knows(monkeypatch: pytest.MonkeyPatch, tz: str) -> None:
     known = recurring_schemas._known_timezones() | {tz}
     monkeypatch.setattr(recurring_schemas, "_known_timezones", lambda: known)
     local_today = recurring_service.local_today
-    monkeypatch.setattr(
-        recurring_service,
-        "local_today",
-        lambda zone: local_today("UTC" if zone == tz else zone),
+    patch_local_today(
+        monkeypatch, lambda zone: local_today("UTC" if zone == tz else zone)
     )
 
 
@@ -279,7 +292,7 @@ async def test_lease_is_renewed_per_occurrence_and_released(
 ):
     template = await _create(db_session, test_user)
     seen = []
-    create_occurrence = recurring_service._create_occurrence
+    create_occurrence = recurring_generation._create_occurrence
 
     async def record_lease(db, owner, tmpl, run_date):
         seen.append(
@@ -291,7 +304,7 @@ async def test_lease_is_renewed_per_occurrence_and_released(
         )
         await create_occurrence(db, owner, tmpl, run_date)
 
-    monkeypatch.setattr(recurring_service, "_create_occurrence", record_lease)
+    monkeypatch.setattr(recurring_generation, "_create_occurrence", record_lease)
     created = await recurring_service.generate_due(
         db_session, template.id, today=TODAY + timedelta(days=3)
     )
@@ -331,14 +344,16 @@ async def test_lease_lost_between_occurrences_stops_generation(
 ):
     template = await _create(db_session, test_user)
     other = datetime.now(timezone.utc) + timedelta(minutes=5)
-    create_occurrence = recurring_service._create_occurrence
+    create_occurrence = recurring_generation._create_occurrence
 
     async def create_then_lose_lease(db, owner, tmpl, run_date):
         await create_occurrence(db, owner, tmpl, run_date)
         tmpl.locked_until = other
         await db.commit()
 
-    monkeypatch.setattr(recurring_service, "_create_occurrence", create_then_lose_lease)
+    monkeypatch.setattr(
+        recurring_generation, "_create_occurrence", create_then_lose_lease
+    )
     created = await recurring_service.generate_due(
         db_session, template.id, today=TODAY + timedelta(days=3)
     )
@@ -572,7 +587,7 @@ async def test_weekend_adjustment_records_friday(
 
 
 def _set_today(monkeypatch: pytest.MonkeyPatch, day: date) -> None:
-    monkeypatch.setattr(recurring_service, "local_today", lambda tz: day)
+    patch_local_today(monkeypatch, lambda tz: day)
 
 
 async def _create_monthly_on_15th(
@@ -668,7 +683,7 @@ async def test_weekend_start_is_not_generated_on_creation(
     today: date,
     expected: date,
 ):
-    monkeypatch.setattr(recurring_service, "local_today", lambda tz: today)
+    patch_local_today(monkeypatch, lambda tz: today)
     template = await _create(
         db_session,
         test_user,

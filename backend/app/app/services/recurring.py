@@ -1,76 +1,65 @@
-"""Recurring transaction templates and the generation of their occurrences.
+"""Recurring transaction templates: create, update, skip, delete.
 
-Generated transactions go through the regular transaction services so that
-account, category and user totals stay consistent. Because those services
-commit several times per transaction, a template is protected with a short
-lease (`locked_until`) instead of a row lock while it is being generated. The
-exact `locked_until` value works as the lease token: it is renewed with a
-compare-and-set before every occurrence, so a holder whose lease was taken over
-after expiring stops instead of generating alongside the new holder.
-User changes (update, skip, delete) take the same lease, so they never
-interleave with a generation run.
+A template's schedule bookkeeping lives in `recurring_schedule`, field checks
+in `recurring_fields`, its lease in `recurring_leases` and the creation of
+its occurrences in `recurring_generation`; the public names of those modules
+are re-exported here. User changes (update, skip, delete) take the same lease
+as a generation run, so they never interleave with one.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
-from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
-from sqlalchemy import (
-    Date,
-    and_,
-    case,
-    cast,
-    exists,
-    func,
-    or_,
-    select,
-    text,
-    tuple_,
-    update,
-)
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app import crud, models, schemas
-from app.core.recurrence import (
-    BusinessDayAdjustment,
-    Frequency,
-    MonthlyMode,
-    Occurrence,
-    Rule,
-    next_occurrence,
-    snap_to_nominal,
-    upcoming,
-)
-from app.schemas.transaction import TransactionType
-from app.services.errors import (
-    ConflictError,
-    DomainError,
-    NotFoundError,
-    ServiceError,
-)
+from app.core.recurrence import next_occurrence, snap_to_nominal
+from app.services.errors import ConflictError, DomainError, NotFoundError
 from app.services.ownership import require_owned
+from app.services.recurring_fields import MAX_FUTURE_YEARS as MAX_FUTURE_YEARS
+from app.services.recurring_fields import MAX_PAST_YEARS as MAX_PAST_YEARS
+from app.services.recurring_fields import InvalidTimezoneError as InvalidTimezoneError
+from app.services.recurring_fields import _shift_years as _shift_years
+from app.services.recurring_fields import (
+    _validate_dates,
+    _validate_fields,
+    _validate_rule,
+    _validate_timezone,
+)
+from app.services.recurring_fields import earliest_start as earliest_start
+from app.services.recurring_fields import pause_for_deleted as pause_for_deleted
+from app.services.recurring_fields import preview as preview
+from app.services.recurring_generation import (
+    MAX_OCCURRENCES_PER_RUN as MAX_OCCURRENCES_PER_RUN,
+)
+from app.services.recurring_generation import claim_due as claim_due
+from app.services.recurring_generation import generate_due as generate_due
+from app.services.recurring_generation import logger as logger
+from app.services.recurring_generation import (
+    report_unknown_timezones as report_unknown_timezones,
+)
+from app.services.recurring_leases import LEASE as LEASE
+from app.services.recurring_leases import _acquire_lease, _release_lease
+from app.services.recurring_leases import release_leases as release_leases
+from app.services.recurring_schedule import UPCOMING_PREVIEW as UPCOMING_PREVIEW
+from app.services.recurring_schedule import RecurringTransaction as RecurringTransaction
+from app.services.recurring_schedule import _advance, _reschedule, _set_next
+from app.services.recurring_schedule import local_today as local_today
+from app.services.recurring_schedule import postgres_timezones as postgres_timezones
+from app.services.recurring_schedule import rule_for as rule_for
+from app.services.recurring_schedule import rule_from as rule_from
+from app.services.recurring_schedule import to_detail as to_detail
+from app.services.recurring_schedule import upcoming_for as upcoming_for
 from app.services.transaction_kinds import KINDS, kind_of
 
-logger = logging.getLogger(__name__)
-
-RecurringTransaction = models.RecurringTransaction
-
-LEASE = timedelta(minutes=5)
 # How long a user change waits for a generation run to release the lease.
 LEASE_WAIT_SECONDS = 3.0
 LEASE_POLL_SECONDS = 0.2
-# Missed occurrences created per template in one run; the rest wait for the next run.
-MAX_OCCURRENCES_PER_RUN = 60
-UPCOMING_PREVIEW = 5
-# A series may start at most this far back: it back-fills from its start date.
-MAX_PAST_YEARS = 2
-# Start and end dates further ahead than this are rejected.
-MAX_FUTURE_YEARS = 10
 MAX_TEMPLATES_PER_USER = 500
 
 SCHEDULE_FIELDS = frozenset(
@@ -92,178 +81,6 @@ SCHEDULE_FIELDS = frozenset(
 LIMIT_FIELDS = frozenset({"end_date", "max_occurrences", "timezone"})
 
 
-_postgres_timezones: frozenset[str] | None = None
-# Templates already reported as skipped for an unknown timezone.
-_reported_unknown_timezones: set[int] = set()
-
-
-class InvalidTimezoneError(DomainError):
-    # Same status as a timezone the request schema rejects.
-    status_code = 422
-
-
-def local_today(tz: str) -> date:
-    return datetime.now(ZoneInfo(tz)).date()
-
-
-async def postgres_timezones(db: AsyncSession) -> frozenset[str]:
-    """Timezone names the database knows, loaded once per process."""
-    global _postgres_timezones
-    if _postgres_timezones is None:
-        result = await db.execute(text("SELECT name FROM pg_timezone_names"))
-        _postgres_timezones = frozenset(result.scalars())
-    return _postgres_timezones
-
-
-async def _validate_timezone(db: AsyncSession, tz: str) -> None:
-    # Python's tzdata may know zones the database doesn't, and the worker's
-    # due query evaluates every template's timezone in SQL.
-    if tz not in await postgres_timezones(db):
-        raise InvalidTimezoneError("Unknown timezone")
-
-
-def _shift_years(day: date, years: int) -> date:
-    try:
-        return day.replace(year=day.year + years)
-    except ValueError:  # Feb 29 in a non-leap year
-        return day.replace(year=day.year + years, day=28)
-
-
-def earliest_start(today: date) -> date:
-    return _shift_years(today, -MAX_PAST_YEARS)
-
-
-def _validate_dates(fields: dict, keys=("start_date", "end_date")) -> None:
-    """Keep start and end dates within MAX_PAST_YEARS / MAX_FUTURE_YEARS of today."""
-    today = local_today(fields.get("timezone") or "UTC")
-    latest = _shift_years(today, MAX_FUTURE_YEARS)
-    start = fields.get("start_date")
-    if "start_date" in keys and start is not None:
-        if start < earliest_start(today):
-            raise DomainError(
-                f"start_date can't be more than {MAX_PAST_YEARS} years in the past"
-            )
-        if start > latest:
-            raise DomainError(
-                f"start_date can't be more than {MAX_FUTURE_YEARS} years ahead"
-            )
-    end = fields.get("end_date")
-    if "end_date" in keys and end is not None and end > latest:
-        raise DomainError(f"end_date can't be more than {MAX_FUTURE_YEARS} years ahead")
-
-
-def rule_for(template: RecurringTransaction) -> Rule:
-    return Rule(
-        frequency=Frequency(template.frequency),
-        start_date=template.start_date,
-        interval=template.interval or 1,
-        weekdays=tuple(template.weekdays or ()),
-        monthly_mode=MonthlyMode(template.monthly_mode or MonthlyMode.day_of_month),
-        month_days=tuple(template.month_days or ()),
-        week_of_month=template.week_of_month,
-        adjustment=BusinessDayAdjustment(
-            template.business_day_adjustment or BusinessDayAdjustment.none
-        ),
-        end_date=template.end_date,
-    )
-
-
-def _limit_reached(template: RecurringTransaction) -> bool:
-    return bool(
-        template.max_occurrences
-        and template.occurrences_count >= template.max_occurrences
-    )
-
-
-def _set_next(template: RecurringTransaction, occurrence: Occurrence | None) -> None:
-    if occurrence is None or _limit_reached(template):
-        template.next_nominal_date = None
-        template.next_run_date = None
-        return
-    template.next_nominal_date = occurrence.nominal
-    template.next_run_date = occurrence.actual
-
-
-def _reschedule(
-    template: RecurringTransaction, *, from_date: date | None = None
-) -> None:
-    """Recompute the next occurrence from scratch, after the last generated one."""
-    _set_next(
-        template,
-        next_occurrence(
-            rule_for(template),
-            last_actual=template.last_run_date,
-            from_date=from_date,
-            today=local_today(template.timezone),
-        ),
-    )
-
-
-def _advance(template: RecurringTransaction) -> None:
-    _set_next(
-        template,
-        next_occurrence(
-            rule_for(template),
-            after_nominal=template.next_nominal_date,
-            last_actual=max(
-                d for d in (template.last_run_date, template.next_run_date) if d
-            ),
-        ),
-    )
-
-
-def upcoming_for(
-    template: RecurringTransaction, count: int = UPCOMING_PREVIEW
-) -> list[Occurrence]:
-    if not template.next_run_date:
-        return []
-    if template.max_occurrences:
-        count = min(count, template.max_occurrences - template.occurrences_count)
-    if count <= 0:
-        return []
-    first = Occurrence(
-        nominal=template.next_nominal_date, actual=template.next_run_date
-    )
-    return [first] + upcoming(
-        rule_for(template),
-        count - 1,
-        after_nominal=first.nominal,
-        last_actual=first.actual,
-    )
-
-
-def to_detail(template: RecurringTransaction) -> schemas.RecurringTransactionDetail:
-    detail = schemas.RecurringTransactionDetail.model_validate(template)
-    detail.upcoming = [
-        schemas.UpcomingOccurrence(nominal_date=o.nominal, date=o.actual)
-        for o in upcoming_for(template)
-    ]
-    return detail
-
-
-def preview(data: schemas.RecurringPreviewRequest) -> schemas.RecurringPreview:
-    fields = data.model_dump()
-    _validate_dates(fields)
-    rule = _rule_from_fields(fields)
-    _validate_rule(rule)
-    count = min(UPCOMING_PREVIEW, data.max_occurrences or UPCOMING_PREVIEW)
-    after = data.start_date if data.exclude_start else None
-    if after and data.max_occurrences:
-        count = min(count, data.max_occurrences - 1)
-    return schemas.RecurringPreview(
-        upcoming=[
-            schemas.UpcomingOccurrence(nominal_date=o.nominal, date=o.actual)
-            for o in upcoming(
-                rule,
-                count,
-                after_nominal=after,
-                last_actual=after,
-                today=local_today(data.timezone or "UTC"),
-            )
-        ]
-    )
-
-
 # Updatable columns that are NOT NULL in the database.
 NON_NULLABLE_FIELDS = (
     "amount",
@@ -277,38 +94,6 @@ NON_NULLABLE_FIELDS = (
     "timezone",
     "is_active",
 )
-
-
-def _rule_from_fields(fields: dict) -> Rule:
-    return Rule(
-        frequency=fields["frequency"],
-        start_date=fields["start_date"],
-        interval=fields.get("interval") or 1,
-        weekdays=tuple(fields.get("weekdays") or ()),
-        monthly_mode=fields.get("monthly_mode") or MonthlyMode.day_of_month,
-        month_days=tuple(fields.get("month_days") or ()),
-        week_of_month=fields.get("week_of_month"),
-        adjustment=fields.get("business_day_adjustment") or BusinessDayAdjustment.none,
-        end_date=fields.get("end_date"),
-    )
-
-
-def _validate_rule(rule: Rule) -> None:
-    if rule.end_date and rule.end_date < rule.start_date:
-        raise DomainError("end_date must be on or after start_date")
-    if rule.frequency == Frequency.semimonthly and rule.month_days:
-        if len(rule.month_days) != 2:
-            raise DomainError("Twice-a-month schedules need exactly two month_days")
-    if (
-        rule.frequency == Frequency.monthly
-        and rule.monthly_mode == MonthlyMode.nth_weekday
-    ):
-        if rule.week_of_month is None:
-            raise DomainError("nth_weekday schedules need week_of_month")
-        if len(rule.weekdays) > 1:
-            raise DomainError("nth_weekday schedules take a single weekday")
-    if next_occurrence(rule) is None:
-        raise DomainError("This schedule never produces a date")
 
 
 # ---------------------------------------------------------------------------
@@ -372,54 +157,6 @@ async def _abandon_change(db: AsyncSession, recurring_id: int, lease: datetime) 
     await _release_lease(db, recurring_id, lease)
 
 
-# Template reference fields: what they point at, and its name in errors.
-_REFERENCES = {
-    "account_id": (crud.account, "Account"),
-    "to_account_id": (crud.account, "Account"),
-    "category_id": (crud.category, "Category"),
-    "subcategory_id": (crud.subcategory, "Subcategory"),
-    "place_id": (crud.place, "Place"),
-}
-
-
-async def _check_reference(
-    db: AsyncSession, user: models.User, field: str, obj_id: int | None
-):
-    """A template's reference; another user's entity is reported as missing."""
-    crud_obj, label = _REFERENCES[field]
-    return await require_owned(db, user, crud_obj, obj_id, label, hide_foreign=True)
-
-
-async def _validate_fields(
-    db: AsyncSession, user: models.User, recurring_type: TransactionType, fields: dict
-) -> dict:
-    """Check ownership and per-type rules; drop fields that don't apply to the type."""
-    await _check_reference(db, user, "account_id", fields.get("account_id"))
-    if recurring_type == TransactionType.transfer:
-        await _check_reference(db, user, "to_account_id", fields.get("to_account_id"))
-        if not fields.get("account_id") or not fields.get("to_account_id"):
-            raise DomainError("Transfers need account_id and to_account_id")
-        if fields["account_id"] == fields["to_account_id"]:
-            raise DomainError("Transfers need two different accounts")
-        fields.update(category_id=None, subcategory_id=None, place_id=None)
-        return fields
-
-    fields["to_account_id"] = None
-    await _check_reference(db, user, "place_id", fields.get("place_id"))
-    subcategory = await _check_reference(
-        db, user, "subcategory_id", fields.get("subcategory_id")
-    )
-    if recurring_type == TransactionType.income:
-        # Incomes are categorised through their subcategory only.
-        fields["category_id"] = None
-        return fields
-
-    await _check_reference(db, user, "category_id", fields.get("category_id"))
-    if subcategory and subcategory.category_id != fields.get("category_id"):
-        raise DomainError("Subcategory does not belong to the category")
-    return fields
-
-
 async def create_recurring(
     db: AsyncSession,
     user: models.User,
@@ -444,7 +181,7 @@ async def create_recurring(
     fields.setdefault("timezone", "UTC")
     await _validate_timezone(db, fields["timezone"])
     _validate_dates(fields)
-    _validate_rule(_rule_from_fields(fields))
+    _validate_rule(rule_from(fields))
     fields = await _validate_fields(db, user, data.type, fields)
     count = await db.scalar(
         select(func.count())
@@ -568,7 +305,7 @@ async def _apply_update(
         merged,
         keys=[k for k, v in changes.items() if v != getattr(template, k, None)],
     )
-    _validate_rule(_rule_from_fields(merged))
+    _validate_rule(rule_from(merged))
     merged = await _validate_fields(db, user, template.type, merged)
     changes.update(
         {
@@ -656,37 +393,6 @@ async def _delete_template(
     await db.commit()
 
 
-# Template columns that point at each kind of referenced entity.
-_REFERENCE_COLUMNS = {
-    "account": ("account_id", "to_account_id"),
-    "category": ("category_id",),
-    "subcategory": ("subcategory_id",),
-    "place": ("place_id",),
-}
-
-
-async def pause_for_deleted(db: AsyncSession, kind: str, ids: list[int]) -> None:
-    """Pause the templates that use an entity which is about to be deleted.
-
-    The template foreign keys are ON DELETE SET NULL, so once the entity is gone
-    a template that lost it looks like one that never had it and would keep
-    generating unassigned transactions. Call this before the delete, in the same
-    transaction.
-    """
-    if not ids:
-        return
-    columns = [getattr(RecurringTransaction, c) for c in _REFERENCE_COLUMNS[kind]]
-    await db.execute(
-        update(RecurringTransaction)
-        .where(or_(*(column.in_(ids) for column in columns)))
-        .values(
-            is_active=False,
-            last_error=f"The {kind} used by this recurring transaction was deleted",
-        )
-        .execution_options(synchronize_session=False)
-    )
-
-
 async def create_from_transaction(
     db: AsyncSession,
     user: models.User,
@@ -737,250 +443,3 @@ async def create_from_transaction(
         source_transaction=transaction,
         detection_fingerprint=detection_fingerprint,
     )
-
-
-# ---------------------------------------------------------------------------
-# Generation
-# ---------------------------------------------------------------------------
-async def _acquire_lease(db: AsyncSession, recurring_id: int) -> datetime | None:
-    """Lease a free template; returns the lease token, or None if it is held."""
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
-        update(RecurringTransaction)
-        .where(
-            RecurringTransaction.id == recurring_id,
-            or_(
-                RecurringTransaction.locked_until.is_(None),
-                RecurringTransaction.locked_until < now,
-            ),
-        )
-        .values(locked_until=now + LEASE)
-        .returning(RecurringTransaction.id)
-        .execution_options(synchronize_session=False)
-    )
-    acquired = result.first() is not None
-    await db.commit()
-    return now + LEASE if acquired else None
-
-
-async def _renew_lease(
-    db: AsyncSession, recurring_id: int, lease: datetime
-) -> datetime | None:
-    """Extend a lease we hold; returns the new token, or None if it was lost.
-
-    An expired lease is still ours as long as nobody else acquired it since.
-    """
-    renewed = datetime.now(timezone.utc) + LEASE
-    result = await db.execute(
-        update(RecurringTransaction)
-        .where(
-            RecurringTransaction.id == recurring_id,
-            RecurringTransaction.locked_until == lease,
-        )
-        .values(locked_until=renewed)
-        .returning(RecurringTransaction.id)
-        .execution_options(synchronize_session=False)
-    )
-    held = result.first() is not None
-    await db.commit()
-    return renewed if held else None
-
-
-async def _release_lease(db: AsyncSession, recurring_id: int, lease: datetime) -> None:
-    await db.execute(
-        update(RecurringTransaction)
-        .where(
-            RecurringTransaction.id == recurring_id,
-            RecurringTransaction.locked_until == lease,
-        )
-        .values(locked_until=None)
-        .execution_options(synchronize_session=False)
-    )
-    await db.commit()
-
-
-async def claim_due(db: AsyncSession, *, limit: int = 50) -> dict[int, datetime]:
-    """Lease up to `limit` templates that have an occurrence due today or earlier.
-
-    Returns the lease token of each claimed template, to pass to `generate_due`,
-    in the order to generate them: oldest due date first, then by id.
-    """
-    now = datetime.now(timezone.utc)
-    known = sorted(await postgres_timezones(db))
-    # A timezone the database doesn't know would fail the whole query, and so
-    # stop generation for every user: such templates are skipped instead.
-    local_date = case(
-        (
-            RecurringTransaction.timezone.in_(known),
-            cast(func.timezone(RecurringTransaction.timezone, func.now()), Date),
-        )
-    )
-    due = (
-        select(RecurringTransaction.id)
-        .where(
-            RecurringTransaction.is_active.is_(True),
-            RecurringTransaction.next_run_date.is_not(None),
-            RecurringTransaction.next_run_date <= local_date,
-            or_(
-                RecurringTransaction.locked_until.is_(None),
-                RecurringTransaction.locked_until < now,
-            ),
-        )
-        .order_by(RecurringTransaction.next_run_date, RecurringTransaction.id)
-        .limit(limit)
-        .with_for_update(skip_locked=True)
-    )
-    result = await db.execute(
-        update(RecurringTransaction)
-        .where(RecurringTransaction.id.in_(due.scalar_subquery()))
-        .values(locked_until=now + LEASE)
-        .returning(RecurringTransaction.id, RecurringTransaction.next_run_date)
-        .execution_options(synchronize_session=False)
-    )
-    # RETURNING follows storage order, not the subquery's ORDER BY.
-    rows = sorted(result, key=lambda row: (row.next_run_date, row.id))
-    leases = {row.id: now + LEASE for row in rows}
-    await db.commit()
-    return leases
-
-
-async def report_unknown_timezones(db: AsyncSession) -> list[int]:
-    """Warn about active templates `claim_due` skips for their timezone.
-
-    Each template is reported once per process; returns the newly reported ids.
-    """
-    known = sorted(await postgres_timezones(db))
-    result = await db.execute(
-        select(RecurringTransaction.id)
-        .where(
-            RecurringTransaction.is_active.is_(True),
-            RecurringTransaction.next_run_date.is_not(None),
-            RecurringTransaction.timezone.not_in(known),
-        )
-        .order_by(RecurringTransaction.id)
-    )
-    new = [id_ for id_ in result.scalars() if id_ not in _reported_unknown_timezones]
-    if new:
-        _reported_unknown_timezones.update(new)
-        logger.warning(
-            "Recurring transactions %s are not generated: the database "
-            "doesn't know their timezone",
-            new,
-        )
-    return new
-
-
-async def release_leases(db: AsyncSession, leases: dict[int, datetime]) -> None:
-    """Clear the lease of templates that were claimed but will not be generated.
-
-    A lease is only cleared while it still holds our token, so one another
-    process took over after it expired is left alone.
-    """
-    if not leases:
-        return
-    await db.execute(
-        update(RecurringTransaction)
-        .where(
-            tuple_(RecurringTransaction.id, RecurringTransaction.locked_until).in_(
-                list(leases.items())
-            )
-        )
-        .values(locked_until=None)
-        .execution_options(synchronize_session=False)
-    )
-    await db.commit()
-
-
-async def _already_generated(
-    db: AsyncSession, template: RecurringTransaction, run_date: date
-) -> bool:
-    model = kind_of(template.type).model
-    return bool(
-        await db.scalar(
-            select(
-                exists().where(
-                    and_(model.recurring_id == template.id, model.date == run_date)
-                )
-            )
-        )
-    )
-
-
-async def _create_occurrence(
-    db: AsyncSession, owner: models.User, template: RecurringTransaction, run_date: date
-) -> None:
-    kind = kind_of(template.type)
-    if not all(getattr(template, field) for field in kind.required):
-        raise DomainError(kind.missing_required)
-    for field in kind.checked_references:
-        await _check_reference(db, owner, field, getattr(template, field))
-    await kind.service("create")(
-        db,
-        owner,
-        kind.build_occurrence(kind.occurrence_fields(template), run_date),
-        recurring_id=template.id,
-    )
-
-
-async def generate_due(
-    db: AsyncSession,
-    recurring_id: int,
-    *,
-    today: date | None = None,
-    lease: datetime | None = None,
-    limit: int = MAX_OCCURRENCES_PER_RUN,
-) -> int:
-    """Create every occurrence of a template that is due; returns how many were created.
-
-    Callers that already hold the lease (the worker) pass its token as `lease`.
-    """
-    if lease is None:
-        lease = await _acquire_lease(db, recurring_id)
-        if lease is None:
-            return 0
-    template = await db.get(RecurringTransaction, recurring_id, populate_existing=True)
-    if template is None:
-        return 0
-
-    created = 0
-    try:
-        owner = await crud.user.get(db, id=template.owner_id)
-        today = today or local_today(template.timezone)
-        while (
-            template.is_active
-            and template.next_run_date
-            and template.next_run_date <= today
-            and created < limit
-        ):
-            lease = await _renew_lease(db, recurring_id, lease)
-            if lease is None:
-                # Someone else took the template over after our lease expired.
-                logger.warning(
-                    "Lost the lease on recurring transaction %s", recurring_id
-                )
-                return created
-            run_date = template.next_run_date
-            is_new = not await _already_generated(db, template, run_date)
-            if is_new:
-                await _create_occurrence(db, owner, template, run_date)
-            template.occurrences_count += 1
-            template.last_run_date = run_date
-            template.last_error = None
-            _advance(template)
-            await db.commit()
-            created += is_new
-    except ServiceError as exc:
-        # Validation failures happen before anything is written. Pause instead
-        # of retrying forever; the user sees why in the UI.
-        template.is_active = False
-        template.last_error = exc.message
-        logger.warning("Paused recurring transaction %s: %s", recurring_id, exc.message)
-    except Exception:
-        # Unexpected failure: keep the lease so the template is retried once it expires.
-        logger.exception("Failed generating recurring transaction %s", recurring_id)
-        await db.rollback()
-        return created
-
-    await db.commit()
-    await _release_lease(db, recurring_id, lease)
-    return created

@@ -650,6 +650,16 @@ async def test_expense_create_and_update_drop_foreign_references(
 # ---------------------------------------------------------------------------
 # Structure: one registry for the per-type dispatch, one ownership helper
 # ---------------------------------------------------------------------------
+# services/recurring.py and the modules split out of it.
+RECURRING_SOURCES = (
+    "services/recurring.py",
+    "services/recurring_fields.py",
+    "services/recurring_generation.py",
+    "services/recurring_leases.py",
+    "services/recurring_schedule.py",
+)
+
+
 def _source(relative: str) -> str:
     return (APP_DIR / relative).read_text()
 
@@ -674,7 +684,7 @@ def test_single_type_registry():
     assert set(transaction_kinds.KINDS) == set(TransactionType)
     assert not hasattr(detection, "_TYPE_MODELS")
     assert not hasattr(recurring_service, "TRANSACTION_MODELS")
-    for relative in ("services/recurring.py", "services/recurring_detection.py"):
+    for relative in (*RECURRING_SOURCES, "services/recurring_detection.py"):
         source = _source(relative)
         for name in ("models.Expense", "delete_expense", "get_expense", "from_acc"):
             assert name not in source, (relative, name)
@@ -692,7 +702,7 @@ def test_no_recurring_type_conversions():
 
 
 def test_single_ownership_helper():
-    recurring_source = _source("services/recurring.py")
+    recurring_source = "".join(_source(relative) for relative in RECURRING_SOURCES)
     transactions_source = _source("services/transactions.py")
     assert "_require_ref" not in recurring_source
     assert "crud_obj.get" not in recurring_source
