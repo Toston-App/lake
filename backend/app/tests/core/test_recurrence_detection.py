@@ -282,7 +282,12 @@ def test_day_distance_looks_at_adjacent_months():
 
 
 CORE_DIR = Path(__file__).resolve().parents[2] / "app" / "core"
-SPLIT_MODULES = ("merchant_text", "recurrence_scoring", "recurrence_detection")
+SPLIT_MODULES = (
+    "merchant_text",
+    "recurrence_types",
+    "recurrence_scoring",
+    "recurrence_detection",
+)
 
 
 def _imported_modules(name: str) -> set[str]:
@@ -302,19 +307,24 @@ def test_detection_is_split_into_small_modules():
         for name in SPLIT_MODULES
     }
     assert sizes["merchant_text"] < 450, sizes
+    assert sizes["recurrence_types"] < 450, sizes
     assert sizes["recurrence_scoring"] < 450, sizes
     assert sizes["recurrence_detection"] < 520, sizes
 
 
 def test_split_modules_only_depend_downwards():
-    # merchant_text <- recurrence_scoring <- recurrence_detection: no cycles.
+    # recurrence_types and merchant_text <- recurrence_scoring
+    # <- recurrence_detection: no cycles.
+    split = {f"app.core.{name}" for name in SPLIT_MODULES}
+    assert not split & _imported_modules("recurrence_types")
+    assert not split & _imported_modules("merchant_text")
     assert not {
-        "app.core.recurrence_detection",
         "app.core.recurrence_scoring",
-    } & _imported_modules("merchant_text")
-    assert "app.core.recurrence_detection" not in _imported_modules(
-        "recurrence_scoring"
-    )
+        "app.core.recurrence_detection",
+    } & _imported_modules("recurrence_scoring")
+    # The shared types come from the bottom module, not from scoring.
+    assert "app.core.recurrence_types" in _imported_modules("recurrence_scoring")
+    assert "app.core.recurrence_types" in _imported_modules("recurrence_detection")
 
 
 def test_detection_keeps_the_names_the_service_imports():

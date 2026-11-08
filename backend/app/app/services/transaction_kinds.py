@@ -15,7 +15,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from app import crud, models, schemas
-from app.core.recurrence_scoring import TxPoint
+from app.core.recurrence_types import TxPoint
 from app.core.transaction_type import TransactionType
 from app.services import transactions as transaction_service
 

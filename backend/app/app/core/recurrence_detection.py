@@ -29,20 +29,22 @@ from app.core.recurrence import (
     last_day,
     resolve_month_day,
 )
+from app.core.recurrence_scoring import apply_classification as apply_classification
 from app.core.recurrence_scoring import (
+    assign_fingerprints,
+    base_confidence,
+    next_expected,
+    series_reasons,
+)
+from app.core.recurrence_types import (
     STALE_PERIODS,
     Candidate,
     DetectedRule,
     Merchant,
     PointKey,
     TxPoint,
-    assign_fingerprints,
-    base_confidence,
-    next_expected,
     point_key,
-    series_reasons,
 )
-from app.core.recurrence_scoring import apply_classification as apply_classification
 from app.core.transaction_type import TransactionType
 
 # Windows: yearly series need two years of history, the rest one year.
