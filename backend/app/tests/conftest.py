@@ -95,8 +95,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Test database engine
 # ---------------------------------------------------------------------------
-TEST_DATABASE_URL = (
-    "postgresql+asyncpg://test_user:test_password@localhost:5433/test_toston"
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://test_user:test_password@localhost:5433/test_toston",
 )
 
 test_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
