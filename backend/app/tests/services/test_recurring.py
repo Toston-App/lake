@@ -850,11 +850,16 @@ async def test_concurrent_marks_of_one_transaction_create_one_template(
 
     # Hold both requests right after they read the transaction, so each one
     # checks `recurring_id` before either of them links it.
-    both_read = asyncio.Barrier(2)
+    both_read = asyncio.Event()
+    reads = 0
     get_expense = crud.expense.get
 
     async def get_then_wait(db, transaction_id):
+        nonlocal reads
         transaction = await get_expense(db, transaction_id)
+        reads += 1
+        if reads == 2:
+            both_read.set()
         await both_read.wait()
         return transaction
 

@@ -18,6 +18,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
@@ -99,6 +100,13 @@ TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://test_user:test_password@localhost:5433/test_toston",
 )
+
+# The session teardown drops the public schema of this database.
+if "test" not in (make_url(TEST_DATABASE_URL).database or ""):
+    raise RuntimeError(
+        "TEST_DATABASE_URL must name a test database (with 'test' in its name): "
+        "the test run drops everything in it"
+    )
 
 test_engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
 TestSessionLocal = sessionmaker(
