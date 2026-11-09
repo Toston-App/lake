@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.models.account import AccountType
+from app.services import recurring as recurring_service
 from app.services.errors import NotFoundError, PermissionDeniedError
 from app.utilities.redis import invalidate_user_cache
 
@@ -102,5 +103,6 @@ async def delete_account(db: AsyncSession, user: models.User, account_id: int):
     await get_account(db, user, account_id)
     if user.default_account_id == account_id:
         await crud.user.clear_default_account(db=db, user_id=user.id)
+    await recurring_service.pause_for_deleted(db, "account", [account_id])
     await crud.account.remove(db=db, id=account_id)
     await invalidate_user_cache(user.id)

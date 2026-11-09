@@ -1,9 +1,12 @@
 import logging
+import math
 import os
 import random
 import secrets
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
@@ -15,9 +18,10 @@ from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
 from app.api.api_v3.api import api_router as api_router_v3
 from app.core.config import settings
+from app.services.errors import ServiceError
 from app.services.provider_errors import ProviderUnavailable
 from app.utilities.axiom import get_axiom_client, initialize_axiom
-from app.utilities.wide_events import WideEventsMiddleware
+from app.utilities.wide_events import WideEventsMiddleware, enrich_event
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -42,6 +46,41 @@ async def provider_unavailable_handler(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"detail": "Market data is temporarily unavailable"},
         headers={"Retry-After": "30"},
+    )
+
+
+@app.exception_handler(ServiceError)
+async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+    # The same response raise_http's HTTPException gets from FastAPI.
+    if exc.event_outcome:
+        enrich_event(request, operation={"outcome": exc.event_outcome})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail()},
+        headers=exc.headers() or None,
+    )
+
+
+def _json_safe(value):
+    """Non-finite floats as strings: JSON has no Infinity or NaN."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(
+    _request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    # Like FastAPI's default, but a body with `Infinity` or `NaN` (which the
+    # JSON parser accepts) can't make the 422 itself fail to serialize.
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": _json_safe(jsonable_encoder(exc.errors()))},
     )
 
 
@@ -78,6 +117,12 @@ async def startup_event():
 async def shutdown_event():
     """Cleanup on shutdown"""
     logger.info("👋 Shutting down application...")
+
+    # Release recurring scans cancelled just before shutdown, so they don't
+    # show as running until their claim goes stale.
+    from app.services.recurring_detection import wait_for_cleanup
+
+    await wait_for_cleanup()
 
     # Flush any remaining logs to Axiom
     axiom_client = get_axiom_client()

@@ -310,9 +310,20 @@ def enrich_event(request: Request, **kwargs: Any) -> None:
                 "category": "food",
             }
         )
+
+    A dict is merged one level deep into what earlier calls recorded under
+    the same key, so `operation={"ai_skipped": ...}` followed by
+    `operation={"type": ...}` keeps both; later values win. Any other value
+    replaces the previous one.
     """
-    if hasattr(request.state, "wide_event"):
-        request.state.wide_event.update(kwargs)
+    if not hasattr(request.state, "wide_event"):
+        return
+    event = request.state.wide_event
+    for key, value in kwargs.items():
+        current = event.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            value = {**current, **value}
+        event[key] = value
 
 
 def mark_for_logging(request: Request) -> None:

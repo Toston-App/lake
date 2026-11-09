@@ -144,11 +144,16 @@ async def read_user_me(
     # Attach the (cached) subscription tier so the frontend can show usage /
     # upgrade prompts without a second round-trip.
     tier_value = "free"
+    recurring_detection = None
     try:
         from app.services.entitlements import get_user_tier
+        from app.services.recurring_detection import scans_remaining
 
         tier, _ = await get_user_tier(db, current_user.id)
         tier_value = tier.value
+        recurring_detection = schemas.RecurringDetectionAccess(
+            scans_remaining=await scans_remaining(db, current_user)
+        )
     except Exception:
         # Never let entitlement resolution break /users/me.
         pass
@@ -157,6 +162,7 @@ async def read_user_me(
         email=current_user.email,
         country=current_user.country,
         subscription_tier=tier_value,
+        recurring_detection=recurring_detection,
     )
 
 

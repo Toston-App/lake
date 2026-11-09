@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import crud, models, schemas
+from app.services import recurring as recurring_service
 from app.services.errors import DomainError, NotFoundError, PermissionDeniedError
 
 
@@ -61,6 +62,14 @@ async def delete_category(db: AsyncSession, user: models.User, category_id: int)
     category = await get_category(db, user, category_id)
     if category.is_income:
         raise DomainError("This item cannot be deleted")
+    # Deleting a category also deletes its subcategories.
+    subcategory_ids = await db.scalars(
+        select(models.Subcategory.id).where(
+            models.Subcategory.category_id == category_id
+        )
+    )
+    await recurring_service.pause_for_deleted(db, "category", [category_id])
+    await recurring_service.pause_for_deleted(db, "subcategory", list(subcategory_ids))
     await crud.category.remove(db=db, id=category_id)
 
 
@@ -113,6 +122,7 @@ async def delete_subcategory(
     db: AsyncSession, user: models.User, subcategory_id: int
 ):
     await get_subcategory(db, user, subcategory_id)
+    await recurring_service.pause_for_deleted(db, "subcategory", [subcategory_id])
     await crud.subcategory.remove(db=db, id=subcategory_id)
 
 
@@ -154,4 +164,5 @@ async def update_place(
 
 async def delete_place(db: AsyncSession, user: models.User, place_id: int):
     await get_place(db, user, place_id)
+    await recurring_service.pause_for_deleted(db, "place", [place_id])
     await crud.place.remove(db=db, id=place_id)

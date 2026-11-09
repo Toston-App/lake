@@ -5,6 +5,7 @@ import pytest
 from app.ai import agent
 from app.api.api_v1.endpoints import chat
 from app.schemas.chat import ChatConfirmRequest
+from app.services import rate_limits
 from app.utilities.redis import PendingActionPersistenceError
 from fastapi import HTTPException
 from pydantic_ai.usage import RequestUsage
@@ -19,7 +20,9 @@ def setup_database() -> None:
 @pytest.fixture(autouse=True)
 def allow_rate_limit():
     """Keep the Redis-backed chat rate limiter out of endpoint-unit tests."""
-    with patch.object(chat, "hit_rate_limit", new=AsyncMock(return_value=(1, 60))):
+    with patch.object(
+        rate_limits, "hit_rate_limit", new=AsyncMock(return_value=(1, 60))
+    ):
         yield
 
 
@@ -460,24 +463,27 @@ async def test_chat_rate_limit_rejects_over_limit_with_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(chat.settings, "CHAT_RATE_LIMIT_PER_MINUTE", 10)
-    with patch.object(chat, "hit_rate_limit", new=AsyncMock(return_value=(11, 30))):
-        with pytest.raises(HTTPException) as exc_info:
+    with patch.object(
+        rate_limits, "hit_rate_limit", new=AsyncMock(return_value=(11, 30))
+    ):
+        with pytest.raises(rate_limits.RateLimitedError) as exc_info:
             await chat._enforce_chat_rate_limit(1)
 
     assert exc_info.value.status_code == 429
-    assert exc_info.value.headers == {"Retry-After": "30"}
-    assert exc_info.value.detail == {"reason": "rate_limited", "retry_after": 30}
+    assert exc_info.value.headers() == {"Retry-After": "30"}
+    assert exc_info.value.detail() == {"reason": "rate_limited", "retry_after": 30}
 
 
 @pytest.mark.asyncio
 async def test_chat_rate_limit_fails_closed_when_redis_is_down() -> None:
     with patch.object(
-        chat, "hit_rate_limit", new=AsyncMock(side_effect=RuntimeError("down"))
+        rate_limits, "hit_rate_limit", new=AsyncMock(side_effect=RuntimeError("down"))
     ):
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(rate_limits.RateLimiterUnavailableError) as exc_info:
             await chat._enforce_chat_rate_limit(1)
 
     assert exc_info.value.status_code == 503
+    assert exc_info.value.detail() == {"reason": "rate_limit_unavailable"}
 
 
 @pytest.mark.asyncio
@@ -487,7 +493,7 @@ async def test_chat_rate_limit_window_can_be_disabled(
     monkeypatch.setattr(chat.settings, "CHAT_RATE_LIMIT_PER_MINUTE", 0)
     monkeypatch.setattr(chat.settings, "CHAT_RATE_LIMIT_PER_DAY", 0)
     hit = AsyncMock(return_value=(10_000, 1))
-    with patch.object(chat, "hit_rate_limit", new=hit):
+    with patch.object(rate_limits, "hit_rate_limit", new=hit):
         await chat._enforce_chat_rate_limit(1)
 
     hit.assert_not_awaited()

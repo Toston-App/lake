@@ -18,6 +18,7 @@ from app.api.api_v1.endpoints import (
     places,
     polar,
     recap,
+    recurring,
     subcategories,
     subscriptions,
     transactions,
@@ -37,6 +38,9 @@ api_router.include_router(incomes.router, prefix="/incomes", tags=["incomes"])
 api_router.include_router(transfers.router, prefix="/transfers", tags=["transfers"])
 api_router.include_router(
     transactions.router, prefix="/transactions", tags=["transactions"]
+)
+api_router.include_router(
+    recurring.router, prefix="/recurring", tags=["recurring"]
 )
 api_router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
 api_router.include_router(

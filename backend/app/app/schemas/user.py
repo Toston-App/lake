@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr
 
+from app.schemas.recurring_transaction import RecurringDetectionAccess
+
 
 # Shared properties
 class UserBase(BaseModel):
@@ -57,6 +59,8 @@ class UserGetMe(BaseModel):
     # Subscription tier slug ("free" | "tier1" | "tier2").
     # Populated by the /users/me endpoint from the (cached) entitlement.
     subscription_tier: Optional[str] = None
+    # Recurring-detection scans left: 1/0 for free users, null when unlimited.
+    recurring_detection: Optional[RecurringDetectionAccess] = None
 
 
 # Additional properties stored in DB
