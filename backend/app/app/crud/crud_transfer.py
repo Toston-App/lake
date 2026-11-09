@@ -15,7 +15,12 @@ from app.schemas.transfer import TransferCreate, TransferUpdate
 
 class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
     async def create_with_owner(
-        self, db: AsyncSession, *, obj_in: TransferCreate, owner_id: int
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: TransferCreate,
+        owner_id: int,
+        recurring_id: Optional[int] = None,
     ) -> Transfer:
         obj_in_data = jsonable_encoder(obj_in)
 
@@ -49,7 +54,9 @@ class CRUDTransfer(CRUDBase[Transfer, TransferCreate, TransferUpdate]):
         if update_to is None:
             return None
 
-        db_obj = self.model(**obj_in_data, owner_id=owner_id)
+        db_obj = self.model(
+            **obj_in_data, owner_id=owner_id, recurring_id=recurring_id
+        )
         db.add(db_obj)
         await db.commit()
         await db.refresh(db_obj)

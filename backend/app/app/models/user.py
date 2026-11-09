@@ -93,3 +93,6 @@ class User(Base):
     data_exports: list["DataExport"] = relationship(
         "DataExport", back_populates="owner", cascade="all, delete-orphan"
     )
+    recurring_transactions: list["RecurringTransaction"] = relationship(
+        "RecurringTransaction", back_populates="owner", cascade="all, delete-orphan"
+    )

@@ -16,7 +16,12 @@ from app.schemas.income import IncomeCreate, IncomeUpdate
 
 class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
     async def create_with_owner(
-        self, db: AsyncSession, *, obj_in: IncomeCreate, owner_id: int
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: IncomeCreate,
+        owner_id: int,
+        recurring_id: Optional[int] = None,
     ) -> Income:
         obj_in_data = jsonable_encoder(obj_in)
 
@@ -82,7 +87,9 @@ class CRUDIncome(CRUDBase[Income, IncomeCreate, IncomeUpdate]):
             db=db, user_id=owner_id, is_Expense=False, amount=obj_in_data["amount"]
         )
 
-        db_obj = self.model(**obj_in_data, owner_id=owner_id)
+        db_obj = self.model(
+            **obj_in_data, owner_id=owner_id, recurring_id=recurring_id
+        )
         db.add(db_obj)
         await db.commit()
         await db.refresh(db_obj)

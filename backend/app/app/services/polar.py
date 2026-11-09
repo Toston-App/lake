@@ -60,6 +60,9 @@ def _polar_log(request: Request | None, **fields: Any) -> None:
     """Attach Polar context to the request wide event (Axiom)."""
     if request is None:
         return
+    # Each call is a complete record: replace the previous one rather than
+    # letting enrich_event merge its fields into this one.
+    enrich_event(request, polar=None)
     enrich_event(request, polar=fields)
     if fields.get("level") in ("error", "warning"):
         mark_for_logging(request)

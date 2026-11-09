@@ -4,16 +4,11 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel
 
+from app.core.transaction_type import TransactionType  # noqa: F401
 from app.schemas.account import Account
 from app.schemas.category import Category
 from app.schemas.place import Place
 from app.schemas.subcategory import Subcategory
-
-
-class TransactionType(str, Enum):
-    expense = "expense"
-    income = "income"
-    transfer = "transfer"
 
 
 class AmountOperator(str, Enum):
@@ -39,6 +34,7 @@ class ExpenseTransaction(BaseModel):
     category_id: Optional[int]
     subcategory_id: Optional[int]
     place_id: Optional[int]
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -55,6 +51,7 @@ class IncomeTransaction(BaseModel):
     account_id: Optional[int]
     subcategory_id: Optional[int]
     place_id: Optional[int]
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -70,6 +67,7 @@ class TransferTransaction(BaseModel):
     owner_id: int
     from_acc: Optional[int]
     to_acc: Optional[int]
+    recurring_id: Optional[int] = None
 
     class Config:
         from_attributes = True

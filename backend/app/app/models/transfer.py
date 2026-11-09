@@ -28,3 +28,9 @@ class Transfer(Base):
     owner: "User" = relationship("User", back_populates="transfers")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    recurring_id: int = Column(
+        Integer,
+        ForeignKey("recurring_transaction.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
