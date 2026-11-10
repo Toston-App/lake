@@ -28,6 +28,7 @@ async def read_transactions(
     categories: Optional[list[int]] = Query(None),
     places: Optional[list[int]] = Query(None),
     transaction_type: Optional[list[TransactionType]] = Query(None),
+    recurring: Optional[bool] = None,
 ) -> Any:
     """
     Retrieve transactions (Expenses, Incomes, Transfers).
@@ -38,6 +39,7 @@ async def read_transactions(
             "start_date": str(start_date) if start_date else None, "end_date": str(end_date) if end_date else None,
             "accounts": accounts, "categories": categories, "places": places,
             "transaction_type": [t.value for t in transaction_type] if transaction_type else None,
+            "recurring": recurring,
         }.items() if v is not None
     }
 
@@ -66,6 +68,7 @@ async def read_transactions(
             categories=categories,
             places=places,
             transaction_type=transaction_type,
+            recurring=recurring,
         )
 
     enrich_event(

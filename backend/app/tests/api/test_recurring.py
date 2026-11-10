@@ -24,6 +24,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud
+from app.crud import crud_transaction
+from fastapi_pagination import Params
 from tests.utils import (
     create_test_account,
     create_test_category,
@@ -894,3 +896,31 @@ class TestLimits:
         )
         resp = await client.post(f"{PREFIX}/from-transaction", json=body(recent))
         assert resp.status_code == 200, resp.text
+
+
+class TestTransactionsRecurringFilter:
+    async def test_filters_transactions_by_recurring_series(
+        self, client: AsyncClient, db_session: AsyncSession, test_user: User
+    ):
+        resp = await client.post(PREFIX, json=_weekly_expense())
+        assert resp.status_code == 200, resp.text
+        await create_test_expense(
+            db_session, owner_id=test_user.id, description="One-off"
+        )
+
+        async def search(recurring: bool | None):
+            return await crud_transaction.get_multi_by_owner_with_filters(
+                db_session,
+                owner_id=test_user.id,
+                recurring=recurring,
+                params=Params(page=1, size=50),
+            )
+
+        everything = await search(None)
+        recurring = await search(True)
+        one_off = await search(False)
+
+        assert everything.total == 4
+        assert recurring.total == 3
+        assert {t.description for t in recurring.items} == {"Gym"}
+        assert [t.description for t in one_off.items] == ["One-off"]
