@@ -28,6 +28,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+# Max rows a list tool (and a preview's choice lists) returns.
+LIST_LIMIT = 100
+
 ResponseLanguage = Literal["en", "es"]
 ReadPresentation = Literal["model_only", "user_visible"]
 

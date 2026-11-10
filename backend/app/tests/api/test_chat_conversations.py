@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.ai import agent
+from app.ai import agent, confirmation
 from app.api.api_v1.endpoints import chat
 from app.schemas.chat import ChatConfirmRequest
 from app.services import rate_limits
@@ -119,7 +119,7 @@ async def test_confirmation_releases_lock_after_execute_tool_failure() -> None:
         patch.object(chat, "_enforce_quota", new=AsyncMock()),
         patch.object(
             chat,
-            "get_pending_action",
+            "claim_action",
             new=AsyncMock(
                 return_value={
                     "conversation_id": "conversation",
@@ -166,7 +166,7 @@ async def test_confirmation_releases_lock_after_persistence_failure(
         patch.object(chat, "_enforce_quota", new=AsyncMock()),
         patch.object(
             chat,
-            "get_pending_action",
+            "claim_action",
             new=AsyncMock(
                 return_value={
                     "conversation_id": "conversation",
@@ -182,7 +182,6 @@ async def test_confirmation_releases_lock_after_persistence_failure(
             "execute_tool",
             new=AsyncMock(return_value=({"success": True}, None)),
         ),
-        patch.object(chat, "delete_pending_action", new=AsyncMock(return_value=True)),
         patch.object(chat, "record_tool_call", new=AsyncMock()),
         patch.object(chat, "finalize_turn", new=AsyncMock()),
         patch.object(
@@ -264,12 +263,12 @@ async def test_failed_pending_write_cannot_render_an_approval_card() -> None:
 
     with (
         patch.object(
-            agent,
+            confirmation,
             "build_pending_preview",
             new=AsyncMock(return_value={}),
         ),
         patch.object(
-            agent,
+            confirmation,
             "store_pending_action",
             new=AsyncMock(
                 side_effect=PendingActionPersistenceError("redis unavailable")
@@ -418,7 +417,7 @@ async def test_failed_confirmation_does_not_refund_the_proposing_turn() -> None:
         patch.object(chat, "_enforce_quota", new=AsyncMock()),
         patch.object(
             chat,
-            "get_pending_action",
+            "claim_action",
             new=AsyncMock(
                 return_value={
                     "conversation_id": "conversation",
@@ -434,7 +433,6 @@ async def test_failed_confirmation_does_not_refund_the_proposing_turn() -> None:
             "execute_tool",
             new=AsyncMock(return_value=({"success": False, "error": "nope"}, None)),
         ),
-        patch.object(chat, "delete_pending_action", new=AsyncMock(return_value=True)),
         patch.object(chat, "record_tool_call", new=AsyncMock()),
         patch.object(chat, "finalize_turn", new=finalize),
         patch.object(chat, "get_conversation", new=AsyncMock(return_value=None)),

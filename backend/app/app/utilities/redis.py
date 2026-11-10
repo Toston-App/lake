@@ -520,6 +520,23 @@ async def delete_pending_action(action_id: str) -> bool:
         return False
 
 
+async def claim_pending_action(action_id: str, user_id: int) -> dict | None:
+    """Load and delete a pending action in one winner-takes-all step.
+
+    Two concurrent confirms of the same action must not both execute it. Only
+    the caller whose DELETE removes the key gets the payload; the other gets None.
+    """
+    pending = await get_pending_action(action_id, user_id)
+    if pending is None:
+        return None
+    try:
+        deleted = await r.delete(_chat_pending_key(action_id))
+    except Exception as e:
+        logging.error(f"Error claiming pending action {action_id}: {e}")
+        return None
+    return pending if deleted == 1 else None
+
+
 async def invalidate_user_cache(user_id: int) -> bool:
     """Delete all cached dashboard data for a user using SCAN + DEL."""
     try:

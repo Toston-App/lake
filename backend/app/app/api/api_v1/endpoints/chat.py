@@ -36,9 +36,11 @@ from app.ai.chat_presentation import (
     public_ui_messages,
     serialize_model_messages,
 )
-from app.ai.chat_tools import (
-    PROMPT_VERSION,
-    execute_tool,
+from app.ai.chat_tools import PROMPT_VERSION, execute_tool
+from app.ai.confirmation import (
+    PendingActionConversationMismatch,
+    PendingActionNotFound,
+    claim_action,
     format_confirmation_result,
     merge_confirm_tool_args,
 )
@@ -73,9 +75,7 @@ from app.utilities.redis import (
     CHAT_CONVERSATION_LOCK_TTL,
     acquire_conversation_lock,
     delete_conversation,
-    delete_pending_action,
     get_conversation,
-    get_pending_action,
     list_user_conversations,
     refresh_conversation_lock,
     release_conversation_lock,
@@ -622,15 +622,18 @@ async def confirm_chat_action(
     conversation_id = _require_valid_conversation_id(conversation_id)
     await _enforce_quota(db, current_user)
 
-    pending = await get_pending_action(body.action_id, current_user.id)
-    if not pending:
+    # Claimed before executing, so a second confirm of the same action (another
+    # tab, a retry after a lost response) can never run it twice.
+    try:
+        pending = await claim_action(body.action_id, current_user.id, conversation_id)
+    except PendingActionNotFound:
         raise HTTPException(
             status_code=404, detail="Pending action not found or expired"
-        )
-    if pending.get("conversation_id") != conversation_id:
+        ) from None
+    except PendingActionConversationMismatch:
         raise HTTPException(
             status_code=400, detail="Action does not belong to this conversation"
-        )
+        ) from None
 
     enrich_event(
         request,
@@ -660,8 +663,6 @@ async def confirm_chat_action(
             current_user,
             confirmed=True,
         )
-
-    await delete_pending_action(body.action_id)
 
     success = bool(result.get("success"))
     await record_tool_call(

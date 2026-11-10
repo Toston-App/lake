@@ -130,7 +130,7 @@ async def test_confirm_pending_action(
     action_id = "test-action-123"
 
     with patch(
-        "app.api.api_v1.endpoints.chat.get_pending_action",
+        "app.api.api_v1.endpoints.chat.claim_action",
         new_callable=AsyncMock,
         return_value={
             "user_id": user.id,
@@ -141,7 +141,7 @@ async def test_confirm_pending_action(
         },
     ):
         with patch(
-            "app.api.api_v1.endpoints.chat.delete_pending_action",
+            "app.utilities.redis.delete_pending_action",
             new_callable=AsyncMock,
             return_value=True,
         ):

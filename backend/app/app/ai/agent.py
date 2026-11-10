@@ -15,8 +15,8 @@ Key mappings from the old harness:
   the answer as the deferred result on the next turn
 - ``/confirm`` + Redis pending -> write/destructive tools do NOT execute during
   the agent run; they emit a ``data-pending-confirmation`` ``DataChunk``
-  (built from ``build_pending_preview`` + stashed in Redis via
-  ``store_pending_action``). The frontend renders the editable approval card
+  (built and stashed in Redis by ``confirmation.stage_action``). The frontend
+  renders the editable approval card
   from that DataChunk and ``POST /conversations/{id}/confirm`` runs
   ``execute_tool`` with the (possibly edited) args. The v6 tool-approval
   protocol was rejected because it can't carry edited args back.
@@ -26,7 +26,6 @@ Key mappings from the old harness:
 from __future__ import annotations
 
 import time
-import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -53,16 +52,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models, schemas
 from app.ai.chat_tools import (
     LIST_LIMIT,
-    ToolExecutionError,
     _serialize_transaction_search_item,
     _slim_account,
     _slim_category,
     _slim_place,
-    build_pending_preview,
     build_system_prompt,
-    format_confirmation_message,
     load_bootstrap_context,
 )
+from app.ai.confirmation import ToolExecutionError, stage_action
 from app.ai.tools import (
     AskUserArgs,
     BulkCreateArgs,
@@ -103,7 +100,6 @@ from app.utilities.observability import (
     record_llm_call,
     record_tool_call,
 )
-from app.utilities.redis import store_pending_action
 
 # Tool errors surfaced to the model as a normal (non-fatal) tool result rather
 # than aborting the whole run (matches the old ``execute_tool`` try/except).
@@ -295,31 +291,26 @@ async def _defer_for_confirmation(
     approves (possibly with edited args). Reuses ``build_pending_preview`` so the
     card gets the existing record + human-readable labels for update/delete.
     """
-    db, user = ctx.deps.db, ctx.deps.user
-    preview = await build_pending_preview(db, user, tool_name, tool_args)
-    message = format_confirmation_message(tool_name, preview, response_language)
-    action_id = str(uuid.uuid4())
-    await store_pending_action(
-        action_id=action_id,
-        user_id=user.id,
+    staged = await stage_action(
+        ctx.deps.db,
+        ctx.deps.user,
+        tool_name,
+        tool_args,
         conversation_id=ctx.deps.conversation_id,
-        tool_name=tool_name,
-        tool_args=tool_args,
-        preview=preview,
         response_language=response_language,
         turn_id=ctx.deps.turn_id,
     )
     ctx.deps.had_pending_confirmation = True
     return ToolReturn(
-        return_value=message,
+        return_value=staged.message,
         metadata=[
             DataChunk(
                 type="data-pending-confirmation",
                 data={
-                    "action_id": action_id,
+                    "action_id": staged.action_id,
                     "tool_name": tool_name,
-                    "preview": preview,
-                    "message": message,
+                    "preview": staged.preview,
+                    "message": staged.message,
                     "response_language": response_language,
                 },
             )

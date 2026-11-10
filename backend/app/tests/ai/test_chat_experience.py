@@ -2,9 +2,9 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.ai import agent, chat_tools
-from app.ai.chat_tools import (
-    _bootstrap_account,
+from app.ai import agent, confirmation
+from app.ai.chat_tools import _bootstrap_account
+from app.ai.confirmation import (
     format_confirmation_message,
     format_confirmation_result,
     requires_confirmation,
@@ -43,7 +43,7 @@ async def test_expense_create_saves_immediately_with_local_date(monkeypatch) -> 
     create = AsyncMock(return_value=SimpleNamespace(id=12))
     store = AsyncMock()
     monkeypatch.setattr(agent.transaction_service, "create_expense", create)
-    monkeypatch.setattr(agent, "store_pending_action", store)
+    monkeypatch.setattr(confirmation, "store_pending_action", store)
 
     result = await agent.create_expense(_ctx(), CreateExpenseArgs(amount=20))
 
@@ -173,8 +173,10 @@ async def test_transfer_creates_one_localized_pending_action(monkeypatch) -> Non
         "labels": {"from_acc": "Checking"},
     }
     store = AsyncMock(return_value=True)
-    monkeypatch.setattr(agent, "build_pending_preview", AsyncMock(return_value=preview))
-    monkeypatch.setattr(agent, "store_pending_action", store)
+    monkeypatch.setattr(
+        confirmation, "build_pending_preview", AsyncMock(return_value=preview)
+    )
+    monkeypatch.setattr(confirmation, "store_pending_action", store)
 
     result = await agent.create_transfer(
         _ctx(),
@@ -301,22 +303,22 @@ async def test_transaction_choices_use_human_names(monkeypatch) -> None:
     ]
     places = [SimpleNamespace(id=5, name="Cafe")]
     monkeypatch.setattr(
-        chat_tools.account_service,
+        confirmation.account_service,
         "list_accounts",
         AsyncMock(return_value=accounts),
     )
     monkeypatch.setattr(
-        chat_tools.catalog_service,
+        confirmation.catalog_service,
         "list_categories",
         AsyncMock(return_value=categories),
     )
     monkeypatch.setattr(
-        chat_tools.catalog_service,
+        confirmation.catalog_service,
         "list_places",
         AsyncMock(return_value=places),
     )
 
-    choices = await chat_tools._transaction_field_choices(
+    choices = await confirmation._transaction_field_choices(
         SimpleNamespace(), SimpleNamespace(id=1), "expense"
     )
 
@@ -337,13 +339,13 @@ async def test_preview_labels_hide_other_users_records(monkeypatch) -> None:
     }
     for entity, record in records.items():
         monkeypatch.setattr(
-            getattr(chat_tools.crud, entity), "get", AsyncMock(return_value=record)
+            getattr(confirmation.crud, entity), "get", AsyncMock(return_value=record)
         )
     monkeypatch.setattr(
-        chat_tools.crud.account, "get_by_id", AsyncMock(return_value=None)
+        confirmation.crud.account, "get_by_id", AsyncMock(return_value=None)
     )
 
-    labels = await chat_tools._expense_field_labels(
+    labels = await confirmation._expense_field_labels(
         AsyncMock(),
         user,
         {"category_id": 3, "subcategory_id": 4, "place_id": 5},
