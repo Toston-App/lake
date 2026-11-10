@@ -1,0 +1,9 @@
+{
+  "name": "toston",
+  "description": "Use Toston (Clever) personal finance from Claude",
+  "version": "0.1.0",
+  "author": {
+    "name": "Toston"
+  },
+  "homepage": "https://cleverbill.ing"
+}
