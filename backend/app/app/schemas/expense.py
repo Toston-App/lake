@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, validator
 
+from app.schemas.made_from import validate_made_from
+
 
 # Shared properties
 class ExpenseBase(BaseModel):
@@ -33,11 +35,7 @@ class ExpenseBase(BaseModel):
 
     @validator("made_from")
     def validate_made_from(cls, v):
-        if v not in ["Web", "WhatsApp", "OCR", "Chat", "Recurring"]:
-            raise ValueError(
-                "made_from must be one of: Web, WhatsApp, OCR, Chat, Recurring"
-            )
-        return v
+        return validate_made_from(v)
 
 # Properties to receive on Expense creation
 class ExpenseCreate(ExpenseBase):

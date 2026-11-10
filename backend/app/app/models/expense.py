@@ -38,4 +38,4 @@ class Expense(Base):
         index=True,
     )
     import_id: int = Column(Integer, ForeignKey("import.id"))
-    made_from: str = Column(String, default="Web") # Web, WhatsApp, OCR
+    made_from: str = Column(String, default="Web")  # see schemas/made_from.py

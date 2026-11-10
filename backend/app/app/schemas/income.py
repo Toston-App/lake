@@ -3,6 +3,8 @@ from typing import Optional
 
 from pydantic import BaseModel, validator, field_validator
 
+from app.schemas.made_from import validate_made_from
+
 
 # Shared properties
 class IncomeBase(BaseModel):
@@ -32,11 +34,7 @@ class IncomeBase(BaseModel):
 
     @validator("made_from")
     def validate_made_from(cls, v):
-        if v not in ["Web", "WhatsApp", "OCR", "Chat", "Recurring"]:
-            raise ValueError(
-                "made_from must be one of: Web, WhatsApp, OCR, Chat, Recurring"
-            )
-        return v
+        return validate_made_from(v)
 
 # Properties to receive on Income creation
 class IncomeCreate(IncomeBase):
