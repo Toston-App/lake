@@ -578,6 +578,7 @@ async def search_transactions(
     categories: list[int] | None = None,
     places: list[int] | None = None,
     transaction_type: list[TransactionType] | None = None,
+    recurring: bool | None = None,
     params: AbstractParams | None = None,
 ):
     return await crud_transaction.get_multi_by_owner_with_filters(
@@ -593,5 +594,6 @@ async def search_transactions(
         categories=categories,
         places=places,
         transaction_type=transaction_type,
+        recurring=recurring,
         params=params,
     )
