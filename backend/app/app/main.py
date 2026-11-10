@@ -3,6 +3,7 @@ import math
 import os
 import random
 import secrets
+from contextlib import AsyncExitStack
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -18,6 +19,7 @@ from app.api.api_v1.api import api_router
 from app.api.api_v2.api import api_router as api_router_v2
 from app.api.api_v3.api import api_router as api_router_v3
 from app.core.config import settings
+from app.mcp_server.http import mcp_asgi_app, new_session_manager, well_known_router
 from app.services.errors import ServiceError
 from app.services.provider_errors import ProviderUnavailable
 from app.utilities.axiom import get_axiom_client, initialize_axiom
@@ -112,6 +114,11 @@ async def startup_event():
             "⚠️  Axiom API token not configured - logging will be to stdout only"
         )
 
+    # MCP session manager (stateless); the middleware also gates every request.
+    if settings.MCP_ENABLED:
+        app.state.mcp_stack = AsyncExitStack()
+        await app.state.mcp_stack.enter_async_context(new_session_manager().run())
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -123,6 +130,10 @@ async def shutdown_event():
     from app.services.recurring_detection import wait_for_cleanup
 
     await wait_for_cleanup()
+
+    stack = getattr(app.state, "mcp_stack", None)
+    if stack is not None:
+        await stack.aclose()
 
     # Flush any remaining logs to Axiom
     axiom_client = get_axiom_client()
@@ -244,6 +255,11 @@ async def openapi(_username: str = Depends(get_current_username)):
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(api_router_v2, prefix=settings.API_V2_STR)
 app.include_router(api_router_v3, prefix=settings.API_V3_STR)
+app.include_router(well_known_router)
+# A Route (not app.mount) so POST /mcp is served without a 307 redirect to /mcp/.
+app.router.add_route(
+    "/mcp", mcp_asgi_app, methods=["GET", "POST", "DELETE"], include_in_schema=False
+)
 
 
 @app.get("/api/v1/utils/health-check/")

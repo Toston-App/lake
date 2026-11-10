@@ -41,6 +41,7 @@ dependencies = [
     "faker>=40.31.0",
     "openpyxl>=3.1.5",
     "boto3>=1.43.84",
+    "mcp>=1.23,<2",
 ]
 name = "app"
 version = "0.1.0"
@@ -110,3 +111,9 @@ asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.uv]
+# mcp pulls sse-starlette, which on Python >=3.11 would resolve starlette 1.x
+# while production (3.10) stays on 0.46. Keep one starlette for every Python;
+# lift only with a deliberate starlette upgrade (plans/002, "Decided 2026-11-09").
+constraint-dependencies = ["starlette<0.47"]
