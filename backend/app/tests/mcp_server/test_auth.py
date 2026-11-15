@@ -24,7 +24,7 @@ def signing(monkeypatch, jwks_fetch) -> bytes:
 async def _verify(token: str) -> str | None:
     """The token's subject, or None when it is refused with 401."""
     try:
-        return await mcp_auth.verify_oauth_token(token)
+        return (await mcp_auth.verify_oauth_identity(token)).sub
     except mcp_auth.McpAuthError as exc:
         assert exc.status == 401
         return None
@@ -51,6 +51,26 @@ async def test_valid_token(signing):
 )
 async def test_rejected_jwt(signing, overrides):
     assert await _verify(sign_token(signing, **overrides)) is None
+
+
+async def test_identity_carries_the_oauth_client(signing):
+    token = sign_token(signing, aud=MCP_URL, client_id="client_123")
+    identity = await mcp_auth.verify_oauth_identity(token)
+    assert identity == mcp_auth.OAuthIdentity("user_abc", "client_123")
+
+
+def test_opaque_record_carries_the_oauth_client():
+    record = {
+        "object": "clerk_idp_oauth_access_token",
+        "revoked": False,
+        "expired": False,
+        "expiration": time.time() + 600,
+        "aud": [MCP_URL],
+        "subject": "user_abc",
+        "client_id": "client_9",
+    }
+    identity = mcp_auth._identity_of_valid_record(record, MCP_URL)
+    assert identity == mcp_auth.OAuthIdentity("user_abc", "client_9")
 
 
 async def test_trailing_slash_audience_matches(signing):
@@ -90,7 +110,7 @@ async def test_jwks_outage_keeps_cached_keys(signing, jwks_fetch, monkeypatch):
 async def test_jwks_outage_without_keys_is_503(signing, jwks_fetch):
     jwks_fetch.side_effect = httpx.ConnectError("down")
     with pytest.raises(mcp_auth.McpAuthError) as exc_info:
-        await mcp_auth.verify_oauth_token(sign_token(signing, aud=MCP_URL))
+        await mcp_auth.verify_oauth_identity(sign_token(signing, aud=MCP_URL))
     assert exc_info.value.status == 503
     assert exc_info.value.headers["Retry-After"]
 
@@ -153,7 +173,7 @@ async def test_middleware_does_not_mutate_shared_state(monkeypatch):
     monkeypatch.setattr(settings, "MCP_PUBLIC_URL", MCP_URL)
 
     async def authenticate(_token, _client_ip):
-        return 7
+        return mcp_auth.AuthResult(7, "read", "pat:1")
 
     monkeypatch.setattr(mcp_auth, "authenticate", authenticate)
     seen = {}
@@ -168,5 +188,10 @@ async def test_middleware_does_not_mutate_shared_state(monkeypatch):
         "state": shared,
     }
     await mcp_auth.BearerAuthMiddleware(inner)(scope, None, None)
-    assert seen == {"other": 1, "toston_user_id": 7}
+    assert seen == {
+        "other": 1,
+        "toston_user_id": 7,
+        "toston_token_scope": "read",
+        "toston_client": "pat:1",
+    }
     assert shared == {"other": 1}

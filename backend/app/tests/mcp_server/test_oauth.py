@@ -102,7 +102,7 @@ def clerk(monkeypatch) -> FakeClerk:
     monkeypatch.setattr(mcp_auth, "enforce_rate_limit", AsyncMock(return_value=True))
 
     async def load_user(_db, user_id):
-        return SimpleNamespace(id=user_id), Tier.free
+        return SimpleNamespace(id=user_id, mcp_read_only=False), Tier.free
 
     async def call_tool(name, _arguments, _db, user):
         await asyncio.sleep(0)

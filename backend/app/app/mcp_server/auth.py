@@ -18,6 +18,11 @@ carry a ``sid`` and have no resource audience. Only the Authorization header is
 read (never cookies), so a browser cannot be tricked into making authenticated
 MCP calls (CSRF).
 
+Personal access tokens (``tsk_`` prefix, ``services.api_tokens``) are the
+fallback for clients that can only send a static header. They are looked up
+by hash in Toston's database and carry a scope: a ``read`` token may only call
+read-only tools, which ``server.py`` enforces. OAuth tokens get ``write``.
+
 When Clerk itself cannot answer (timeout, 429, 5xx, JWKS down with no cached
 keys) the request gets 503, not 401: a 401 ``invalid_token`` makes clients
 discard a perfectly good token and send the user through OAuth again.
@@ -28,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -38,8 +44,14 @@ from app import crud
 from app.core.config import settings
 from app.core.security import ClerkKeysUnavailable, clerk_jwks
 from app.db.session import async_session
+from app.schemas.api_token import ApiTokenScope as TokenScope
+from app.services import api_tokens
 from app.services.clerk import ClerkUnavailable, verify_oauth_access_token
-from app.services.rate_limits import RateLimitedError, enforce_rate_limit
+from app.services.rate_limits import (
+    RateLimitedError,
+    enforce_rate_limit,
+    rate_limit_reached,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +141,21 @@ def _audience_matches(audiences: Any, resource: str) -> bool:
     )
 
 
-async def _verify_jwt(token: str, resource: str) -> str | None:
+@dataclass(frozen=True)
+class OAuthIdentity:
+    """The Clerk user an OAuth token belongs to, and the client it was issued to."""
+
+    sub: str
+    client_id: str | None = None
+
+
+def _client_of(claims: dict[str, Any]) -> str | None:
+    # RFC 9068 names it client_id; azp is the OIDC spelling.
+    client = claims.get("client_id") or claims.get("azp")
+    return client[:200] if isinstance(client, str) and client else None
+
+
+async def _verify_jwt(token: str, resource: str) -> OAuthIdentity | None:
     header = jwt.get_unverified_header(token)
     key = await clerk_jwks.key_for(header.get("kid"))
     if key is None:
@@ -160,13 +186,15 @@ async def _verify_jwt(token: str, resource: str) -> str | None:
         logger.info("MCP token rejected: session token")
         return None
     sub = claims.get("sub")
-    return sub if isinstance(sub, str) and sub else None
+    if not isinstance(sub, str) or not sub:
+        return None
+    return OAuthIdentity(sub, _client_of(claims))
 
 
 class _RejectedTokens:
-    """Opaque tokens Clerk rejected, by sha256, so retrying one bad token does
-    not call Clerk again. Valid tokens are never cached, so revocation stays
-    immediate."""
+    """Opaque OAuth tokens and personal access tokens that were refused, by
+    sha256, so retrying one bad token does not call Clerk or the database
+    again. Valid tokens are never cached, so revocation stays immediate."""
 
     TTL_SECONDS = 60
     MAX_ENTRIES = 10_000
@@ -195,10 +223,12 @@ class _RejectedTokens:
         self._seen.clear()
 
 
-rejected_opaque_tokens = _RejectedTokens()
+rejected_tokens = _RejectedTokens()
 
 
-def _subject_of_valid_record(data: dict[str, Any], resource: str) -> str | None:
+def _identity_of_valid_record(
+    data: dict[str, Any], resource: str
+) -> OAuthIdentity | None:
     if data.get("object") != "clerk_idp_oauth_access_token":
         return None  # includes {"active": false}
     if data.get("revoked") is not False or data.get("expired") is not False:
@@ -214,12 +244,36 @@ def _subject_of_valid_record(data: dict[str, Any], resource: str) -> str | None:
         logger.info("MCP token rejected: audience does not include this resource")
         return None
     subject = data.get("subject")
-    return subject if isinstance(subject, str) and subject else None
+    if not isinstance(subject, str) or not subject:
+        return None
+    return OAuthIdentity(subject, _client_of(data))
+
+
+def _digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+async def _limit_lookups(kind: str, client_ip: str | None) -> None:
+    """Cap token lookups made before any user is known, per client IP.
+
+    Each costs a Clerk API call or a database query whatever the token is.
+    """
+    if not client_ip:
+        return
+    try:
+        await enforce_rate_limit(
+            f"{kind}:{client_ip}",
+            settings.MCP_INTROSPECT_PER_IP_PER_MINUTE,
+            window_seconds=60,
+            fail_open=True,
+        )
+    except RateLimitedError:
+        raise _retry_later(429, "rate_limited") from None
 
 
 async def _introspect_opaque(
     token: str, resource: str, client_ip: str | None
-) -> str | None:
+) -> OAuthIdentity | None:
     """Resource-aware introspection of an opaque Clerk OAuth access token.
 
     The secret key scopes the lookup to this Clerk instance, the one that
@@ -230,28 +284,21 @@ async def _introspect_opaque(
     if not settings.CLERK_SECRET_KEY:
         logger.warning("MCP opaque token rejected: CLERK_SECRET_KEY is not set")
         return None
-    digest = hashlib.sha256(token.encode()).hexdigest()
-    if digest in rejected_opaque_tokens:
+    digest = _digest(token)
+    if digest in rejected_tokens:
         return None
-    if client_ip:
-        try:
-            await enforce_rate_limit(
-                f"mcp-introspect:{client_ip}",
-                settings.MCP_INTROSPECT_PER_IP_PER_MINUTE,
-                window_seconds=60,
-                fail_open=True,
-            )
-        except RateLimitedError:
-            raise _retry_later(429, "rate_limited") from None
+    await _limit_lookups("mcp-introspect", client_ip)
     record = await verify_oauth_access_token(token)
-    sub = _subject_of_valid_record(record, resource) if record else None
-    if sub is None:
-        rejected_opaque_tokens.add(digest)
-    return sub
+    identity = _identity_of_valid_record(record, resource) if record else None
+    if identity is None:
+        rejected_tokens.add(digest)
+    return identity
 
 
-async def verify_oauth_token(token: str, client_ip: str | None = None) -> str:
-    """Return the Clerk user id of a valid OAuth access token for this resource.
+async def verify_oauth_identity(
+    token: str, client_ip: str | None = None
+) -> OAuthIdentity:
+    """The Clerk user and OAuth client of a valid access token for this resource.
 
     Raises McpAuthError: 401 for a bad token, 429 when this client made too
     many lookups, 503 when Clerk cannot answer.
@@ -261,11 +308,11 @@ async def verify_oauth_token(token: str, client_ip: str | None = None) -> str:
         raise _invalid_token()
     try:
         if token.startswith(_OPAQUE_PREFIX):
-            sub = await _introspect_opaque(token, resource, client_ip)
+            identity = await _introspect_opaque(token, resource, client_ip)
         elif token.count(".") == 2:
-            sub = await _verify_jwt(token, resource)
+            identity = await _verify_jwt(token, resource)
         else:
-            sub = None
+            identity = None
     except McpAuthError:
         raise
     except (ClerkUnavailable, ClerkKeysUnavailable) as exc:
@@ -273,20 +320,63 @@ async def verify_oauth_token(token: str, client_ip: str | None = None) -> str:
         raise _retry_later(503, "temporarily_unavailable") from None
     except Exception as exc:  # noqa: BLE001 - any other failure means "not authenticated"
         logger.info("MCP token rejected: %s", type(exc).__name__)
-        sub = None
-    if sub is None:
+        identity = None
+    if identity is None:
         raise _invalid_token()
-    return sub
+    return identity
 
 
-async def authenticate(token: str, client_ip: str | None = None) -> int:
-    """Map a bearer token to a local user id, or raise McpAuthError.
+@dataclass(frozen=True)
+class AuthResult:
+    """Who is calling, and what the credential allows."""
+
+    user_id: int
+    scope: TokenScope = "write"
+    # Who is calling, for the audit log: "oauth:<client id>" or "pat:<token id>".
+    client: str | None = None
+
+
+async def _authenticate_pat(token: str, client_ip: str | None) -> AuthResult:
+    """Look a personal access token up by hash.
+
+    Only failed lookups count against the per-IP cap: valid tokens are used
+    on every request, so counting them would throttle real clients sharing an
+    address. An IP over its failure budget is refused before any query.
+    """
+    digest = _digest(token)
+    if digest in rejected_tokens:
+        raise _invalid_token()
+    failures_key = f"mcp-pat-failures:{client_ip}"
+    if client_ip and await rate_limit_reached(
+        failures_key, settings.MCP_INTROSPECT_PER_IP_PER_MINUTE, window_seconds=60
+    ):
+        raise _retry_later(429, "rate_limited")
+    try:
+        async with async_session() as db:
+            record = await api_tokens.resolve(db, token)
+            user = await crud.user.get(db, id=record.owner_id) if record else None
+    except Exception as exc:  # noqa: BLE001 - never echo the token
+        logger.warning("MCP token lookup failed: %s", type(exc).__name__)
+        raise _retry_later(503, "temporarily_unavailable") from None
+    if record is None or user is None:
+        rejected_tokens.add(digest)
+        await _limit_lookups("mcp-pat-failures", client_ip)
+        raise _invalid_token()
+    _check_user(user)
+    scope: TokenScope = "read" if record.scope == "read" else "write"
+    return AuthResult(user.id, scope, f"pat:{record.id}")
+
+
+async def authenticate(token: str, client_ip: str | None = None) -> AuthResult:
+    """Map a bearer token to a local user and scope, or raise McpAuthError.
 
     The single place that decides who may use MCP.
     """
-    sub = await verify_oauth_token(token, client_ip)
+    if token.startswith(api_tokens.TOKEN_PREFIX):
+        return await _authenticate_pat(token, client_ip)
+    identity = await verify_oauth_identity(token, client_ip)
     async with async_session() as db:
-        user = await crud.user.get_by_uuid(db, uuid=sub)
+        user = await crud.user.get_by_uuid(db, uuid=identity.sub)
     if user is None:
         raise McpAuthError(
             403,
@@ -294,6 +384,12 @@ async def authenticate(token: str, client_ip: str | None = None) -> int:
             "Sign in to Toston once in the app to finish creating your account, "
             "then reconnect.",
         )
+    _check_user(user)
+    client = f"oauth:{identity.client_id}" if identity.client_id else "oauth"
+    return AuthResult(user.id, client=client)
+
+
+def _check_user(user) -> None:
     if not crud.user.is_active(user):
         raise McpAuthError(403, "inactive_user")
     if crud.user.is_superuser(user):
@@ -304,7 +400,6 @@ async def authenticate(token: str, client_ip: str | None = None) -> int:
             "superuser_not_allowed",
             "Admin accounts can't connect over MCP. Use a regular account.",
         )
-    return user.id
 
 
 def _bearer_token(scope) -> str | None:
@@ -338,9 +433,14 @@ class BearerAuthMiddleware:
             if token is None:
                 raise _missing_token()
             client = scope.get("client")
-            user_id = await authenticate(token, client[0] if client else None)
+            auth = await authenticate(token, client[0] if client else None)
         except McpAuthError as exc:
             await exc.response()(scope, receive, send)
             return
-        scope["state"] = {**(scope.get("state") or {}), "toston_user_id": user_id}
+        scope["state"] = {
+            **(scope.get("state") or {}),
+            "toston_user_id": auth.user_id,
+            "toston_token_scope": auth.scope,
+            "toston_client": auth.client,
+        }
         await self.app(scope, receive, send)

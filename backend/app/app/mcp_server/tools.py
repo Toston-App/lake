@@ -1,4 +1,4 @@
-"""MCP-facing adapter over ``ai.chat_tools.execute_tool``; no transport.
+"""MCP-facing adapter over ``ai.dispatch.execute_tool``; no transport.
 
 The in-app chat already has a typed, ownership-checked tool dispatcher, and
 ``ai.confirmation`` holds the policy for risky and destructive operations. This
@@ -17,47 +17,132 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date
+from functools import cache
 from typing import Any
+from zoneinfo import available_timezones
 
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
-from app.ai.chat_tools import execute_tool
 from app.ai.confirmation import (
-    DESTRUCTIVE_TOOLS,
-    MANAGE_DELETE_ACTIONS,
+    MCP_CONVERSATION_ID,
+    PREVIEW_OUTDATED,
     ConfirmEditRejected,
     PendingActionConversationMismatch,
     PendingActionNotFound,
+    PreviewOutdated,
     ToolExecutionError,
     apply_untrusted_confirm_edits,
-    claim_action,
+    claim_current_action,
     discard_action,
     requires_confirmation,
     stage_action,
 )
+from app.ai.dispatch import describe_validation_error, execute_tool
+from app.ai.results import Result, err, ok
+from app.ai.tool_specs import TOOL_SPECS, ToolSpec, apply_date_defaults
 from app.ai.tools import TOOL_ARG_MODELS
 from app.core.config import settings
 from app.schemas.made_from import MADE_FROM_MCP
 from app.services.errors import ServiceError
+from app.services.profile import language_of
+from app.services.recurring_schedule import local_today
 from app.utilities.redis import CHAT_PENDING_TTL
 
-MCP_CONVERSATION_ID = "mcp"
-# MCP hosts answer in the user's language themselves; Toston's own messages
-# (previews, confirmations) are always English.
-MCP_LANGUAGE = "en"
+# Toston's own messages (previews, approval prompts, this module's errors)
+# are in English or Spanish: the client's ``language``, else the user's locale.
+LANGUAGES = ("en", "es")
+LANGUAGE_FIELD = "language"
+_LANGUAGE_SCHEMA = {
+    "type": "string",
+    "enum": list(LANGUAGES),
+    "description": (
+        "Language of Toston's previews and messages: es (Spanish) or en "
+        "(English). Defaults to the user's language in Toston."
+    ),
+}
 CONFIRM_TOOL = "confirm_action"
 CANCEL_TOOL = "cancel_action"
 # Fields that only matter to Toston's own chat UI; MCP clients never see them.
 _CHAT_ONLY_FIELDS = ("presentation", "response_language")
+# MCP-only input on tools that default a date: the user's IANA time zone, so
+# "today" is the user's today and not the server's.
+TIME_ZONE_FIELD = "time_zone"
+_TIME_ZONE_SCHEMA = {
+    "type": "string",
+    "description": (
+        "The user's IANA time zone, e.g. Europe/Madrid or America/Bogota. "
+        "Dates left empty default to today in this zone (UTC if omitted)."
+    ),
+}
 
-_NOT_FOUND_ERROR = "Action not found, expired, or already confirmed"
+# Every tool returns this envelope (``ai.results``); ``data`` varies by tool.
+RESULT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "success": {"type": "boolean"},
+        "data": {"description": "The tool's result; its shape depends on the tool."},
+        "error": {"type": "string", "description": "Why the call failed."},
+        "status": {
+            "type": "string",
+            "enum": ["confirmation_required"],
+            "description": "Set when the call was staged instead of run.",
+        },
+        "action_id": {"type": "string"},
+        "expires_in_seconds": {"type": "integer"},
+        "preview": {"type": "object"},
+        "message": {"type": "string"},
+        "next_step": {"type": "string"},
+        "page": {"type": "integer"},
+        "has_more": {"type": "boolean"},
+        "next_page": {"type": ["integer", "null"]},
+    },
+    "required": ["success"],
+}
 
-Result = dict[str, Any]
-Handler = Callable[[dict[str, Any], AsyncSession, models.User], Awaitable[Result]]
+_MESSAGES: dict[str, dict[str, str]] = {
+    "en": {
+        "not_found": "Action not found, expired, or already confirmed",
+        "outdated": PREVIEW_OUTDATED,
+        "next_step": (
+            "Show this preview to the user. Call confirm_action with this "
+            "action_id ONLY after the user explicitly approves; otherwise "
+            "call cancel_action."
+        ),
+        "unknown_time_zone": (
+            "Unknown time_zone {value!r}: use an IANA name such as Europe/Madrid."
+        ),
+        "unknown_language": "Unknown language {value!r}: use en or es.",
+    },
+    "es": {
+        "not_found": "La acción no existe, venció o ya se confirmó",
+        "outdated": (
+            "El registro cambió después de mostrar esta vista previa. Pide la "
+            "acción de nuevo para ver la versión actual."
+        ),
+        "next_step": (
+            "Show this preview to the user in Spanish. Call confirm_action "
+            "with this action_id ONLY after the user explicitly approves; "
+            "otherwise call cancel_action."
+        ),
+        "unknown_time_zone": (
+            "Zona horaria desconocida {value!r}: usa un nombre IANA como "
+            "America/Mexico_City."
+        ),
+        "unknown_language": "Idioma desconocido {value!r}: usa en o es.",
+    },
+}
+
+
+def message(language: str, key: str, **values: Any) -> str:
+    return _MESSAGES[language][key].format(**values)
+
+
+# (arguments, db, user, language)
+Handler = Callable[[dict[str, Any], AsyncSession, models.User, str], Awaitable[Result]]
 Precheck = Callable[[dict[str, Any]], str | None]
 
 
@@ -85,49 +170,21 @@ class CancelActionArgs(BaseModel):
 @dataclass(frozen=True)
 class McpTool:
     name: str
-    summary: str
+    description: str
     arg_model: type[BaseModel] | None
     read_only: bool
-    # Set for MCP-only tools; dispatcher tools leave it None.
+    destructive: bool
+    # Set for MCP-only tools; shared tools run through ``execute_tool``.
     handler: Handler | None = None
     # Extra MCP-only input check; returns an error message to refuse the call.
     precheck: Precheck | None = None
+    # The shared registry entry, for tools the chat offers too.
+    spec: ToolSpec | None = None
 
     @property
-    def destructive(self) -> bool:
-        """MCP ``destructiveHint``: the call may delete or overwrite data."""
-        if self.read_only:
-            return False
-        if self.handler is not None:
-            return self.name == CONFIRM_TOOL
-        return (
-            self.name in DESTRUCTIVE_TOOLS
-            or self.name in MANAGE_DELETE_ACTIONS
-            or self.name.startswith("update_")
-        )
-
-    @property
-    def description(self) -> str:
-        """``summary`` plus the confirmation rule, derived from the policy."""
-        if self.read_only or self.handler is not None:
-            return self.summary
-        if self.name in MANAGE_DELETE_ACTIONS:
-            rule = "Creates run immediately; updates and deletes require confirmation."
-        elif requires_confirmation(self.name, {}):
-            rule = "Requires confirmation."
-        else:
-            rule = "It runs immediately."
-        return f"{self.summary} {rule}"
-
-
-def _read(name: str, summary: str) -> McpTool:
-    return McpTool(name, summary, TOOL_ARG_MODELS.get(name), read_only=True)
-
-
-def _write(name: str, summary: str, *, precheck: Precheck | None = None) -> McpTool:
-    return McpTool(
-        name, summary, TOOL_ARG_MODELS[name], read_only=False, precheck=precheck
-    )
+    def enabled(self) -> bool:
+        """Hidden from clients (and refused) while its feature is off."""
+        return self.spec is None or self.spec.enabled
 
 
 def _bulk_size(args: dict[str, Any]) -> str | None:
@@ -146,48 +203,44 @@ def _bulk_size(args: dict[str, Any]) -> str | None:
     return None
 
 
-def _error(message: str) -> Result:
-    return {"success": False, "error": message}
+_error = err
 
 
 def _validation_error(exc: ValidationError) -> Result:
-    details = "; ".join(
-        f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in exc.errors()
-    )
-    return _error(f"Invalid arguments: {details}")
+    return _error(f"Invalid arguments: {describe_validation_error(exc)}")
 
 
-_DATED_CREATE_TOOLS = ("create_expense", "create_income", "create_transfer")
+TIME_ZONE_TOOLS = frozenset(
+    name for name, spec in TOOL_SPECS.items() if spec.uses_time_zone
+)
 
 
-def _default_dates(name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Fill a missing ``date`` with today (UTC), as the in-app chat does.
+@cache
+def _known_time_zones() -> frozenset[str]:
+    return frozenset(available_timezones())
 
-    The chat agent fills dates from the user's local date before dispatch; MCP
-    goes straight to ``execute_tool``, whose schemas leave a missing date NULL,
-    which hides the record from every period summary. MCP clients send no time
-    zone, so UTC is the best server-side default.
-    """
-    today = datetime.now(timezone.utc).date().isoformat()
-    if name in _DATED_CREATE_TOOLS:
-        if not args.get("date"):
-            args = {**args, "date": today}
-    elif name == "bulk_create_transactions":
-        args = dict(args)
-        for key in ("incomes", "expenses"):
-            items = args.get(key)
-            if isinstance(items, list):
-                args[key] = [
-                    {**item, "date": today}
-                    if isinstance(item, dict) and not item.get("date")
-                    else item
-                    for item in items
-                ]
-    return args
+
+def _today(time_zone: str | None) -> date:
+    return local_today(time_zone or "UTC")
+
+
+def _default_dates(
+    name: str, args: dict[str, Any], time_zone: str | None = None
+) -> dict[str, Any]:
+    """Fill missing dates with the user's today (UTC when the client sends no
+    ``time_zone``), as the in-app chat does with the browser's date."""
+    spec = TOOL_SPECS.get(name)
+    if spec is None:
+        return args
+    return apply_date_defaults(spec, args, _today(time_zone), time_zone)
 
 
 async def _stage(
-    name: str, args: dict[str, Any], db: AsyncSession, user: models.User
+    name: str,
+    args: dict[str, Any],
+    db: AsyncSession,
+    user: models.User,
+    language: str,
 ) -> Result:
     """Validate a risky call, store it as pending and return its preview."""
     try:
@@ -201,7 +254,7 @@ async def _stage(
             name,
             args,
             conversation_id=MCP_CONVERSATION_ID,
-            response_language=MCP_LANGUAGE,
+            response_language=language,
         )
     except (ServiceError, ToolExecutionError) as exc:
         return _error(exc.message)
@@ -212,26 +265,26 @@ async def _stage(
         "expires_in_seconds": CHAT_PENDING_TTL,
         "preview": jsonable_encoder(staged.preview),
         "message": staged.message,
-        "next_step": (
-            "Show this preview to the user. Call confirm_action with this "
-            "action_id ONLY after the user explicitly approves; otherwise "
-            "call cancel_action."
-        ),
+        "next_step": message(language, "next_step"),
     }
 
 
 async def _confirm(
-    arguments: dict[str, Any], db: AsyncSession, user: models.User
+    arguments: dict[str, Any], db: AsyncSession, user: models.User, language: str
 ) -> Result:
     try:
         parsed = ConfirmActionArgs(**arguments)
     except ValidationError as exc:
         return _validation_error(exc)
     try:
-        pending = await claim_action(parsed.action_id, user.id, MCP_CONVERSATION_ID)
+        pending = await claim_current_action(
+            db, user, parsed.action_id, MCP_CONVERSATION_ID
+        )
     except (PendingActionNotFound, PendingActionConversationMismatch):
         # An in-app chat action looks the same as a missing one from here.
-        return _error(_NOT_FOUND_ERROR)
+        return _error(message(language, "not_found"))
+    except PreviewOutdated:
+        return _error(message(language, "outdated"))
     tool_name = pending["tool_name"]
     try:
         tool_args, edited = apply_untrusted_confirm_edits(
@@ -239,19 +292,25 @@ async def _confirm(
         )
     except ConfirmEditRejected as exc:
         return _error(exc.message)
-    tool_args.setdefault("response_language", MCP_LANGUAGE)
+    staged_language = tool_args.setdefault("response_language", language)
     if edited:
         # The user approved the old preview, not the edited one: stage the
         # edited call as a new action so the user sees what will run.
-        return await _stage(tool_name, _default_dates(tool_name, tool_args), db, user)
+        return await _stage(
+            tool_name,
+            _default_dates(tool_name, tool_args),
+            db,
+            user,
+            staged_language if staged_language in LANGUAGES else language,
+        )
     result, _ = await execute_tool(
-        tool_name, tool_args, db, user, confirmed=True, made_from=MADE_FROM_MCP
+        tool_name, tool_args, db, user, made_from=MADE_FROM_MCP
     )
     return result
 
 
 async def _cancel(
-    arguments: dict[str, Any], _db: AsyncSession, user: models.User
+    arguments: dict[str, Any], _db: AsyncSession, user: models.User, language: str
 ) -> Result:
     try:
         parsed = CancelActionArgs(**arguments)
@@ -260,149 +319,64 @@ async def _cancel(
     try:
         await discard_action(parsed.action_id, user.id, MCP_CONVERSATION_ID)
     except (PendingActionNotFound, PendingActionConversationMismatch):
-        return _error(_NOT_FOUND_ERROR)
-    return {"success": True, "data": {"cancelled": True}}
+        return _error(message(language, "not_found"))
+    return ok({"cancelled": True})
+
+
+# MCP-only input checks on shared tools.
+_PRECHECKS: dict[str, Precheck] = {
+    "bulk_create_transactions": _bulk_size,
+    "bulk_delete_transactions": _bulk_size,
+}
+
+
+def _shared(spec: ToolSpec) -> McpTool:
+    return McpTool(
+        name=spec.name,
+        description=spec.description,
+        arg_model=TOOL_ARG_MODELS.get(spec.name),
+        read_only=spec.read_only,
+        destructive=spec.destructive,
+        precheck=_PRECHECKS.get(spec.name),
+        spec=spec,
+    )
 
 
 _TOOL_LIST: tuple[McpTool, ...] = (
-    _read(
-        "get_user_profile",
-        "Get the user's profile (name and country). Use it to personalize "
-        "answers; it does not include balances or currency.",
-    ),
-    _read(
-        "list_accounts",
-        "List the user's accounts with their balances. Use it to find the "
-        "account ids that other tools require.",
-    ),
-    _read(
-        "list_categories",
-        "List the user's categories and their subcategories. Use it to find "
-        "the category and subcategory ids that other tools require.",
-    ),
-    _read(
-        "list_places",
-        "List the user's saved places (merchants or locations). Use it to find "
-        "the place ids that other tools require.",
-    ),
-    _read(
-        "search_transactions",
-        "Search the user's expenses, incomes and transfers by date, amount, "
-        "text, account, category or place. Returned transaction ids can be "
-        "used with the update_* and delete_* tools.",
-    ),
-    _read(
-        "get_period_summary",
-        "Get totals for a period: income, expenses and balance, with "
-        "breakdowns. Use it to answer how much was spent or earned over a "
-        "date range.",
-    ),
-    _read(
-        "get_period_charts",
-        "Get chart-ready series for a period, such as spending over time and "
-        "by category. Use it for trends and comparisons.",
-    ),
-    _read(
-        "list_balance_adjustments",
-        "List past balance adjustments, which are manual corrections to an "
-        "account balance. Account ids come from list_accounts.",
-    ),
-    _write(
-        "manage_account",
-        "Create, update or delete an account (bank account, cash, card). "
-        "Updates and deletes need an id from list_accounts.",
-    ),
-    _write(
-        "manage_category",
-        "Create, update or delete a category. Updates and deletes need an id "
-        "from list_categories.",
-    ),
-    _write(
-        "manage_subcategory",
-        "Create, update or delete a subcategory under a category. Updates and "
-        "deletes need ids from list_categories.",
-    ),
-    _write(
-        "manage_place",
-        "Create, update or delete a saved place. Updates and deletes need an "
-        "id from list_places.",
-    ),
-    _write(
-        "create_expense",
-        "Record a new expense. Account, category and place ids come from the "
-        "list_* tools.",
-    ),
-    _write(
-        "update_expense",
-        "Change fields of an existing expense. The id comes from search_transactions.",
-    ),
-    _write(
-        "delete_expense",
-        "Delete an expense. The id comes from search_transactions.",
-    ),
-    _write(
-        "create_income",
-        "Record a new income. Account and category ids come from the list_* tools.",
-    ),
-    _write(
-        "update_income",
-        "Change fields of an existing income. The id comes from search_transactions.",
-    ),
-    _write(
-        "delete_income",
-        "Delete an income. The id comes from search_transactions.",
-    ),
-    _write(
-        "create_transfer",
-        "Move money between two of the user's accounts. Account ids come from "
-        "list_accounts.",
-    ),
-    _write(
-        "update_transfer",
-        "Change fields of an existing transfer. The id comes from search_transactions.",
-    ),
-    _write(
-        "delete_transfer",
-        "Delete a transfer. The id comes from search_transactions.",
-    ),
-    _write(
-        "bulk_create_transactions",
-        "Create many incomes and expenses in one call, for example when "
-        "importing a list. The size is capped per call.",
-        precheck=_bulk_size,
-    ),
-    _write(
-        "bulk_delete_transactions",
-        "Delete many incomes and expenses by id in one call. Ids come from "
-        "search_transactions. The size is capped per call.",
-        precheck=_bulk_size,
-    ),
-    _write(
-        "create_balance_adjustment",
-        "Set an account's balance to a stated value by recording an "
-        "adjustment. The account id comes from list_accounts.",
-    ),
+    *(_shared(spec) for spec in TOOL_SPECS.values()),
     McpTool(
-        CONFIRM_TOOL,
-        "Execute a pending action after the user has explicitly approved the "
-        "preview. Pass the action_id from a confirmation_required result. If "
-        "the user asked for changes, pass them as edits: nothing runs yet and a "
-        "new preview and action_id come back for the user to approve.",
-        ConfirmActionArgs,
+        name=CONFIRM_TOOL,
+        description=(
+            "Execute a pending action after the user has explicitly approved "
+            "the preview. Pass the action_id from a confirmation_required "
+            "result. If the user asked for changes, pass them as edits: nothing "
+            "runs yet and a new preview and action_id come back for the user to "
+            "approve."
+        ),
+        arg_model=ConfirmActionArgs,
         read_only=False,
+        destructive=True,
         handler=_confirm,
     ),
     McpTool(
-        CANCEL_TOOL,
-        "Discard a pending action the user did not approve. Pass the "
-        "action_id from a confirmation_required result.",
-        CancelActionArgs,
+        name=CANCEL_TOOL,
+        description=(
+            "Discard a pending action the user did not approve. Pass the "
+            "action_id from a confirmation_required result."
+        ),
+        arg_model=CancelActionArgs,
         read_only=False,
+        destructive=False,
         handler=_cancel,
     ),
 )
 
 MCP_TOOLS: dict[str, McpTool] = {tool.name: tool for tool in _TOOL_LIST}
+
+
+def enabled_tools() -> list[McpTool]:
+    """The tools to advertise now: those whose feature is switched on."""
+    return [tool for tool in MCP_TOOLS.values() if tool.enabled]
 
 
 def _inline_refs(node: Any, defs: dict[str, Any], stack: tuple[str, ...] = ()) -> Any:
@@ -440,7 +414,21 @@ def input_schema(tool: McpTool) -> dict[str, Any]:
     else:
         schema.pop("required", None)
     schema.pop("title", None)
+    if tool.name in TIME_ZONE_TOOLS:
+        schema.setdefault("properties", {})[TIME_ZONE_FIELD] = dict(_TIME_ZONE_SCHEMA)
+    if _takes_language(tool):
+        schema.setdefault("properties", {})[LANGUAGE_FIELD] = dict(_LANGUAGE_SCHEMA)
     return schema
+
+
+def _takes_language(tool: McpTool) -> bool:
+    """Tools whose result includes Toston's own wording: approvals and their steps."""
+    if tool.handler is not None:
+        return True
+    return (
+        tool.arg_model is not None
+        and "response_language" in tool.arg_model.model_fields
+    )
 
 
 async def call_tool(
@@ -451,22 +439,30 @@ async def call_tool(
 ) -> Result:
     """Run one MCP tool call and return a plain dict (never raises for bad input)."""
     tool = MCP_TOOLS.get(name)
-    if tool is None:
+    if tool is None or not tool.enabled:
         return _error(f"Unknown tool: {name}")
 
     args = {k: v for k, v in (arguments or {}).items() if k not in _CHAT_ONLY_FIELDS}
+    language = args.pop(LANGUAGE_FIELD, None) or language_of(user)
+    if language not in LANGUAGES:
+        return _error(message(language_of(user), "unknown_language", value=language))
+    time_zone = args.pop(TIME_ZONE_FIELD, None)
+    if time_zone is not None and (
+        not isinstance(time_zone, str) or time_zone not in _known_time_zones()
+    ):
+        return _error(message(language, "unknown_time_zone", value=time_zone))
     if tool.handler is not None:
-        return await tool.handler(args, db, user)
+        return await tool.handler(args, db, user, language)
 
     model_fields = tool.arg_model.model_fields if tool.arg_model else {}
     if "response_language" in model_fields:
-        args["response_language"] = MCP_LANGUAGE
+        args["response_language"] = language
     if tool.precheck is not None and (problem := tool.precheck(args)):
         return _error(problem)
 
-    args = _default_dates(name, args)
+    args = _default_dates(name, args, time_zone)
     if requires_confirmation(name, args):
-        return await _stage(name, args, db, user)
+        return await _stage(name, args, db, user, language)
 
     result, _ = await execute_tool(name, args, db, user, made_from=MADE_FROM_MCP)
     return result

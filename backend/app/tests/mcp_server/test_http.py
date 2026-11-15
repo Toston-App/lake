@@ -10,7 +10,7 @@ from app.main import app
 from app.mcp_server import auth as mcp_auth
 from app.mcp_server import http as mcp_http
 from app.mcp_server import server as mcp_server
-from app.mcp_server.tools import MCP_TOOLS
+from app.mcp_server.tools import enabled_tools
 from app.services.rate_limits import RateLimitedError
 from httpx import ASGITransport, AsyncClient
 from tests.mcp_server.helpers import (
@@ -29,12 +29,14 @@ def mcp_env(monkeypatch):
     """Patch settings, auth and DB access around the real HTTP stack."""
     monkeypatch.setattr(settings, "MCP_ENABLED", True)
     monkeypatch.setattr(settings, "MCP_PUBLIC_URL", MCP_URL)
-    monkeypatch.setattr(mcp_auth, "authenticate", AsyncMock(return_value=1))
+    monkeypatch.setattr(
+        mcp_auth, "authenticate", AsyncMock(return_value=mcp_auth.AuthResult(1))
+    )
     monkeypatch.setattr(mcp_server, "async_session", fake_session)
     monkeypatch.setattr(
         mcp_server,
         "_load_user_and_tier",
-        AsyncMock(return_value=(SimpleNamespace(id=1), Tier.free)),
+        AsyncMock(return_value=(SimpleNamespace(id=1, mcp_read_only=False), Tier.free)),
     )
     monkeypatch.setattr(mcp_server, "enforce_mcp_limits", AsyncMock())
 
@@ -101,9 +103,10 @@ async def test_tools_list():
         response = await _post(mcp_client, rpc("tools/list"))
         assert response.status_code == 200
         tools = {t["name"]: t for t in response.json()["result"]["tools"]}
-        assert set(tools) == set(MCP_TOOLS)
+        assert set(tools) == {tool.name for tool in enabled_tools()}
         assert tools["delete_expense"]["annotations"]["destructiveHint"] is True
         assert tools["list_accounts"]["annotations"]["readOnlyHint"] is True
+        assert tools["list_accounts"]["outputSchema"]["required"] == ["success"]
 
 
 @pytest.mark.usefixtures("mcp_env")
@@ -204,3 +207,53 @@ async def test_authorization_server_metadata_upstream_failure(monkeypatch):
     ) as client:
         response = await client.get("/.well-known/oauth-authorization-server")
     assert response.status_code == 502
+
+
+# -- resources and prompts --------------------------------------------------------
+
+
+@pytest.mark.usefixtures("mcp_env")
+async def test_resources_list_and_read(monkeypatch, audit_log):
+    call_tool = AsyncMock(return_value={"success": True, "data": [{"id": 3}]})
+    monkeypatch.setattr(mcp_server, "call_tool", call_tool)
+    async with _open_client() as mcp_client:
+        listed = await _post(mcp_client, rpc("resources/list"))
+        read = await _post(
+            mcp_client, rpc("resources/read", {"uri": "toston://accounts"})
+        )
+
+    uris = {r["uri"] for r in listed.json()["result"]["resources"]}
+    assert {"toston://accounts", "toston://profile", "toston://recurring"} <= uris
+    [content] = read.json()["result"]["contents"]
+    assert content["mimeType"] == "application/json"
+    assert '"id": 3' in content["text"]
+    assert call_tool.await_args.args[0] == "list_accounts"
+    assert audit_log.await_args.kwargs["tool_name"] == "resource:accounts"
+
+
+@pytest.mark.usefixtures("mcp_env")
+async def test_unknown_resource_is_an_error():
+    async with _open_client() as mcp_client:
+        response = await _post(
+            mcp_client, rpc("resources/read", {"uri": "toston://secrets"})
+        )
+    assert "error" in response.json()
+
+
+@pytest.mark.usefixtures("mcp_env")
+async def test_prompts_list_and_get():
+    async with _open_client() as mcp_client:
+        listed = await _post(mcp_client, rpc("prompts/list"))
+        got = await _post(
+            mcp_client,
+            rpc(
+                "prompts/get",
+                {"name": "monthly_review", "arguments": {"month": "2026-10"}},
+            ),
+        )
+
+    names = {p["name"] for p in listed.json()["result"]["prompts"]}
+    assert {"monthly_review", "log_receipt", "subscriptions_review"} <= names
+    [message] = got.json()["result"]["messages"]
+    assert "2026-10" in message["content"]["text"]
+    assert "compare_periods" in message["content"]["text"]

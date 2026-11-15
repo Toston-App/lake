@@ -9,18 +9,8 @@ from app.mcp_server.tools import MCP_TOOLS
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SKILL_DIR = REPO_ROOT / "integrations" / "toston" / "skills" / "toston"
-TOOL_PREFIXES = (
-    "list_",
-    "get_",
-    "create_",
-    "update_",
-    "delete_",
-    "manage_",
-    "bulk_",
-    "search_",
-    "confirm_",
-    "cancel_",
-)
+# Every verb a tool name starts with, e.g. "list_" or "convert_".
+TOOL_PREFIXES = tuple({name.split("_")[0] + "_" for name in MCP_TOOLS})
 
 
 def _read(path: Path) -> str:
@@ -31,16 +21,16 @@ def _read(path: Path) -> str:
 def test_skill_repeats_server_rules_verbatim() -> None:
     skill = _read(SKILL_DIR / "SKILL.md")
     rules = [
-        line
-        for line in SERVER_INSTRUCTIONS.splitlines()
-        if re.match(r"^[1-6]\.", line)
+        line for line in SERVER_INSTRUCTIONS.splitlines() if re.match(r"^[1-6]\.", line)
     ]
     assert len(rules) == 6
     for rule in rules:
         assert rule in skill
 
 
-@pytest.mark.parametrize("name", ["SKILL.md", "references/tools.md", "references/workflows.md"])
+@pytest.mark.parametrize(
+    "name", ["SKILL.md", "references/tools.md", "references/workflows.md"]
+)
 def test_backticked_tool_names_exist(name: str) -> None:
     text = _read(SKILL_DIR / name)
     tokens = set(re.findall(r"`([^`\n]+)`", text))

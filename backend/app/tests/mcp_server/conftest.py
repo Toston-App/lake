@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from app.core import security
 from app.mcp_server import auth as mcp_auth
+from app.mcp_server import server as mcp_server
 from app.utilities import redis as redis_utils
 from tests.mcp_server.helpers import FakeRedis
 
@@ -19,10 +20,10 @@ def setup_database() -> None:
 @pytest.fixture(autouse=True)
 def _fresh_auth_caches():
     security.clerk_jwks.clear()
-    mcp_auth.rejected_opaque_tokens.clear()
+    mcp_auth.rejected_tokens.clear()
     yield
     security.clerk_jwks.clear()
-    mcp_auth.rejected_opaque_tokens.clear()
+    mcp_auth.rejected_tokens.clear()
 
 
 @pytest.fixture
@@ -31,6 +32,14 @@ def jwks_fetch(monkeypatch) -> AsyncMock:
     fetch = AsyncMock(return_value=[])
     monkeypatch.setattr(security.clerk_jwks, "_fetch", fetch)
     return fetch
+
+
+@pytest.fixture(autouse=True)
+def audit_log(monkeypatch) -> AsyncMock:
+    """The MCP audit writer; these tests have no database to write to."""
+    record = AsyncMock()
+    monkeypatch.setattr(mcp_server, "record_call", record)
+    return record
 
 
 @pytest.fixture
