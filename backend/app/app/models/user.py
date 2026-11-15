@@ -8,6 +8,7 @@ from app.db.base_class import Base
 
 if TYPE_CHECKING:
     from .account import Account  # noqa: F401
+    from .api_token import ApiToken  # noqa: F401
     from .balance_adjustment import BalanceAdjustment  # noqa: F401
     from .category import Category  # noqa: F401
     from .data_export import DataExport  # noqa: F401
@@ -43,6 +44,10 @@ class User(Base):
     balance_outcome: float = Column(Float, default=0.0)
     # Default account for WhatsApp transactions
     default_account_id: int = Column(Integer, ForeignKey("account.id"), nullable=True)
+    # When true, MCP clients (AI apps) may only call read-only tools.
+    mcp_read_only: bool = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     items: list["Item"] = relationship(
@@ -95,4 +100,7 @@ class User(Base):
     )
     recurring_transactions: list["RecurringTransaction"] = relationship(
         "RecurringTransaction", back_populates="owner", cascade="all, delete-orphan"
+    )
+    api_tokens: list["ApiToken"] = relationship(
+        "ApiToken", back_populates="owner", cascade="all, delete-orphan"
     )

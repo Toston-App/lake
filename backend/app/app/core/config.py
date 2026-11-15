@@ -187,6 +187,10 @@ class Settings(BaseSettings):
     # Per-client-IP cap on Clerk Backend API introspections of opaque tokens,
     # which run before any user is known. 0 disables it.
     MCP_INTROSPECT_PER_IP_PER_MINUTE: int = 120
+    # Personal access tokens (tsk_...) for MCP clients that can't do OAuth.
+    API_TOKENS_MAX_PER_USER: int = 10
+    # How long MCP audit rows (mcp_tool_call) are kept.
+    MCP_AUDIT_RETENTION_DAYS: int = 90
 
     @field_validator("MCP_PUBLIC_URL")
     @classmethod
@@ -249,6 +253,9 @@ class Settings(BaseSettings):
     POLAR_ORGANIZATION_ID: str | None = None
     # "sandbox" targets api.sandbox.polar.sh; "production" targets api.polar.sh.
     POLAR_SERVER: str = "sandbox"
+    # Public URL of the web app (e.g. https://app.cleverbill.ing), for links
+    # the assistant gives users, such as the data export page.
+    WEB_APP_URL: AnyHttpUrl | None = None
     # Public base URL of this backend, used to build Polar success_url for
     # checkout. Falls back to SERVER_HOST when not set.
     POLAR_SUCCESS_URL_BASE: AnyHttpUrl | None = None
