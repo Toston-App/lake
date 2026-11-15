@@ -1,8 +1,8 @@
 # Use Toston from your LLM (MCP)
 
-Toston (also called Clever) exposes your accounts, transactions, categories and places to LLM clients through the Model Context Protocol (MCP). Once connected, your LLM can log expenses, read your spending summaries, and tidy up your data on your behalf.
+Toston (also called Clever) exposes your accounts, transactions, recurring transactions, categories, places and investments to LLM clients through the Model Context Protocol (MCP). Once connected, your LLM can log expenses, read and compare your spending, manage subscriptions and bills, record investments (including the first purchase of a new stock or coin), export all your data to Excel (you download the file from the app, never through the AI), and tidy up your data on your behalf. Previews and messages come in English or Spanish, following your language in Toston unless the client asks for the other.
 
-Your LLM can read your data and create records. It cannot do anything risky silently: deletes, edits, transfers, balance adjustments and bulk operations always come back to you as a preview that you must approve first.
+Your LLM can read your data and create records. It cannot do anything risky silently: deletes, edits, transfers, balance adjustments, bulk operations, investment entries and changes to recurring transactions always come back to you as a preview that you must approve first.
 
 ## The server URL
 
@@ -152,14 +152,57 @@ Skills: put the `toston` skill folder in `~/.agents/skills` (all repositories) o
 Source: https://learn.chatgpt.com/docs/extend/mcp?surface=cli
 Source: https://learn.chatgpt.com/docs/build-skills
 
+## Resources and prompts
+
+Besides tools, the server offers read-only resources your client can attach as context (`toston://profile`, `toston://accounts`, `toston://categories`, `toston://places`, `toston://recurring`) and ready-made prompts: a monthly review, logging a receipt, a subscriptions review, and finding and fixing transactions. How you pick them depends on the client (for example the attachment or slash-command menu).
+
+## Using a personal access token
+
+Some clients can't sign in with OAuth and can only send a fixed header: the xAI API's remote MCP tool, CI scripts, and agents on headless machines. For those, create a personal access token and send it as a bearer token:
+
+```
+Authorization: Bearer tsk_...
+```
+
+Create one in Toston under **Settings > AI connections > Access tokens**. Scripts can also use `POST /api/v1/api-tokens` while signed in:
+
+```json
+{"name": "CI", "scope": "read", "expires_in_days": 90}
+```
+
+- `scope` is `read` (only tools that don't change anything) or `write` (everything, with the same confirmation previews as OAuth). Use `read` unless the client needs to write.
+- `expires_in_days` is optional, from 1 to 365. Without it the token works until you revoke it.
+- The response shows the token once. Toston stores only a hash of it, so it can't show it again.
+- List your tokens with `GET /api/v1/api-tokens` and revoke one with `DELETE /api/v1/api-tokens/{id}`. A revoked token stops working on the next request.
+- Tokens work only on the MCP endpoint, not on the rest of the Toston API.
+
+In OpenCode, add the header to the remote entry:
+
+```json
+"toston": {
+  "type": "remote",
+  "url": "https://api.cleverbill.ing/mcp",
+  "headers": { "Authorization": "Bearer tsk_..." }
+}
+```
+
+For the xAI API, pass the server URL and the same `Authorization` header in the remote MCP tool's configuration; see https://docs.x.ai for the field names.
+
+Treat a token like a password. Don't commit it to a repository, and revoke it as soon as you think it has leaked.
+
 ## Troubleshooting
 
 - 401 or "unauthorized": your sign-in expired or was never completed. Disconnect and reconnect the connector in your client.
 - `account_not_set_up`: open the Toston app once and finish setting up your account, then try again.
 - Rate-limit messages: you are sending too many requests. Wait the number of seconds the message gives, then try again.
 - `inactive_user`: your Toston account is deactivated; contact support.
-- Revoking access: remove the connector in your client to stop it using Toston. Tokens it already holds stop working when they expire. A way to revoke access from Toston's settings is coming soon.
+- "This token is read-only.": the personal access token has the `read` scope. Create a `write` token if the client needs to change data.
+- Revoking access: remove the connector in your client to stop it using Toston; tokens it already holds stop working when they expire. **Settings > AI connections** lists every app that connected in the last 90 days, revokes access tokens, and has a switch that makes all AI apps read-only.
+- "AI apps can only read your data": the read-only switch is on in **Settings > AI connections**.
+- Monthly limit messages: your plan's AI app calls for the month are used up.
 
 ## Privacy
+
+Toston keeps a log of the tool calls each connection makes: the tool's name, which client or token made the call, whether it worked, and when. It doesn't log what the call sent or returned, or the text of any error.
 
 Your LLM provider sees the finance data the tools return, because the model needs it to answer. Review your provider's data policy before connecting. Toston makes no claims about how any provider handles that data.

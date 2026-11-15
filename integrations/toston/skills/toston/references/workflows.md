@@ -21,5 +21,5 @@ The safety rules in SKILL.md apply to every workflow here. Resolve ids first, an
 1. Call `get_period_summary` with `date_filter_type` = "year" and `date` = "YYYY", then `get_period_charts` for the same year.
 2. For a month-by-month view, call `get_period_summary` for each month with `date_filter_type` = "month".
 3. Present total income, total expenses and net, then a table of months, the top 5 categories and the top 5 places.
-4. Compare with the previous year when the user asks.
+4. Compare with the previous year with `compare_periods` (`date_filter_type` = "year") when the user asks.
 5. Offer a follow-up on the months or categories that stand out.

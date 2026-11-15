@@ -54,7 +54,7 @@ Key facts from recon that shape this:
 | 001  | [Transport-agnostic MCP tool core with server-side confirmation](001-mcp-tool-core.md) | P1 | M | — | DONE (reviewed 2026-11-09; branch `advisor/001-mcp-tool-core`, 2 commits, not merged) |
 | 002  | [Remote MCP endpoint at /mcp with Clerk OAuth](002-remote-mcp-endpoint-clerk-oauth.md) | P1 | L | 001 | DONE for Steps 1–7 (reviewed 2026-11-09; branch `advisor/002-remote-mcp-endpoint`, 2 commits stacked on 001, not merged). PENDING: Clerk Step 0 + manual Step 8, which need a public https dev URL |
 | 003  | [Toston skill, Claude plugin and per-client install guides](003-skill-and-client-distribution.md) | P1 | M | 002 (tool names from 001) | DONE (reviewed 2026-11-09; branch `advisor/003-skill-and-distribution`, 2 commits stacked on 002, not merged). Hold the merge until https://api.cleverbill.ing/mcp is live: the repo is public. |
-| 004  | [Personal access tokens for clients without OAuth](004-personal-access-tokens.md) | P2 | M | 002 | TODO |
+| 004  | [Personal access tokens for clients without OAuth](004-personal-access-tokens.md) | P2 | M | 002 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
