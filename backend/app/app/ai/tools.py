@@ -10,7 +10,7 @@ runs. Field ``description``s become the model-facing parameter descriptions.
 The ``*Input`` models deliberately omit server-controlled fields
 (``made_from``, ``import_id``, ``current_balance``, ``total_*``, ``color``,
 ``type``, ``owner_id`` …) so the model never sees fields it must not set.
-``execute_tool`` (chat_tools.py) re-validates via ``TOOL_ARG_MODELS`` at
+``execute_tool`` (dispatch.py) re-validates via ``TOOL_ARG_MODELS`` at
 confirmation time and then constructs the domain schemas
 (``schemas.AccountCreate``, ``schemas.ExpenseCreate`` …) which enforce the
 remaining invariants (rounding, positivity, ``made_from`` whitelisting, etc.).
@@ -24,9 +24,16 @@ consume, and ``POST /conversations/{id}/confirm`` still posts
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.schemas.recurring_transaction import (
+    RecurringFromTransaction,
+    RecurringTransactionCreate,
+    RecurringTransactionUpdate,
+)
 
 # Max rows a list tool (and a preview's choice lists) returns.
 LIST_LIMIT = 100
@@ -394,9 +401,7 @@ class BulkCreateArgs(BaseModel):
 class BulkDeleteArgs(BaseModel):
     """Arguments for ``bulk_delete_transactions``."""
 
-    incomes: list[int] | None = Field(
-        default=None, description="Income ids to delete."
-    )
+    incomes: list[int] | None = Field(default=None, description="Income ids to delete.")
     expenses: list[int] | None = Field(
         default=None, description="Expense ids to delete."
     )
@@ -418,12 +423,342 @@ class CreateBalanceAdjustmentArgs(BaseModel):
     response_language: ResponseLanguage = response_language_field()
 
 
-class ListBalanceAdjustmentsArgs(ReadPresentationArgs):
+class ListPageArgs(ReadPresentationArgs):
+    """Arguments for the paged ``list_*`` tools."""
+
+    page: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            f"Page of {LIST_LIMIT} rows. Increment it while `has_more` is true."
+        ),
+    )
+
+
+class ListBalanceAdjustmentsArgs(ListPageArgs):
     """Arguments for ``list_balance_adjustments``."""
 
     account_id: int | None = Field(
         default=None, description="Optional account id to scope the listing."
     )
+
+
+class ComparePeriodsArgs(ReadPresentationArgs):
+    """Arguments for ``compare_periods``."""
+
+    date_filter_type: Literal["date", "week", "month", "quarter", "year", "range"] = (
+        Field(
+            ...,
+            description=(
+                "Kind of the main period: date (YYYY-MM-DD), week (YYYY-MM-DD "
+                "start), month (YYYY-MM), quarter (YYYY-Q1), year (YYYY), "
+                "range (YYYY-MM-DD:YYYY-MM-DD)."
+            ),
+        )
+    )
+    date: str = Field(
+        ..., description="Main period value, format depends on date_filter_type."
+    )
+    compare_date_filter_type: (
+        Literal["date", "week", "month", "quarter", "year", "range"] | None
+    ) = Field(
+        default=None,
+        description=(
+            "Kind of the period to compare against. Leave both compare_* fields "
+            "empty to compare with the period just before the main one."
+        ),
+    )
+    compare_date: str | None = Field(
+        default=None,
+        description="Value of the period to compare against, e.g. 2025-03.",
+    )
+    account_id: int | None = Field(
+        default=None, description="Optional account id to scope both periods."
+    )
+
+
+class ListRecurringArgs(ReadPresentationArgs):
+    """Arguments for ``list_recurring``."""
+
+    active_only: bool = Field(
+        default=False, description="Only return series that are not paused."
+    )
+
+
+class CreateRecurringArgs(RecurringTransactionCreate):
+    """Arguments for ``create_recurring``: a new recurring series."""
+
+    response_language: ResponseLanguage = response_language_field()
+
+
+class CreateRecurringFromTransactionArgs(RecurringFromTransaction):
+    """Arguments for ``create_recurring_from_transaction``."""
+
+    response_language: ResponseLanguage = response_language_field()
+
+
+class UpdateRecurringArgs(BaseModel):
+    """Arguments for ``update_recurring``. Only future occurrences change."""
+
+    id: int = Field(..., description="Recurring series id from list_recurring.")
+    data: RecurringTransactionUpdate = Field(
+        ...,
+        description=(
+            "Fields to change. Set is_active false to pause the series and "
+            "true to resume it."
+        ),
+    )
+    response_language: ResponseLanguage = response_language_field()
+
+
+class RecurringIdArgs(BaseModel):
+    """Arguments for ``skip_recurring_occurrence``."""
+
+    id: int = Field(..., description="Recurring series id from list_recurring.")
+    response_language: ResponseLanguage = response_language_field()
+
+
+class DeleteRecurringArgs(RecurringIdArgs):
+    """Arguments for ``delete_recurring``."""
+
+    delete_generated: bool = Field(
+        default=False,
+        description=(
+            "Also delete the transactions the series already created. The "
+            "transaction the series was made from is always kept."
+        ),
+    )
+
+
+class DetectRecurringArgs(BaseModel):
+    """Arguments for ``detect_recurring``."""
+
+    use_ai: bool = Field(
+        default=False,
+        description=(
+            "Let Toston's AI group merchants and classify the series. Sends "
+            "transaction descriptions to Toston's AI provider."
+        ),
+    )
+    response_language: ResponseLanguage = response_language_field()
+
+
+class UpdateProfileArgs(BaseModel):
+    """Arguments for ``update_profile``. Omit what should stay the same."""
+
+    name: str | None = Field(default=None, description="The user's display name.")
+    currency: str | None = Field(
+        default=None,
+        description=(
+            "ISO 4217 code of the currency amounts are shown in, e.g. EUR. It "
+            "changes how amounts are shown; stored amounts are not converted."
+        ),
+    )
+    default_account_id: int | None = Field(
+        default=None,
+        description="Account used when no account is given, e.g. from WhatsApp.",
+    )
+    response_language: ResponseLanguage = response_language_field()
+
+
+class ConvertTransactionArgs(BaseModel):
+    """Arguments for ``convert_transaction``."""
+
+    from_type: Literal["expense", "income", "transfer"] = Field(
+        ..., description="The transaction's current type."
+    )
+    id: int = Field(..., description="Transaction id from search_transactions.")
+    to_type: Literal["expense", "income", "transfer"] = Field(
+        ..., description="The type it should become."
+    )
+    account_id: int | None = Field(
+        default=None,
+        description=(
+            "Account of the new expense or income. Defaults to the original's "
+            "account (a transfer's source for an expense, destination for an income)."
+        ),
+    )
+    from_acc: int | None = Field(
+        default=None,
+        description="Source account of the new transfer. Needed from an income.",
+    )
+    to_acc: int | None = Field(
+        default=None,
+        description="Destination account of the new transfer. Needed from an expense.",
+    )
+    category_id: int | None = Field(
+        default=None,
+        description="Category of the new expense. Categories never carry over.",
+    )
+    subcategory_id: int | None = Field(
+        default=None, description="Subcategory of the new expense or income."
+    )
+    place_id: int | None = Field(
+        default=None,
+        description="Place of the new expense or income. Defaults to the original's.",
+    )
+    response_language: ResponseLanguage = response_language_field()
+
+
+class GetPortfolioSummaryArgs(ReadPresentationArgs):
+    """Arguments for ``get_portfolio_summary`` (none besides the chat's own)."""
+
+
+class ListHoldingsArgs(ListPageArgs):
+    """Arguments for ``list_holdings``."""
+
+    account_id: int | None = Field(default=None, description="Only this account.")
+    asset_class: Literal["equities", "fixed_income", "crypto", "funds"] | None = Field(
+        default=None, description="Only this asset class."
+    )
+    currency: Literal["USD", "MXN"] | None = Field(
+        default=None, description="Only holdings in this currency."
+    )
+
+
+class ListInvestmentTransactionsArgs(ListPageArgs):
+    """Arguments for ``list_investment_transactions``. Use at most one filter."""
+
+    holding_id: int | None = Field(default=None, description="Only this holding.")
+    account_id: int | None = Field(default=None, description="Only this account.")
+    transaction_type: (
+        Literal["buy", "sell", "dividend", "split", "transfer_in", "transfer_out"]
+        | None
+    ) = Field(default=None, description="Only this type.")
+
+
+class SearchInvestmentAssetsArgs(BaseModel):
+    """Arguments for ``search_investment_assets``."""
+
+    query: str = Field(
+        ..., min_length=1, max_length=100, description="Symbol or name, e.g. AAPL."
+    )
+    kind: Literal["all", "stocks", "crypto"] = Field(
+        default="all",
+        description=(
+            "stocks: USA and Mexican stocks and ETFs; crypto: cryptocurrencies."
+        ),
+    )
+
+
+class RecordInvestmentTransactionArgs(BaseModel):
+    """Arguments for ``record_investment_transaction``.
+
+    Either an existing ``holding_id``, or an ``account_id`` and the asset: an
+    ``asset_id`` Toston already has, or a ``provider`` + ``external_id`` from
+    search_investment_assets (the asset and holding are created).
+    """
+
+    holding_id: int | None = Field(
+        default=None, description="An existing holding, from list_holdings."
+    )
+    account_id: int | None = Field(
+        default=None,
+        description="For a new holding: the account it goes in, from list_accounts.",
+    )
+    asset_id: int | None = Field(
+        default=None,
+        description="For a new holding: an asset Toston has (search_investment_assets).",
+    )
+    provider: Literal["yahoo", "coingecko"] | None = Field(
+        default=None,
+        description="For a new asset: the provider from search_investment_assets.",
+    )
+    external_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="For a new asset: its external_id from search_investment_assets.",
+    )
+    transaction_type: Literal[
+        "buy", "sell", "dividend", "split", "transfer_in", "transfer_out"
+    ] = Field(
+        ...,
+        description=(
+            "What happened. For a split, quantity is the ratio (4 for 4:1) and "
+            "price_per_unit is 0."
+        ),
+    )
+    quantity: float = Field(
+        ...,
+        gt=0,
+        le=1e15,
+        allow_inf_nan=False,
+        description="Units bought, sold or moved.",
+    )
+    price_per_unit: float = Field(
+        ...,
+        ge=0,
+        le=1e15,
+        allow_inf_nan=False,
+        description="Price per unit in the asset's currency.",
+    )
+    fees: float = Field(
+        default=0,
+        ge=0,
+        le=1e15,
+        allow_inf_nan=False,
+        description="Fees in the asset's currency.",
+    )
+    affects_cash_balance: bool = Field(
+        default=False,
+        description=(
+            "Also move the money in or out of the account's cash balance "
+            "(only for users whose currency is USD or MXN)."
+        ),
+    )
+    executed_at: str | None = Field(
+        default=None,
+        description="When it happened, ISO 8601 with a time zone. Defaults to now.",
+    )
+    notes: str | None = Field(default=None, max_length=2000)
+    response_language: ResponseLanguage = response_language_field()
+
+    @model_validator(mode="after")
+    def _one_target(self) -> RecordInvestmentTransactionArgs:
+        """An existing holding, or an account plus exactly one asset identity."""
+        if self.holding_id is not None:
+            if any(
+                v is not None
+                for v in (
+                    self.account_id,
+                    self.asset_id,
+                    self.provider,
+                    self.external_id,
+                )
+            ):
+                raise ValueError(
+                    "With holding_id, leave account_id, asset_id, provider and "
+                    "external_id empty"
+                )
+            return self
+        if self.account_id is None:
+            raise ValueError("Pass holding_id, or account_id for a new holding")
+        external = self.provider is not None or self.external_id is not None
+        if self.asset_id is not None and external:
+            raise ValueError("Pass asset_id or provider+external_id, not both")
+        if self.asset_id is None and not (self.provider and self.external_id):
+            raise ValueError("A new holding needs asset_id or provider+external_id")
+        return self
+
+    @field_validator("executed_at")
+    @classmethod
+    def _aware_iso_datetime(cls, value: str | None) -> str | None:
+        """Checked when the call is staged, so an approval can't fail on it."""
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("executed_at must be an ISO 8601 date and time") from None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("executed_at must include a time zone, e.g. +00:00")
+        return value
+
+
+class ExportDataArgs(BaseModel):
+    """Arguments for ``export_data`` (only the approval card's language)."""
+
+    response_language: ResponseLanguage = response_language_field()
 
 
 class SubmitFeedbackArgs(BaseModel):
@@ -503,6 +838,25 @@ TOOL_ARG_MODELS: dict[str, type[BaseModel]] = {
     "bulk_delete_transactions": BulkDeleteArgs,
     "create_balance_adjustment": CreateBalanceAdjustmentArgs,
     "list_balance_adjustments": ListBalanceAdjustmentsArgs,
+    "list_accounts": ListPageArgs,
+    "list_categories": ListPageArgs,
+    "list_places": ListPageArgs,
+    "update_profile": UpdateProfileArgs,
+    "convert_transaction": ConvertTransactionArgs,
+    "get_portfolio_summary": GetPortfolioSummaryArgs,
+    "list_holdings": ListHoldingsArgs,
+    "list_investment_transactions": ListInvestmentTransactionsArgs,
+    "record_investment_transaction": RecordInvestmentTransactionArgs,
+    "search_investment_assets": SearchInvestmentAssetsArgs,
+    "export_data": ExportDataArgs,
+    "compare_periods": ComparePeriodsArgs,
+    "list_recurring": ListRecurringArgs,
+    "create_recurring": CreateRecurringArgs,
+    "create_recurring_from_transaction": CreateRecurringFromTransactionArgs,
+    "update_recurring": UpdateRecurringArgs,
+    "skip_recurring_occurrence": RecurringIdArgs,
+    "delete_recurring": DeleteRecurringArgs,
+    "detect_recurring": DetectRecurringArgs,
     "submit_feedback": SubmitFeedbackArgs,
     "search_web": SearchWebArgs,
     "ask_user": AskUserArgs,

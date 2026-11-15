@@ -31,7 +31,6 @@ from datetime import date
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
-from fastapi_pagination import Params
 from pydantic_ai import (
     Agent,
     CallDeferred,
@@ -50,51 +49,21 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
-from app.ai.chat_tools import (
-    LIST_LIMIT,
-    _serialize_transaction_search_item,
-    _slim_account,
-    _slim_category,
-    _slim_place,
-    build_system_prompt,
-    load_bootstrap_context,
-)
+from app.ai.agent_tools import agent_tools
+from app.ai.chat_prompt import build_system_prompt, load_bootstrap_context
 from app.ai.confirmation import ToolExecutionError, stage_action
 from app.ai.tools import (
     AskUserArgs,
-    BulkCreateArgs,
-    BulkDeleteArgs,
-    CreateBalanceAdjustmentArgs,
-    CreateExpenseArgs,
-    CreateIncomeArgs,
-    CreateTransferArgs,
-    DeleteTransactionArgs,
-    GetPeriodArgs,
-    ListBalanceAdjustmentsArgs,
-    ManageAccountArgs,
-    ManageCategoryArgs,
-    ManagePlaceArgs,
-    ManageSubcategoryArgs,
     ReadPresentation,
-    ReadPresentationArgs,
     RenderDataArgs,
-    SearchTransactionsArgs,
     SearchWebArgs,
     SubmitFeedbackArgs,
-    UpdateTransactionArgs,
 )
 from app.ai.web_search import search_web as _search_web
-from app.api.deps import DateFilterType
 from app.core.config import settings
 from app.core.tiers import Tier, chat_model_for_tier
-from app.schemas.transaction import AmountOperator, OrderDirection, TransactionType
-from app.services import accounts as account_service
-from app.services import balance_adjustments as balance_adjustment_service
-from app.services import catalog as catalog_service
 from app.services import feedback as feedback_service
-from app.services import transactions as transaction_service
 from app.services.errors import ServiceError
-from app.services.v3_dashboard import fetch_period_charts, fetch_period_summary
 from app.utilities.observability import (
     extract_cost_usd,
     record_llm_call,
@@ -226,57 +195,6 @@ def _read_tool_return(
     )
 
 
-async def get_user_profile(ctx: RunContext[ChatDeps]) -> str:
-    """Get the current user's profile (country, name)."""
-    user = ctx.deps.user
-    return f"User: {user.name}, country {user.country}."
-
-
-async def list_accounts(
-    ctx: RunContext[ChatDeps], payload: ReadPresentationArgs
-) -> ToolReturn:
-    """List all accounts for the user with their balances."""
-    accounts = await account_service.list_accounts(
-        ctx.deps.db, ctx.deps.user, skip=0, limit=LIST_LIMIT
-    )
-    items = [_slim_account(a) for a in accounts]
-    return _read_tool_return(
-        {"items": items, "total": len(items)},
-        payload.presentation,
-        DataChunk(type="data-accounts-list", data={"items": items}),
-    )
-
-
-async def list_categories(
-    ctx: RunContext[ChatDeps], payload: ReadPresentationArgs
-) -> ToolReturn:
-    """List categories with nested subcategories."""
-    categories = await catalog_service.list_categories(
-        ctx.deps.db, ctx.deps.user, skip=0, limit=LIST_LIMIT
-    )
-    items = [_slim_category(c) for c in categories]
-    return _read_tool_return(
-        {"items": items, "total": len(items)},
-        payload.presentation,
-        DataChunk(type="data-categories-list", data={"items": items}),
-    )
-
-
-async def list_places(
-    ctx: RunContext[ChatDeps], payload: ReadPresentationArgs
-) -> ToolReturn:
-    """List places (merchants/locations)."""
-    places = await catalog_service.list_places(
-        ctx.deps.db, ctx.deps.user, skip=0, limit=LIST_LIMIT
-    )
-    items = [_slim_place(p) for p in places]
-    return _read_tool_return(
-        {"items": items, "total": len(items)},
-        payload.presentation,
-        DataChunk(type="data-places-list", data={"items": items}),
-    )
-
-
 async def _defer_for_confirmation(
     ctx: RunContext[ChatDeps],
     tool_name: str,
@@ -315,373 +233,6 @@ async def _defer_for_confirmation(
                 },
             )
         ],
-    )
-
-
-async def manage_account(
-    ctx: RunContext[ChatDeps], payload: ManageAccountArgs
-) -> ToolReturn | str:
-    """Create, update, or delete an account. `id` is required for update/delete.
-    Create and update require `data` with the account fields.
-    `data` fields for create are: name (str), initial_balance (float).
-    Creates save immediately; updates/deletes require approval."""
-    if payload.action == "create":
-        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
-        created = await account_service.create_account(
-            ctx.deps.db, ctx.deps.user, schemas.AccountCreate(**data)
-        )
-        return f"Account {created.name} created successfully."
-    return await _defer_for_confirmation(
-        ctx,
-        "manage_account",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def manage_category(
-    ctx: RunContext[ChatDeps], payload: ManageCategoryArgs
-) -> ToolReturn | str:
-    """Create a category immediately; updates/deletes require approval."""
-    if payload.action == "create":
-        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
-        created = await catalog_service.create_category(
-            ctx.deps.db, ctx.deps.user, schemas.CategoryCreate(**data)
-        )
-        return f"Category {created.name} created successfully."
-    return await _defer_for_confirmation(
-        ctx,
-        "manage_category",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def manage_subcategory(
-    ctx: RunContext[ChatDeps], payload: ManageSubcategoryArgs
-) -> ToolReturn | str:
-    """Create a subcategory immediately; updates/deletes require approval."""
-    if payload.action == "create":
-        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
-        created = await catalog_service.create_subcategory(
-            ctx.deps.db, ctx.deps.user, schemas.SubcategoryCreate(**data)
-        )
-        return f"Subcategory {created.name} created successfully."
-    return await _defer_for_confirmation(
-        ctx,
-        "manage_subcategory",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def manage_place(
-    ctx: RunContext[ChatDeps], payload: ManagePlaceArgs
-) -> ToolReturn | str:
-    """Create a place immediately; updates/deletes require approval."""
-    if payload.action == "create":
-        data = payload.data.model_dump(exclude_none=True) if payload.data else {}
-        created = await catalog_service.create_place(
-            ctx.deps.db, ctx.deps.user, schemas.PlaceCreate(**data)
-        )
-        return f"Place {created.name} created successfully."
-    return await _defer_for_confirmation(
-        ctx,
-        "manage_place",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def create_expense(ctx: RunContext[ChatDeps], payload: CreateExpenseArgs) -> str:
-    """Create an expense. `amount` is required. If no date is provided, today's
-    date is used. Saves immediately."""
-    data = payload.model_dump(exclude_none=True)
-    data.setdefault("date", ctx.deps.local_date.isoformat())
-    data["made_from"] = "Chat"
-    await transaction_service.create_expense(
-        ctx.deps.db, ctx.deps.user, schemas.ExpenseCreate(**data)
-    )
-    return "Expense created successfully."
-
-
-async def update_expense(
-    ctx: RunContext[ChatDeps], payload: UpdateTransactionArgs
-) -> ToolReturn:
-    """Update an expense by id. User must confirm changes in chat before saving."""
-    return await _defer_for_confirmation(
-        ctx,
-        "update_expense",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def delete_expense(
-    ctx: RunContext[ChatDeps], payload: DeleteTransactionArgs
-) -> ToolReturn:
-    """Permanently delete an expense by id. Requires user confirmation in chat."""
-    return await _defer_for_confirmation(
-        ctx,
-        "delete_expense",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def create_income(ctx: RunContext[ChatDeps], payload: CreateIncomeArgs) -> str:
-    """Create an income. `amount` is required. If no date is provided, today's
-    date is used. Saves immediately."""
-    data = payload.model_dump(exclude_none=True)
-    data.setdefault("date", ctx.deps.local_date.isoformat())
-    data["made_from"] = "Chat"
-    await transaction_service.create_income(
-        ctx.deps.db, ctx.deps.user, schemas.IncomeCreate(**data)
-    )
-    return "Income created successfully."
-
-
-async def update_income(
-    ctx: RunContext[ChatDeps], payload: UpdateTransactionArgs
-) -> ToolReturn:
-    """Update an income by id. User must confirm changes in chat before saving."""
-    return await _defer_for_confirmation(
-        ctx,
-        "update_income",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def delete_income(
-    ctx: RunContext[ChatDeps], payload: DeleteTransactionArgs
-) -> ToolReturn:
-    """Permanently delete an income by id. Requires user confirmation."""
-    return await _defer_for_confirmation(
-        ctx,
-        "delete_income",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def create_transfer(
-    ctx: RunContext[ChatDeps], payload: CreateTransferArgs
-) -> ToolReturn:
-    """Transfer money between accounts. User must confirm in chat before saving."""
-    data = payload.model_dump(exclude_none=True)
-    data.setdefault("date", ctx.deps.local_date.isoformat())
-    return await _defer_for_confirmation(
-        ctx, "create_transfer", data, payload.response_language
-    )
-
-
-async def update_transfer(
-    ctx: RunContext[ChatDeps], payload: UpdateTransactionArgs
-) -> ToolReturn:
-    """Update a transfer by id. User must confirm changes in chat before saving."""
-    return await _defer_for_confirmation(
-        ctx,
-        "update_transfer",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def delete_transfer(
-    ctx: RunContext[ChatDeps], payload: DeleteTransactionArgs
-) -> ToolReturn:
-    """Delete a transfer by id. Requires user confirmation."""
-    return await _defer_for_confirmation(
-        ctx,
-        "delete_transfer",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-def _transaction_model_reference(item: dict[str, Any]) -> dict[str, Any]:
-    """Return compact private context for resolving transaction follow-ups."""
-    reference = {
-        key: item.get(key) for key in ("id", "type", "amount", "date", "description")
-    }
-    for relationship in ("account", "category", "subcategory", "place"):
-        value = item.get(relationship)
-        if isinstance(value, dict) and value.get("name"):
-            reference[f"{relationship}_name"] = value["name"]
-    return reference
-
-
-async def search_transactions(
-    ctx: RunContext[ChatDeps], payload: SearchTransactionsArgs
-) -> ToolReturn:
-    """Search expenses, incomes, and transfers with filters."""
-    from datetime import date as date_cls
-
-    db, user = ctx.deps.db, ctx.deps.user
-    types = (
-        [TransactionType(t) for t in payload.transaction_type]
-        if payload.transaction_type
-        else None
-    )
-    start = date_cls.fromisoformat(payload.start_date) if payload.start_date else None
-    end = date_cls.fromisoformat(payload.end_date) if payload.end_date else None
-    amount_op = (
-        AmountOperator(payload.amount_operator) if payload.amount_operator else None
-    )
-    page = await transaction_service.search_transactions(
-        db,
-        user,
-        order=OrderDirection(payload.order or "desc"),
-        search=payload.search,
-        amount=payload.amount,
-        amount_operator=amount_op,
-        start_date=start,
-        end_date=end,
-        accounts=payload.accounts,
-        categories=payload.categories,
-        places=payload.places,
-        transaction_type=types,
-        params=Params(page=payload.page, size=payload.limit),
-    )
-    items = [
-        _serialize_transaction_search_item(item) for item in page.items[: payload.limit]
-    ]
-    has_more = payload.page * payload.limit < page.total
-    next_page = payload.page + 1 if has_more else None
-    result = {
-        "items": items,
-        "total": page.total,
-        "page": payload.page,
-        "limit": payload.limit,
-        "has_more": has_more,
-        "next_page": next_page,
-        "truncated": page.total > len(items),
-    }
-    return _read_tool_return(
-        {
-            "summary": (
-                f"Found {page.total} transactions; returning page "
-                f"{payload.page} with {len(items)} items."
-            ),
-            "items": [_transaction_model_reference(item) for item in items],
-            "total": page.total,
-            "page": payload.page,
-            "limit": payload.limit,
-            "has_more": has_more,
-            "next_page": next_page,
-            "truncated": page.total > len(items),
-        },
-        payload.presentation,
-        DataChunk(type="data-transactions-list", data=result),
-    )
-
-
-async def get_period_summary(
-    ctx: RunContext[ChatDeps], payload: GetPeriodArgs
-) -> ToolReturn:
-    """Get the financial summary for a period. Answer spending questions from
-    `period_expenses` and period-net questions from `period_net`.
-    `balance.total` is the current total balance, never the requested period's
-    net. Quote returned values exactly instead of recalculating them."""
-    summary = await fetch_period_summary(
-        ctx.deps.db,
-        ctx.deps.user,
-        DateFilterType(payload.date_filter_type),
-        payload.date,
-        payload.account_id,
-    )
-    summary_data = summary.model_dump()
-    return _read_tool_return(
-        summary_data,
-        payload.presentation,
-        DataChunk(type="data-period-summary", data=summary_data),
-    )
-
-
-async def get_period_charts(
-    ctx: RunContext[ChatDeps], payload: GetPeriodArgs
-) -> ToolReturn:
-    """Get authoritative chart data for a period. `net.series` contains net
-    values over `net.xAxis`; `income_vs_expense.series` contains the named
-    income and expense values; and `categories.categories` contains spending
-    totals by category. Base insights only on returned labels and values, and
-    do not infer missing points or recalculate the chart data."""
-    charts = await fetch_period_charts(
-        ctx.deps.db,
-        ctx.deps.user,
-        DateFilterType(payload.date_filter_type),
-        payload.date,
-        payload.account_id,
-    )
-    charts_data = charts.model_dump()
-    return _read_tool_return(
-        charts_data,
-        payload.presentation,
-        DataChunk(type="data-charts", data=charts_data),
-    )
-
-
-async def bulk_create_transactions(
-    ctx: RunContext[ChatDeps], payload: BulkCreateArgs
-) -> ToolReturn:
-    """Create multiple incomes and/or expenses at once. Requires confirmation."""
-    incomes = [i.model_dump(exclude_none=True) for i in (payload.incomes or [])]
-    expenses = [e.model_dump(exclude_none=True) for e in (payload.expenses or [])]
-    for item in [*incomes, *expenses]:
-        item.setdefault("date", ctx.deps.local_date.isoformat())
-    return await _defer_for_confirmation(
-        ctx,
-        "bulk_create_transactions",
-        {
-            "incomes": incomes,
-            "expenses": expenses,
-            "response_language": payload.response_language,
-        },
-        payload.response_language,
-    )
-
-
-async def bulk_delete_transactions(
-    ctx: RunContext[ChatDeps], payload: BulkDeleteArgs
-) -> ToolReturn:
-    """Delete multiple incomes/expenses by id. Requires confirmation."""
-    return await _defer_for_confirmation(
-        ctx,
-        "bulk_delete_transactions",
-        payload.model_dump(exclude_none=True),
-        payload.response_language,
-    )
-
-
-async def create_balance_adjustment(
-    ctx: RunContext[ChatDeps], payload: CreateBalanceAdjustmentArgs
-) -> ToolReturn:
-    """Set an account balance to a new value. Requires confirmation."""
-    data = payload.model_dump(exclude_none=True)
-    data.setdefault("adjustment_date", ctx.deps.local_date.isoformat())
-    return await _defer_for_confirmation(
-        ctx, "create_balance_adjustment", data, payload.response_language
-    )
-
-
-async def list_balance_adjustments(
-    ctx: RunContext[ChatDeps], payload: ListBalanceAdjustmentsArgs
-) -> ToolReturn:
-    """List balance adjustments, optionally for one account."""
-    if payload.account_id:
-        items = await balance_adjustment_service.list_balance_adjustments_by_account(
-            ctx.deps.db, ctx.deps.user, payload.account_id
-        )
-    else:
-        items = await balance_adjustment_service.list_balance_adjustments(
-            ctx.deps.db, ctx.deps.user
-        )
-    result = {"items": jsonable_encoder(items)}
-    return _read_tool_return(
-        result,
-        payload.presentation,
-        DataChunk(type="data-balance-adjustments-list", data=result),
     )
 
 
@@ -771,42 +322,23 @@ async def render_data(
 # args back).
 
 
-_CORE_TOOLS = (
-    get_user_profile,
-    list_accounts,
-    manage_account,
-    list_categories,
-    manage_category,
-    manage_subcategory,
-    list_places,
-    manage_place,
-    create_expense,
-    update_expense,
-    delete_expense,
-    create_income,
-    update_income,
-    delete_income,
-    create_transfer,
-    update_transfer,
-    delete_transfer,
-    search_transactions,
-    create_balance_adjustment,
-    list_balance_adjustments,
-    submit_feedback,
-    ask_user,
-    render_data,
-)
+# Chat-only tools; the rest come from the shared registry (``agent_tools``).
+_CHAT_ONLY_TOOLS = (submit_feedback, ask_user, render_data)
 
 
 def build_toolset() -> FunctionToolset[ChatDeps]:
     """Build the toolset for a run. Every tier gets the same tools."""
     ts: FunctionToolset[ChatDeps] = FunctionToolset()
-    for fn in _CORE_TOOLS:
+    for tool in agent_tools(_defer_for_confirmation):
+        ts.add_function(
+            tool.function,
+            takes_ctx=True,
+            name=tool.name,
+            description=tool.description,
+            prepare=tool.prepare,
+        )
+    for fn in _CHAT_ONLY_TOOLS:
         ts.add_function(fn, takes_ctx=True)
-    ts.add_function(get_period_summary, takes_ctx=True)
-    ts.add_function(get_period_charts, takes_ctx=True)
-    ts.add_function(bulk_create_transactions, takes_ctx=True)
-    ts.add_function(bulk_delete_transactions, takes_ctx=True)
     if settings.TAVILY_API_KEY:
         ts.add_function(search_web, takes_ctx=True)
     return ts

@@ -4,7 +4,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.chat_tools import execute_tool
+from app.ai.dispatch import execute_tool
 from app.ai.render_components import (
     RENDER_COMPONENT_IDS,
     render_catalog_prompt,
@@ -39,7 +39,7 @@ def test_render_catalog_prompt_lists_all_components():
 async def test_execute_tool_search_web_mocked():
     with patch.object(settings, "TAVILY_API_KEY", "tvly-test"):
         with patch(
-            "app.ai.chat_tools.search_web",
+            "app.ai.dispatch.search_web",
             new_callable=AsyncMock,
             return_value={
                 "query": "USD MXN rate",
@@ -209,7 +209,7 @@ async def test_execute_tool_delete_income_uses_shared_side_effects(
     )
 
     result, action_type = await execute_tool(
-        "delete_income", {"id": income.id}, async_get_db, user, confirmed=True
+        "delete_income", {"id": income.id}, async_get_db, user
     )
 
     assert result["success"] is True
@@ -257,7 +257,7 @@ async def test_execute_tool_delete_transfer_uses_shared_side_effects(
     )
 
     result, action_type = await execute_tool(
-        "delete_transfer", {"id": transfer.id}, async_get_db, user, confirmed=True
+        "delete_transfer", {"id": transfer.id}, async_get_db, user
     )
 
     assert result["success"] is True

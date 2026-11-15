@@ -5,7 +5,8 @@ server) uses this module, so the rules for what needs approval, what a preview
 shows and how an approved action is claimed live in one place:
 
 * Policy: ``requires_confirmation`` decides which calls are staged.
-* Previews: ``build_pending_preview`` and ``format_confirmation_message``.
+* Previews: ``build_pending_preview`` (``ai.previews``) and
+  ``format_confirmation_message``.
 * Lifecycle: ``stage_action`` stores a pending action in Redis;
   ``claim_action`` atomically takes it back for execution, so an action runs at
   most once; ``discard_action`` drops it.
@@ -14,18 +15,23 @@ shows and how an approved action is claimed live in one place:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Any
 
-from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import crud, models
-from app.ai.tools import LIST_LIMIT
-from app.schemas.made_from import MADE_FROM_CHAT
-from app.services import accounts as account_service
-from app.services import catalog as catalog_service
+from app import models
+from app.ai.export_tools import ENTITY_TYPE as EXPORT_ENTITY_TYPE
+from app.ai.export_tools import format_export_message
+from app.ai.investment_tools import ENTITY_TYPE as INVESTMENT_ENTITY_TYPE
+from app.ai.investment_tools import format_investment_message
+from app.ai.previews import (  # noqa: F401 - build_pending_preview is re-exported
+    CONVERSION_ENTITY_TYPE,
+    build_pending_preview,
+)
+from app.ai.recurring_tools import ENTITY_TYPE as RECURRING_ENTITY_TYPE
+from app.ai.recurring_tools import format_recurring_message
+from app.ai.tools import TOOL_ARG_MODELS
 from app.utilities.redis import (
     claim_pending_action,
     delete_pending_action,
@@ -33,12 +39,21 @@ from app.utilities.redis import (
     store_pending_action,
 )
 
+# The conversation id MCP stages its pending actions under; reserved, so no
+# in-app chat conversation can use it.
+MCP_CONVERSATION_ID = "mcp"
+
 DESTRUCTIVE_TOOLS = frozenset(
     {
         "delete_expense",
         "delete_income",
         "delete_transfer",
         "bulk_delete_transactions",
+        "delete_recurring",
+        # Deletes the original and creates its replacement.
+        "convert_transaction",
+        # Replaces (deletes) the user's previous export file.
+        "export_data",
     }
 )
 
@@ -54,6 +69,15 @@ RISKY_CONFIRMATION_TOOLS = frozenset(
         "update_transfer",
         "create_balance_adjustment",
         "bulk_create_transactions",
+        "create_recurring",
+        "create_recurring_from_transaction",
+        "update_recurring",
+        "skip_recurring_occurrence",
+        "update_profile",
+        # Uses the free plan's only scan, and with use_ai sends descriptions
+        # to the AI provider: the user decides.
+        "detect_recurring",
+        "record_investment_transaction",
     }
 )
 
@@ -80,12 +104,18 @@ def requires_confirmation(tool_name: str, args: dict) -> bool:
     return tool_name in RISKY_CONFIRMATION_TOOLS
 
 
+def _patches_data(tool_name: str) -> bool:
+    """Tools that take ``{id, data}``: edits go into ``data``."""
+    model = TOOL_ARG_MODELS.get(tool_name)
+    return model is not None and {"id", "data"} <= model.model_fields.keys()
+
+
 def merge_confirm_tool_args(
     tool_name: str, stored_args: dict, override: dict | None
 ) -> dict:
     if not override:
         return stored_args
-    if tool_name.startswith("update_"):
+    if _patches_data(tool_name):
         record_id = override.get("id", stored_args.get("id"))
         if isinstance(override.get("data"), dict):
             merged_data = {**stored_args.get("data", {}), **override["data"]}
@@ -100,417 +130,19 @@ def merge_confirm_tool_args(
     return {**stored_args, **override}
 
 
-async def _owned_expense(db, user, expense_id: int):
-    expense = await crud.expense.get(db, id=expense_id)
-    if not expense or (
-        expense.owner_id != user.id and not crud.user.is_superuser(user)
-    ):
-        raise ToolExecutionError("Expense not found")
-    return expense
-
-
-async def _owned_income(db, user, income_id: int):
-    income = await crud.income.get(db, id=income_id)
-    if not income or (income.owner_id != user.id and not crud.user.is_superuser(user)):
-        raise ToolExecutionError("Income not found")
-    return income
-
-
-async def _owned_transfer(db, user, transfer_id: int):
-    transfer = await crud.transfer.get(db, id=transfer_id)
-    if not transfer or (
-        transfer.owner_id != user.id and not crud.user.is_superuser(user)
-    ):
-        raise ToolExecutionError("Transfer not found")
-    return transfer
-
-
-async def _label_account(
-    db: AsyncSession, user: models.User, account_id: int | None
-) -> str | None:
-    if account_id is None:
-        return None
-    account = await crud.account.get_by_id(db, owner_id=user.id, id=account_id)
-    return account.name if account else f"Account #{account_id}"
-
-
-def _owned_name(user: models.User, record: Any) -> str | None:
-    """Name of ``record`` if it belongs to ``user`` (the services' ownership rule).
-
-    Previews must not reveal the names of other users' records.
-    """
-    if record is None or (
-        record.owner_id != user.id and not crud.user.is_superuser(user)
-    ):
-        return None
-    return record.name
-
-
-async def _label_category(
-    db: AsyncSession, user: models.User, category_id: int | None
-) -> str | None:
-    if category_id is None:
-        return None
-    category = await crud.category.get(db=db, id=category_id)
-    return _owned_name(user, category) or f"Category #{category_id}"
-
-
-async def _label_subcategory(
-    db: AsyncSession, user: models.User, subcategory_id: int | None
-) -> str | None:
-    if subcategory_id is None:
-        return None
-    sub = await crud.subcategory.get(db=db, id=subcategory_id)
-    return _owned_name(user, sub) or f"Subcategory #{subcategory_id}"
-
-
-async def _label_place(
-    db: AsyncSession, user: models.User, place_id: int | None
-) -> str | None:
-    if place_id is None:
-        return None
-    place = await crud.place.get(db=db, id=place_id)
-    return _owned_name(user, place) or f"Place #{place_id}"
-
-
-async def _expense_field_labels(
-    db: AsyncSession, user: models.User, fields: dict
-) -> dict[str, str]:
-    labels: dict[str, str] = {}
-    if fields.get("account_id") is not None:
-        name = await _label_account(db, user, fields["account_id"])
-        if name:
-            labels["account_id"] = name
-    if fields.get("category_id") is not None:
-        name = await _label_category(db, user, fields["category_id"])
-        if name:
-            labels["category_id"] = name
-    if fields.get("subcategory_id") is not None:
-        name = await _label_subcategory(db, user, fields["subcategory_id"])
-        if name:
-            labels["subcategory_id"] = name
-    if fields.get("place_id") is not None:
-        name = await _label_place(db, user, fields["place_id"])
-        if name:
-            labels["place_id"] = name
-    return labels
-
-
-async def _income_field_labels(
-    db: AsyncSession, user: models.User, fields: dict
-) -> dict[str, str]:
-    labels: dict[str, str] = {}
-    if fields.get("account_id") is not None:
-        name = await _label_account(db, user, fields["account_id"])
-        if name:
-            labels["account_id"] = name
-    if fields.get("subcategory_id") is not None:
-        name = await _label_subcategory(db, user, fields["subcategory_id"])
-        if name:
-            labels["subcategory_id"] = name
-    if fields.get("place_id") is not None:
-        name = await _label_place(db, user, fields["place_id"])
-        if name:
-            labels["place_id"] = name
-    return labels
-
-
-async def _transfer_field_labels(
-    db: AsyncSession, user: models.User, fields: dict
-) -> dict[str, str]:
-    labels: dict[str, str] = {}
-    if fields.get("from_acc") is not None:
-        name = await _label_account(db, user, fields["from_acc"])
-        if name:
-            labels["from_acc"] = name
-    if fields.get("to_acc") is not None:
-        name = await _label_account(db, user, fields["to_acc"])
-        if name:
-            labels["to_acc"] = name
-    return labels
-
-
-async def _transaction_field_choices(
-    db: AsyncSession, user: models.User, transaction_type: str
-) -> dict[str, list[dict[str, Any]]]:
-    accounts = await account_service.list_accounts(db, user, skip=0, limit=LIST_LIMIT)
-    account_choices = [{"value": item.id, "label": item.name} for item in accounts]
-    if transaction_type == "transfer":
-        return {"from_acc": account_choices, "to_acc": account_choices}
-
-    categories = await catalog_service.list_categories(
-        db, user, skip=0, limit=LIST_LIMIT
-    )
-    places = await catalog_service.list_places(db, user, skip=0, limit=LIST_LIMIT)
-    is_income = transaction_type == "income"
-    matching_categories = [c for c in categories if bool(c.is_income) is is_income]
-    subcategories = [
-        {
-            "value": sub.id,
-            "label": sub.name,
-            "parent_value": sub.category_id,
-        }
-        for category in matching_categories
-        for sub in (getattr(category, "subcategories", None) or [])
-    ]
-    choices: dict[str, list[dict[str, Any]]] = {
-        "account_id": account_choices,
-        "subcategory_id": subcategories,
-        "place_id": [{"value": item.id, "label": item.name} for item in places],
-    }
-    if not is_income:
-        choices["category_id"] = [
-            {"value": item.id, "label": item.name} for item in matching_categories
-        ]
-    return choices
-
-
-def _serialize_record(record: Any) -> dict:
-    data = jsonable_encoder(record)
-    if isinstance(data.get("date"), (date, datetime)):
-        data["date"] = data["date"].isoformat()[:10]
-    elif data.get("date"):
-        data["date"] = str(data["date"])[:10]
-    return data
-
-
-def _without_internal_args(tool_args: dict) -> dict:
-    return {
-        key: value for key, value in tool_args.items() if key != "response_language"
-    }
-
-
-async def build_pending_preview(
-    db: AsyncSession,
-    user: models.User,
-    tool_name: str,
-    tool_args: dict,
-) -> dict:
-    """Structured preview for the chat UI (read-only deletes, editable creates/updates)."""
-    tool_args = _without_internal_args(tool_args)
-    if tool_name == "create_expense":
-        fields = dict(tool_args)
-        fields.setdefault("made_from", MADE_FROM_CHAT)
-        return {
-            "kind": tool_name,
-            "operation": "create",
-            "transaction_type": "expense",
-            "fields": fields,
-            "labels": await _expense_field_labels(db, user, fields),
-        }
-
-    if tool_name == "update_expense":
-        expense = await _owned_expense(db, user, tool_args["id"])
-        existing = _serialize_record(expense)
-        patch = dict(tool_args.get("data") or {})
-        fields = {**existing, **patch}
-        # we can remove choices, labels, patch and existing. these are only used for UI, but we can get it from state.
-        return {
-            "kind": tool_name,
-            "operation": "update",
-            "transaction_type": "expense",
-            "record_id": tool_args["id"],
-            "fields": fields,
-            "patch": patch,
-            "existing": existing,
-            "labels": await _expense_field_labels(db, user, fields),
-            "choices": await _transaction_field_choices(db, user, "expense"),
-        }
-
-    if tool_name == "delete_expense":
-        expense = await _owned_expense(db, user, tool_args["id"])
-        fields = _serialize_record(expense)
-        return {
-            "kind": tool_name,
-            "operation": "delete",
-            "transaction_type": "expense",
-            "record_id": tool_args["id"],
-            "fields": fields,
-            "labels": await _expense_field_labels(db, user, fields),
-        }
-
-    if tool_name == "create_income":
-        fields = dict(tool_args)
-        fields.setdefault("made_from", MADE_FROM_CHAT)
-        return {
-            "kind": tool_name,
-            "operation": "create",
-            "transaction_type": "income",
-            "fields": fields,
-            "labels": await _income_field_labels(db, user, fields),
-        }
-
-    if tool_name == "update_income":
-        income = await _owned_income(db, user, tool_args["id"])
-        existing = _serialize_record(income)
-        patch = dict(tool_args.get("data") or {})
-        fields = {**existing, **patch}
-        return {
-            "kind": tool_name,
-            "operation": "update",
-            "transaction_type": "income",
-            "record_id": tool_args["id"],
-            "fields": fields,
-            "patch": patch,
-            "existing": existing,
-            "labels": await _income_field_labels(db, user, fields),
-            "choices": await _transaction_field_choices(db, user, "income"),
-        }
-
-    if tool_name == "delete_income":
-        income = await _owned_income(db, user, tool_args["id"])
-        fields = _serialize_record(income)
-        return {
-            "kind": tool_name,
-            "operation": "delete",
-            "transaction_type": "income",
-            "record_id": tool_args["id"],
-            "fields": fields,
-            "labels": await _income_field_labels(db, user, fields),
-        }
-
-    if tool_name == "create_transfer":
-        fields = dict(tool_args)
-        return {
-            "kind": tool_name,
-            "operation": "create",
-            "transaction_type": "transfer",
-            "fields": fields,
-            "labels": await _transfer_field_labels(db, user, fields),
-            "choices": await _transaction_field_choices(db, user, "transfer"),
-        }
-
-    if tool_name == "update_transfer":
-        transfer = await _owned_transfer(db, user, tool_args["id"])
-        existing = _serialize_record(transfer)
-        patch = dict(tool_args.get("data") or {})
-        fields = {**existing, **patch}
-        return {
-            "kind": tool_name,
-            "operation": "update",
-            "transaction_type": "transfer",
-            "record_id": tool_args["id"],
-            "fields": fields,
-            "patch": patch,
-            "existing": existing,
-            "labels": await _transfer_field_labels(db, user, fields),
-            "choices": await _transaction_field_choices(db, user, "transfer"),
-        }
-
-    if tool_name == "delete_transfer":
-        transfer = await _owned_transfer(db, user, tool_args["id"])
-        fields = _serialize_record(transfer)
-        return {
-            "kind": tool_name,
-            "operation": "delete",
-            "transaction_type": "transfer",
-            "record_id": tool_args["id"],
-            "fields": fields,
-            "labels": await _transfer_field_labels(db, user, fields),
-        }
-
-    if tool_name.startswith("manage_"):
-        entity_type = tool_name.removeprefix("manage_")
-        operation = str(tool_args.get("action") or "update")
-        display_name = None
-        record_id = tool_args.get("id")
-        if record_id is not None:
-            if entity_type == "account":
-                record = await account_service.get_account(db, user, record_id)
-            elif entity_type == "category":
-                record = await catalog_service.get_category(db, user, record_id)
-            elif entity_type == "subcategory":
-                record = await catalog_service.get_subcategory(db, user, record_id)
-            else:
-                record = await catalog_service.get_place(db, user, record_id)
-            display_name = getattr(record, "name", None)
-        return {
-            "kind": tool_name,
-            "operation": operation,
-            "entity_type": entity_type,
-            "display_name": display_name,
-            "changes": tool_args.get("data") or {},
-        }
-
-    if tool_name == "create_balance_adjustment":
-        fields = dict(tool_args)
-        return {
-            "kind": tool_name,
-            "operation": "create",
-            "entity_type": "balance_adjustment",
-            "fields": fields,
-            "labels": {
-                "account_id": await _label_account(db, user, fields.get("account_id"))
-            },
-        }
-
-    if tool_name == "bulk_create_transactions":
-        items: list[dict[str, Any]] = []
-        for tx_type, rows in (
-            ("income", tool_args.get("incomes") or []),
-            ("expense", tool_args.get("expenses") or []),
-        ):
-            for row in rows:
-                fields = dict(row)
-                labeler = (
-                    _income_field_labels
-                    if tx_type == "income"
-                    else _expense_field_labels
-                )
-                items.append(
-                    {
-                        "transaction_type": tx_type,
-                        "fields": fields,
-                        "labels": await labeler(db, user, fields),
-                    }
-                )
-        return {
-            "kind": tool_name,
-            "operation": "create",
-            "entity_type": "transactions",
-            "items": items,
-        }
-
-    if tool_name == "bulk_delete_transactions":
-        items = []
-        for tx_id in tool_args.get("incomes") or []:
-            record = await _owned_income(db, user, tx_id)
-            items.append(
-                {"transaction_type": "income", "fields": _serialize_record(record)}
-            )
-        for tx_id in tool_args.get("expenses") or []:
-            record = await _owned_expense(db, user, tx_id)
-            items.append(
-                {"transaction_type": "expense", "fields": _serialize_record(record)}
-            )
-        return {
-            "kind": tool_name,
-            "operation": "delete",
-            "entity_type": "transactions",
-            "items": items,
-        }
-
-    return {
-        "kind": tool_name,
-        "operation": "delete" if is_destructive_tool(tool_name, tool_args) else "other",
-        "arguments": tool_args,
-    }
-
-
 def format_confirmation_message(
     tool_name: str, preview: dict, response_language: str = "en"
 ) -> str:
     _ = tool_name
     language = "es" if response_language == "es" else "en"
+    formatter = _ENTITY_MESSAGES.get(preview.get("entity_type"))
+    if formatter is not None:
+        return formatter(preview, language)
     operation = preview.get("operation", "other")
     tx_type = preview.get("transaction_type", "action")
     fields = preview.get("fields") or {}
     labels = preview.get("labels") or {}
-    type_names = {
-        "en": {"expense": "expense", "income": "income", "transfer": "transfer"},
-        "es": {"expense": "gasto", "income": "ingreso", "transfer": "transferencia"},
-    }
-    visible_type = type_names[language].get(
+    visible_type = type_names_for(language).get(
         tx_type, "acción" if language == "es" else "action"
     )
 
@@ -577,6 +209,38 @@ def format_confirmation_message(
     if language == "es":
         return "Revisa los detalles y confirma para continuar."
     return "Review the details and confirm to continue."
+
+
+def type_names_for(language: str) -> dict[str, str]:
+    if language == "es":
+        return {"expense": "gasto", "income": "ingreso", "transfer": "transferencia"}
+    return {"expense": "expense", "income": "income", "transfer": "transfer"}
+
+
+def _conversion_message(preview: dict, language: str) -> str:
+    names = type_names_for(language)
+    before = names.get(preview["from_type"], preview["from_type"])
+    after = names.get(preview["to_type"], preview["to_type"])
+    amount = (preview.get("fields") or {}).get("amount", "?")
+    if language == "es":
+        return (
+            f"Confirma que deseas convertir este {before} de **{amount}** en "
+            f"{after}. El {before} se elimina y se reemplaza."
+        )
+    article = "an" if after[0] in "aeiou" else "a"
+    return (
+        f"Confirm turning this {before} of **{amount}** into {article} {after}. "
+        f"The {before} is deleted and replaced."
+    )
+
+
+# Previews whose entity has its own wording, by ``entity_type``.
+_ENTITY_MESSAGES: dict[str, Callable[[dict, str], str]] = {
+    RECURRING_ENTITY_TYPE: format_recurring_message,
+    CONVERSION_ENTITY_TYPE: _conversion_message,
+    INVESTMENT_ENTITY_TYPE: format_investment_message,
+    EXPORT_ENTITY_TYPE: format_export_message,
+}
 
 
 def format_confirmation_result(
@@ -677,6 +341,58 @@ async def claim_action(action_id: str, user_id: int, conversation_id: str) -> di
     if not pending:
         raise PendingActionNotFound()
     return pending
+
+
+async def preview_is_current(
+    db: AsyncSession, user: models.User, pending: dict
+) -> bool:
+    """Whether the record a pending action's preview showed is unchanged.
+
+    Only previews of an existing record carry a ``record_version``. When it
+    no longer matches, what would run differs from what the user approved.
+    """
+    expected = (pending.get("preview") or {}).get("record_version")
+    if expected is None:
+        return True
+    try:
+        current = await build_pending_preview(
+            db, user, pending["tool_name"], pending["tool_args"]
+        )
+    except Exception:  # noqa: BLE001 - the record is gone or no longer valid
+        return False
+    return current.get("record_version") == expected
+
+
+PREVIEW_OUTDATED = (
+    "The record changed after this preview was shown. Ask again to see the "
+    "current version."
+)
+
+
+class PreviewOutdated(Exception):
+    """The record changed after the preview; the action was discarded."""
+
+    def __init__(self, pending: dict) -> None:
+        super().__init__(PREVIEW_OUTDATED)
+        self.pending = pending
+
+
+async def claim_current_action(
+    db: AsyncSession,
+    user: models.User,
+    action_id: str,
+    conversation_id: str,
+) -> dict:
+    """``claim_action``, after checking the preview still matches the record.
+
+    An outdated action is discarded, not claimed, and raises PreviewOutdated:
+    approving it again could never run what the user saw.
+    """
+    pending = await _peek(action_id, user.id, conversation_id)
+    if not await preview_is_current(db, user, pending):
+        await delete_pending_action(action_id)
+        raise PreviewOutdated(pending)
+    return await claim_action(action_id, user.id, conversation_id)
 
 
 async def discard_action(action_id: str, user_id: int, conversation_id: str) -> None:
