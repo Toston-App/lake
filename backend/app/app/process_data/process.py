@@ -4,7 +4,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from app.api.deps import DateFilterType
+from app.services.periods import DateFilterType
 
 from .utils import (
     get_month_weeks,

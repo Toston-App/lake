@@ -182,7 +182,9 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         )
         if owner_id is not None:
             query = query.filter(Holding.owner_id == owner_id)
-        result = await db.execute(query.offset(skip).limit(limit))
+        # A stable order, so offset paging never repeats or skips a row.
+        query = query.order_by(Holding.id).offset(skip).limit(limit)
+        result = await db.execute(query)
         return result.scalars().all()
 
     async def get_by_asset_class(
@@ -248,7 +250,7 @@ class CRUDHolding(CRUDBase[Holding, HoldingCreate, HoldingUpdate]):
         if currency is not None:
             query = query.filter(Asset.currency == currency)
 
-        query = query.offset(skip).limit(limit)
+        query = query.order_by(Holding.id).offset(skip).limit(limit)
         result = await db.execute(query)
         return result.scalars().all()
 

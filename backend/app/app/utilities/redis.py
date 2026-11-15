@@ -587,6 +587,14 @@ async def hit_rate_limit(key: str, window_seconds: int) -> tuple[int, int]:
     return int(count), window_start + window_seconds - now
 
 
+async def peek_rate_limit(key: str, window_seconds: int) -> int:
+    """Hits counted so far in the current window, without counting one."""
+    now = int(time.time())
+    window_start = now - now % window_seconds
+    count = await r.get(f"{RATE_LIMIT_PREFIX}:{key}:{window_seconds}:{window_start}")
+    return int(count or 0)
+
+
 # ==================== Subscription entitlement cache ====================
 
 ENTITLEMENT_PREFIX = "chat:ent"

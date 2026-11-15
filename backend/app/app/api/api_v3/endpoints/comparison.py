@@ -7,10 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
 from app.api import deps
-from app.api.deps import DateFilterType
-from app.api.api_v3.utils import parse_date_range
 from app.process_data.process import account_diff, accounts_total, get_df
 from app.schemas.dashboard import ComparisonResponse
+from app.services.periods import DateFilterType, parse_date_range
 from app.utilities.redis import get_cached, store_cached
 from app.utilities.wide_events import enrich_event, timed
 

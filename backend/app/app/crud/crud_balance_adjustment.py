@@ -89,7 +89,11 @@ class CRUDBalanceAdjustment(
         result = await db.execute(
             select(self.model)
             .filter(BalanceAdjustment.account_id == account_id)
-            .order_by(desc(BalanceAdjustment.adjustment_date), desc(BalanceAdjustment.created_at))
+            .order_by(
+                desc(BalanceAdjustment.adjustment_date),
+                desc(BalanceAdjustment.created_at),
+                desc(BalanceAdjustment.id),
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -118,7 +122,11 @@ class CRUDBalanceAdjustment(
         result = await db.execute(
             select(self.model)
             .filter(BalanceAdjustment.owner_id == owner_id)
-            .order_by(desc(BalanceAdjustment.adjustment_date), desc(BalanceAdjustment.created_at))
+            .order_by(
+                desc(BalanceAdjustment.adjustment_date),
+                desc(BalanceAdjustment.created_at),
+                desc(BalanceAdjustment.id),
+            )
             .offset(skip)
             .limit(limit)
         )

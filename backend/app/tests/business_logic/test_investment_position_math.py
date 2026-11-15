@@ -2,10 +2,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from app.api.api_v1.endpoints.investment_transactions import (
-    _update_holding_from_transaction,
-)
 from app.models.investment_transaction import TransactionType
+from app.services.investment_ledger import update_holding_from_transaction
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.utils import (
@@ -44,7 +42,7 @@ async def _apply(db, user, account, holding, kind, quantity, price, fees=Decimal
         fees=fees,
         executed_at=datetime.now(timezone.utc),
     )
-    await _update_holding_from_transaction(db, holding, tx, usd_mxn_rate=Decimal("18"))
+    await update_holding_from_transaction(db, holding, tx, usd_mxn_rate=Decimal("18"))
 
 
 async def test_buy_buy_sell_chain(db_session: AsyncSession):
