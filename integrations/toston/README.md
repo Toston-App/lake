@@ -3,7 +3,7 @@
 This folder holds what you need to use Toston (Clever) from an LLM client through MCP.
 
 - `.claude-plugin/plugin.json`: Claude Code plugin manifest.
-- `.mcp.json`: points the plugin at the Toston MCP server, `https://api.cleverbill.ing/mcp`.
+- `.mcp.json`: points the plugin at the Toston MCP server, `https://api.toston.app/mcp`.
 - `skills/toston/SKILL.md`: the Toston skill, with safety rules and core workflows.
 - `skills/toston/references/workflows.md`: longer workflows (budgeting, duplicate places, yearly summary).
 - `skills/toston/references/tools.md`: one line per MCP tool, with whether it needs confirmation.

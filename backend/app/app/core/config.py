@@ -172,7 +172,7 @@ class Settings(BaseSettings):
 
     # MCP server (remote tools for external LLM clients, see plans/README.md)
     MCP_ENABLED: bool = False
-    # Public URL of the MCP endpoint, e.g. https://api.cleverbill.ing/mcp.
+    # Public URL of the MCP endpoint, e.g. https://api.toston.app/mcp.
     # Used as the OAuth protected-resource identifier and the required token
     # audience. Required when MCP_ENABLED.
     MCP_PUBLIC_URL: str | None = None
