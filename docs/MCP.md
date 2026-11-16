@@ -7,7 +7,7 @@ Your LLM can read your data and create records. It cannot do anything risky sile
 ## The server URL
 
 ```
-https://api.cleverbill.ing/mcp
+https://api.toston.app/mcp
 ```
 
 Clients sign you in through the normal Toston login (OAuth) the first time you connect. You never paste a password into the LLM.
@@ -31,7 +31,7 @@ Source: https://support.claude.com/en/articles/12512180-use-skills-in-claude
 Option A, connector only:
 
 ```bash
-claude mcp add --transport http toston https://api.cleverbill.ing/mcp
+claude mcp add --transport http toston https://api.toston.app/mcp
 ```
 
 Then start Claude Code, run `/mcp`, select `toston` and follow the browser login. Check with `claude mcp list`.
@@ -77,7 +77,7 @@ Add a remote entry to `opencode.json`:
     "servers": {
       "toston": {
         "type": "remote",
-        "url": "https://api.cleverbill.ing/mcp"
+        "url": "https://api.toston.app/mcp"
       }
     }
   }
@@ -99,7 +99,7 @@ Add the server to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one
 {
   "mcpServers": {
     "toston": {
-      "url": "https://api.cleverbill.ing/mcp"
+      "url": "https://api.toston.app/mcp"
     }
   }
 }
@@ -118,7 +118,7 @@ Add the server to `.vscode/mcp.json` in your workspace, or to your user profile 
   "servers": {
     "toston": {
       "type": "http",
-      "url": "https://api.cleverbill.ing/mcp"
+      "url": "https://api.toston.app/mcp"
     }
   }
 }
@@ -134,7 +134,7 @@ Source: https://code.visualstudio.com/docs/copilot/customization/mcp-servers
 From the CLI:
 
 ```bash
-codex mcp add toston --url https://api.cleverbill.ing/mcp
+codex mcp add toston --url https://api.toston.app/mcp
 codex mcp login toston
 ```
 
@@ -142,7 +142,7 @@ Or in `config.toml`:
 
 ```toml
 [mcp_servers.toston]
-url = "https://api.cleverbill.ing/mcp"
+url = "https://api.toston.app/mcp"
 ```
 
 OAuth is the default for HTTP servers.
@@ -181,7 +181,7 @@ In OpenCode, add the header to the remote entry:
 ```json
 "toston": {
   "type": "remote",
-  "url": "https://api.cleverbill.ing/mcp",
+  "url": "https://api.toston.app/mcp",
   "headers": { "Authorization": "Bearer tsk_..." }
 }
 ```
