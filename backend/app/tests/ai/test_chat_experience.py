@@ -2,9 +2,10 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from app.ai import agent, chat_tools
-from app.ai.chat_tools import (
-    _bootstrap_account,
+from app.ai import agent, confirmation, dispatch, preview_labels, previews
+from app.ai.agent_tools import agent_tools
+from app.ai.chat_prompt import bootstrap_account as _bootstrap_account
+from app.ai.confirmation import (
     format_confirmation_message,
     format_confirmation_result,
     requires_confirmation,
@@ -22,8 +23,8 @@ from app.ai.tools import (
     UpdateTransactionArgs,
 )
 from app.api.api_v1.endpoints.chat import _resolve_client_context
-from app.api.deps import DateFilterType
 from app.schemas.dashboard import Balance, ChartsResponse, SummaryResponse
+from app.services.periods import DateFilterType
 
 
 def _ctx(*, local_date: date = date(2026, 7, 28)) -> SimpleNamespace:
@@ -34,20 +35,27 @@ def _ctx(*, local_date: date = date(2026, 7, 28)) -> SimpleNamespace:
             conversation_id="conversation-1",
             turn_id=7,
             local_date=local_date,
+            time_zone="America/Mexico_City",
             had_pending_confirmation=False,
         )
     )
 
 
+def _tool(name: str):
+    """The chat agent's generated tool, built with the current defer function."""
+    tools = agent_tools(agent._defer_for_confirmation)
+    return next(tool.function for tool in tools if tool.name == name)
+
+
 async def test_expense_create_saves_immediately_with_local_date(monkeypatch) -> None:
     create = AsyncMock(return_value=SimpleNamespace(id=12))
     store = AsyncMock()
-    monkeypatch.setattr(agent.transaction_service, "create_expense", create)
-    monkeypatch.setattr(agent, "store_pending_action", store)
+    monkeypatch.setattr(dispatch.transaction_service, "create_expense", create)
+    monkeypatch.setattr(confirmation, "store_pending_action", store)
 
-    result = await agent.create_expense(_ctx(), CreateExpenseArgs(amount=20))
+    result = await _tool("create_expense")(_ctx(), CreateExpenseArgs(amount=20))
 
-    assert result == "Expense created successfully."
+    assert result.return_value == {"id": 12}
     created = create.await_args.args[2]
     assert created.date == "2026-07-28"
     assert created.made_from == "Chat"
@@ -63,10 +71,10 @@ async def test_period_summary_gives_model_the_same_values_as_ui(monkeypatch) -> 
         period_net=-1157.89,
     )
     fetch = AsyncMock(return_value=summary)
-    monkeypatch.setattr(agent, "fetch_period_summary", fetch)
+    monkeypatch.setattr(dispatch, "fetch_period_summary", fetch)
     ctx = _ctx()
 
-    result = await agent.get_period_summary(
+    result = await _tool("get_period_summary")(
         ctx,
         GetPeriodArgs(date_filter_type="week", date="2026-07-27"),
     )
@@ -74,7 +82,7 @@ async def test_period_summary_gives_model_the_same_values_as_ui(monkeypatch) -> 
     assert isinstance(result.return_value, dict)
     assert result.return_value == summary.model_dump()
     assert result.metadata == []
-    visible_result = await agent.get_period_summary(
+    visible_result = await _tool("get_period_summary")(
         ctx,
         GetPeriodArgs(
             date_filter_type="week",
@@ -125,10 +133,10 @@ async def test_period_charts_give_model_the_same_values_as_ui(monkeypatch) -> No
         },
     )
     fetch = AsyncMock(return_value=charts)
-    monkeypatch.setattr(agent, "fetch_period_charts", fetch)
+    monkeypatch.setattr(dispatch, "fetch_period_charts", fetch)
     ctx = _ctx()
 
-    result = await agent.get_period_charts(
+    result = await _tool("get_period_charts")(
         ctx,
         GetPeriodArgs(date_filter_type="week", date="2026-07-27"),
     )
@@ -136,7 +144,7 @@ async def test_period_charts_give_model_the_same_values_as_ui(monkeypatch) -> No
     assert isinstance(result.return_value, dict)
     assert result.return_value == charts.model_dump()
     assert result.metadata == []
-    visible_result = await agent.get_period_charts(
+    visible_result = await _tool("get_period_charts")(
         ctx,
         GetPeriodArgs(
             date_filter_type="week",
@@ -173,10 +181,12 @@ async def test_transfer_creates_one_localized_pending_action(monkeypatch) -> Non
         "labels": {"from_acc": "Checking"},
     }
     store = AsyncMock(return_value=True)
-    monkeypatch.setattr(agent, "build_pending_preview", AsyncMock(return_value=preview))
-    monkeypatch.setattr(agent, "store_pending_action", store)
+    monkeypatch.setattr(
+        confirmation, "build_pending_preview", AsyncMock(return_value=preview)
+    )
+    monkeypatch.setattr(confirmation, "store_pending_action", store)
 
-    result = await agent.create_transfer(
+    result = await _tool("create_transfer")(
         _ctx(),
         CreateTransferArgs(
             amount=50,
@@ -201,13 +211,13 @@ async def test_updates_deletes_balance_and_bulk_operations_are_deferred(
     monkeypatch.setattr(agent, "_defer_for_confirmation", defer)
     ctx = _ctx()
 
-    await agent.update_expense(
+    await _tool("update_expense")(
         ctx, UpdateTransactionArgs(id=1, data={"amount": 10}, response_language="en")
     )
-    await agent.delete_income(
+    await _tool("delete_income")(
         ctx, DeleteTransactionArgs(id=2, response_language="en")
     )
-    await agent.manage_place(
+    await _tool("manage_place")(
         ctx,
         ManagePlaceArgs(
             action="update",
@@ -216,16 +226,16 @@ async def test_updates_deletes_balance_and_bulk_operations_are_deferred(
             response_language="en",
         ),
     )
-    await agent.create_balance_adjustment(
+    await _tool("create_balance_adjustment")(
         ctx,
         CreateBalanceAdjustmentArgs(
             account_id=1, new_balance=100, response_language="en"
         ),
     )
-    await agent.bulk_create_transactions(
+    await _tool("bulk_create_transactions")(
         ctx, BulkCreateArgs(expenses=[], incomes=[], response_language="en")
     )
-    await agent.bulk_delete_transactions(
+    await _tool("bulk_delete_transactions")(
         ctx, BulkDeleteArgs(expenses=[1], response_language="en")
     )
 
@@ -301,22 +311,22 @@ async def test_transaction_choices_use_human_names(monkeypatch) -> None:
     ]
     places = [SimpleNamespace(id=5, name="Cafe")]
     monkeypatch.setattr(
-        chat_tools.account_service,
+        previews.account_service,
         "list_accounts",
         AsyncMock(return_value=accounts),
     )
     monkeypatch.setattr(
-        chat_tools.catalog_service,
+        previews.catalog_service,
         "list_categories",
         AsyncMock(return_value=categories),
     )
     monkeypatch.setattr(
-        chat_tools.catalog_service,
+        previews.catalog_service,
         "list_places",
         AsyncMock(return_value=places),
     )
 
-    choices = await chat_tools._transaction_field_choices(
+    choices = await previews.transaction_field_choices(
         SimpleNamespace(), SimpleNamespace(id=1), "expense"
     )
 
@@ -337,16 +347,17 @@ async def test_preview_labels_hide_other_users_records(monkeypatch) -> None:
     }
     for entity, record in records.items():
         monkeypatch.setattr(
-            getattr(chat_tools.crud, entity), "get", AsyncMock(return_value=record)
+            getattr(preview_labels.crud, entity), "get", AsyncMock(return_value=record)
         )
     monkeypatch.setattr(
-        chat_tools.crud.account, "get_by_id", AsyncMock(return_value=None)
+        preview_labels.crud.account, "get_by_id", AsyncMock(return_value=None)
     )
 
-    labels = await chat_tools._expense_field_labels(
+    labels = await preview_labels.labels_for(
         AsyncMock(),
         user,
         {"category_id": 3, "subcategory_id": 4, "place_id": 5},
+        preview_labels.EXPENSE_FIELDS,
     )
 
     assert labels == {

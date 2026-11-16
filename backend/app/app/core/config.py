@@ -170,6 +170,42 @@ class Settings(BaseSettings):
     # In-progress billing reservations older than this stop consuming quota.
     CHAT_TURN_RESERVATION_TTL_SECONDS: int = 900
 
+    # MCP server (remote tools for external LLM clients, see plans/README.md)
+    MCP_ENABLED: bool = False
+    # Public URL of the MCP endpoint, e.g. https://api.cleverbill.ing/mcp.
+    # Used as the OAuth protected-resource identifier and the required token
+    # audience. Required when MCP_ENABLED.
+    MCP_PUBLIC_URL: str | None = None
+    # Per-user tool-call limits for /mcp. 0 disables a window.
+    MCP_RATE_LIMIT_PER_MINUTE: int = 60
+    MCP_RATE_LIMIT_PER_DAY: int = 2_000
+    # When True, only users whose tier is paid may use MCP (decision D3).
+    MCP_REQUIRES_PAID: bool = False
+    # Max incomes+expenses in one bulk_create/bulk_delete call over MCP.
+    # schemas/bulk.py has no cap of its own.
+    MCP_BULK_MAX_ITEMS: int = 100
+    # Per-client-IP cap on Clerk Backend API introspections of opaque tokens,
+    # which run before any user is known. 0 disables it.
+    MCP_INTROSPECT_PER_IP_PER_MINUTE: int = 120
+    # Personal access tokens (tsk_...) for MCP clients that can't do OAuth.
+    API_TOKENS_MAX_PER_USER: int = 10
+    # How long MCP audit rows (mcp_tool_call) are kept.
+    MCP_AUDIT_RETENTION_DAYS: int = 90
+
+    @field_validator("MCP_PUBLIC_URL")
+    @classmethod
+    def _normalize_mcp_public_url(cls, v: str | None) -> str | None:
+        # Token audiences are compared without a trailing slash.
+        if v is None or not v.strip():
+            return None
+        return v.strip().rstrip("/")
+
+    @model_validator(mode="after")
+    def _mcp_requires_public_url(self):
+        if self.MCP_ENABLED and not self.MCP_PUBLIC_URL:
+            raise ValueError("MCP_ENABLED requires MCP_PUBLIC_URL")
+        return self
+
     # Feedback
     TELEGRAM_BOT_TOKEN: str
     TELEGRAM_OWNER_ID: str
@@ -217,6 +253,9 @@ class Settings(BaseSettings):
     POLAR_ORGANIZATION_ID: str | None = None
     # "sandbox" targets api.sandbox.polar.sh; "production" targets api.polar.sh.
     POLAR_SERVER: str = "sandbox"
+    # Public URL of the web app (e.g. https://app.cleverbill.ing), for links
+    # the assistant gives users, such as the data export page.
+    WEB_APP_URL: AnyHttpUrl | None = None
     # Public base URL of this backend, used to build Polar success_url for
     # checkout. Falls back to SERVER_HOST when not set.
     POLAR_SUCCESS_URL_BASE: AnyHttpUrl | None = None

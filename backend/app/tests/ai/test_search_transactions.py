@@ -2,15 +2,23 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from app.ai import agent, chat_tools
+from app.ai import agent, dispatch
+from app.ai.agent_tools import agent_tools
 from app.ai.tools import SearchTransactionsArgs
 from pydantic import ValidationError
+
+
+async def _search(ctx, payload):
+    tools = agent_tools(agent._defer_for_confirmation)
+    search = next(t.function for t in tools if t.name == "search_transactions")
+    ctx.deps.local_date = None
+    return await search(ctx, payload)
 
 
 def test_search_transactions_limit_defaults_to_search_cap() -> None:
     args = SearchTransactionsArgs()
 
-    assert args.limit == chat_tools.SEARCH_LIMIT
+    assert args.limit == dispatch.SEARCH_LIMIT
     assert args.page == 1
 
 
@@ -19,19 +27,17 @@ def test_search_transactions_limit_is_bounded() -> None:
         SearchTransactionsArgs(limit=0)
 
     with pytest.raises(ValidationError):
-        SearchTransactionsArgs(limit=chat_tools.SEARCH_LIMIT + 1)
+        SearchTransactionsArgs(limit=dispatch.SEARCH_LIMIT + 1)
 
     with pytest.raises(ValidationError):
         SearchTransactionsArgs(page=0)
 
 
 async def test_search_transactions_returns_only_requested_limit(monkeypatch) -> None:
-    search = AsyncMock(
-        return_value=SimpleNamespace(items=list(range(10)), total=10)
-    )
-    monkeypatch.setattr(chat_tools.transaction_service, "search_transactions", search)
+    search = AsyncMock(return_value=SimpleNamespace(items=list(range(10)), total=10))
+    monkeypatch.setattr(dispatch.transaction_service, "search_transactions", search)
 
-    result, action_type = await chat_tools.execute_tool(
+    result, action_type = await dispatch.execute_tool(
         "search_transactions",
         {"limit": 5, "page": 2},
         db=SimpleNamespace(),
@@ -96,20 +102,16 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
             "created_at": "2026-07-27T05:30:35+00:00",
         },
     ]
-    search = AsyncMock(
-        return_value=SimpleNamespace(items=items, total=10)
-    )
-    monkeypatch.setattr(agent.transaction_service, "search_transactions", search)
+    search = AsyncMock(return_value=SimpleNamespace(items=items, total=10))
+    monkeypatch.setattr(dispatch.transaction_service, "search_transactions", search)
     ctx = SimpleNamespace(
         deps=SimpleNamespace(db=SimpleNamespace(), user=SimpleNamespace(id=1))
     )
 
-    result = await agent.search_transactions(
-        ctx, SearchTransactionsArgs(limit=5, page=2)
-    )
+    result = await _search(ctx, SearchTransactionsArgs(limit=5, page=2))
 
     assert result.metadata == []
-    visible_result = await agent.search_transactions(
+    visible_result = await _search(
         ctx,
         SearchTransactionsArgs(
             limit=5,
@@ -118,9 +120,7 @@ async def test_agent_search_exposes_compact_transaction_references_to_model(
         ),
     )
     assert visible_result.return_value == result.return_value
-    public_items = [
-        chat_tools._serialize_transaction_search_item(item) for item in items
-    ]
+    public_items = [dispatch.serialize_transaction_search_item(item) for item in items]
     assert visible_result.metadata[0].data == {
         "items": public_items,
         "total": 10,
@@ -211,12 +211,12 @@ async def test_agent_search_serializes_cyclic_income_relationships(monkeypatch) 
         place=None,
     )
     search = AsyncMock(return_value=SimpleNamespace(items=[income], total=1))
-    monkeypatch.setattr(agent.transaction_service, "search_transactions", search)
+    monkeypatch.setattr(dispatch.transaction_service, "search_transactions", search)
     ctx = SimpleNamespace(
         deps=SimpleNamespace(db=SimpleNamespace(), user=SimpleNamespace(id=1))
     )
 
-    result = await agent.search_transactions(
+    result = await _search(
         ctx,
         SearchTransactionsArgs(
             transaction_type=["income"],
@@ -259,19 +259,19 @@ async def test_agent_search_serializes_cyclic_income_relationships(monkeypatch) 
 
 async def test_agent_search_exposes_empty_model_reference_list(monkeypatch) -> None:
     search = AsyncMock(return_value=SimpleNamespace(items=[], total=0))
-    monkeypatch.setattr(agent.transaction_service, "search_transactions", search)
+    monkeypatch.setattr(dispatch.transaction_service, "search_transactions", search)
     ctx = SimpleNamespace(
         deps=SimpleNamespace(db=SimpleNamespace(), user=SimpleNamespace(id=1))
     )
 
-    result = await agent.search_transactions(ctx, SearchTransactionsArgs())
+    result = await _search(ctx, SearchTransactionsArgs())
 
     assert result.return_value == {
         "summary": "Found 0 transactions; returning page 1 with 0 items.",
         "items": [],
         "total": 0,
         "page": 1,
-        "limit": chat_tools.SEARCH_LIMIT,
+        "limit": dispatch.SEARCH_LIMIT,
         "has_more": False,
         "next_page": None,
         "truncated": False,

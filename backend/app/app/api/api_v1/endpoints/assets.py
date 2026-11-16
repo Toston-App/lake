@@ -24,15 +24,13 @@ from app.schemas.asset import (
     AssetDeletionResponse,
     AssetUpdate,
     AssetWithPrice,
-    ExternalAssetProvider,
     ExternalAssetSearchResult,
     ExternalCryptoSearchResult,
 )
 from app.schemas.asset_price import CurrentPrice, PriceRefreshResponse
-from app.services.coingecko import CoinGeckoService
+from app.services import asset_search
 from app.services.investment_rate_limiter import enforce_investment_rate_limit
 from app.services.price_fetcher import PriceFetcher
-from app.services.yahoo_finance import YahooFinanceService
 from app.utilities.investment_telemetry import (
     add_investment_context,
     complete_investment_event,
@@ -180,70 +178,7 @@ async def search_external_assets(
             f"user:{current_user.id}:search-assets", 0.5
         )
     with investment_stage(request, "provider_lookup"):
-        results = await YahooFinanceService.search_symbol(q)
-
-    # Filter to only include stocks and ETFs from USA and Mexico exchanges
-    allowed_exchanges = {"NYQ", "NMS", "NGM", "PCX", "BTS", "MEX", "NYSE", "NASDAQ"}
-    allowed_types = {"EQUITY", "ETF"}
-
-    filtered_results = []
-    for item in results:
-        raw_symbol = item.get("symbol")
-        raw_name = item.get("name")
-        if (
-            not isinstance(raw_symbol, str)
-            or not raw_symbol
-            or len(raw_symbol) > 128
-            or (raw_name is not None and not isinstance(raw_name, str))
-            or (isinstance(raw_name, str) and len(raw_name) > 255)
-        ):
-            continue
-        exchange = item.get("exchange", "")
-        quote_type = item.get("type", "")
-        if not isinstance(exchange, str) or len(exchange) > 32:
-            continue
-
-        # Include if it matches our criteria or is a Mexican stock
-        is_mexican = raw_symbol.endswith(".MX")
-        is_allowed_exchange = exchange in allowed_exchanges or is_mexican
-        is_allowed_type = quote_type in allowed_types
-
-        if is_allowed_exchange and is_allowed_type:
-            # Determine market and currency
-            if is_mexican or exchange == "MEX":
-                market = Market.BMV
-                currency = Currency.MXN
-                country = "MX"
-            elif exchange in {"NYQ", "NYSE"}:
-                market = Market.NYSE
-                currency = Currency.USD
-                country = "US"
-            else:
-                market = Market.NASDAQ
-                currency = Currency.USD
-                country = "US"
-
-            # Determine asset type
-            asset_type = AssetType.ETF if quote_type == "ETF" else AssetType.STOCK
-
-            # Clean up the symbol (remove .MX suffix for internal storage)
-            symbol = raw_symbol.removesuffix(".MX")
-            if not symbol or len(symbol) > 32:
-                continue
-
-            filtered_results.append(
-                ExternalAssetSearchResult(
-                    provider=ExternalAssetProvider.YAHOO,
-                    external_id=raw_symbol,
-                    symbol=symbol,
-                    name=raw_name or symbol,
-                    asset_type=asset_type,
-                    market=market,
-                    currency=currency,
-                    country=country,
-                    exchange=exchange,
-                )
-            )
+        filtered_results = await asset_search.search_stocks(q)
 
     complete_investment_event(request, result_count=len(filtered_results))
     return filtered_results
@@ -273,38 +208,7 @@ async def search_crypto_assets(
             f"user:{current_user.id}:search-crypto", 0.5
         )
     with investment_stage(request, "provider_lookup"):
-        results = await CoinGeckoService.search_coins(q)
-
-    crypto_results = []
-    for coin in results:
-        coin_id = coin.get("coingecko_id")
-        symbol = coin.get("symbol")
-        name = coin.get("name")
-        if (
-            not isinstance(coin_id, str)
-            or not coin_id
-            or len(coin_id) > 128
-            or not isinstance(symbol, str)
-            or not symbol
-            or len(symbol) > 32
-            or not isinstance(name, str)
-            or not name
-            or len(name) > 255
-        ):
-            continue
-        crypto_results.append(
-            ExternalCryptoSearchResult(
-                provider=ExternalAssetProvider.COINGECKO,
-                external_id=coin_id,
-                symbol=symbol,
-                name=name,
-                asset_type=AssetType.CRYPTOCURRENCY,
-                market=Market.CRYPTO,
-                currency=Currency.USD,
-                coingecko_id=coin_id,
-                market_cap_rank=coin.get("market_cap_rank"),
-            )
-        )
+        crypto_results = await asset_search.search_crypto(q)
 
     complete_investment_event(request, result_count=len(crypto_results))
     return crypto_results

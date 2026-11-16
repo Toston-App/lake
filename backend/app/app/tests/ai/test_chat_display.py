@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.ai.chat_tools import build_system_prompt
+from app.ai.chat_prompt import build_system_prompt
 
 
 def test_build_system_prompt_describes_explicit_ui_presentation():

@@ -21,6 +21,7 @@ from app.schemas.holding import (
     HoldingUpdate,
     HoldingWithAsset,
 )
+from app.services import investments as investment_service
 from app.services.asset_resolver import AssetResolverService
 from app.services.currency_converter import CurrencyConverter, CurrencyRateUnavailable
 from app.services.investment_rate_limiter import enforce_investment_rate_limit
@@ -91,48 +92,7 @@ async def list_holdings(
                 limit=limit,
             )
 
-    latest_prices = await crud.asset_price.get_latest_prices(
-        db, asset_ids=[holding.asset_id for holding in holdings]
-    )
-
-    # Enrich with asset details
-    result = []
-    for holding in holdings:
-        asset = holding.asset
-
-        latest_price = latest_prices.get(asset.id)
-
-        holding_data = HoldingWithAsset(
-            id=holding.id,
-            owner_id=holding.owner_id,
-            account_id=holding.account_id,
-            asset_id=holding.asset_id,
-            quantity=holding.quantity,
-            avg_cost_basis=holding.avg_cost_basis,
-            cost_currency=holding.cost_currency,
-            total_invested=holding.total_invested,
-            current_value=holding.current_value,
-            current_value_mxn=holding.current_value_mxn,
-            current_value_usd=holding.current_value_usd,
-            unrealized_gain_loss=holding.unrealized_gain_loss,
-            unrealized_gain_loss_pct=holding.unrealized_gain_loss_pct,
-            # Asset details
-            symbol=asset.symbol,
-            asset_name=asset.name,
-            asset_class=asset.asset_class,
-            asset_type=asset.asset_type,
-            asset_currency=asset.currency,
-            market=asset.market,
-            sector=asset.sector,
-            country=asset.country,
-        )
-
-        if latest_price:
-            holding_data.current_price = latest_price.price
-            holding_data.price_change = latest_price.change
-            holding_data.price_change_percent = latest_price.change_percent
-
-        result.append(holding_data)
+    result = await investment_service.holdings_with_assets(db, holdings)
 
     complete_investment_event(request, result_count=len(result))
     return result

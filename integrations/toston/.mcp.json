@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "toston": {
+      "type": "http",
+      "url": "https://api.cleverbill.ing/mcp"
+    }
+  }
+}

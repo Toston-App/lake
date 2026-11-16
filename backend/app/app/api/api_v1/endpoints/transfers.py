@@ -8,9 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
-from app.api.deps import DateFilterType
 from app.services import transactions as transaction_service
 from app.services.errors import ServiceError, raise_http
+from app.services.periods import DateFilterType
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()

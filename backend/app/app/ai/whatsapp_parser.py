@@ -64,6 +64,7 @@ PROMPT_VERSION = hashlib.sha256(PROMPT_TEMPLATE.encode()).hexdigest()[:12]
 
 class WhatsAppMessage(BaseModel):
     """Model for WhatsApp message data"""
+
     message: str
     from_number: str
     timestamp: Optional[datetime] = None
@@ -78,6 +79,7 @@ class ParseResult:
     decided the message isn't a transaction (``not_a_transaction``), which is
     not a failure.
     """
+
     transaction: dict[str, Any]
     trace: dict[str, Any] = field(default_factory=dict)
     not_a_transaction: bool = False
@@ -126,14 +128,18 @@ class WhatsAppParser:
         else:
             self.client = None
 
-    async def analyze_with_ai(self, message: str, categories, places, accounts, trace: dict[str, Any]) -> dict:
+    async def analyze_with_ai(
+        self, message: str, categories, places, accounts, trace: dict[str, Any]
+    ) -> dict:
         """
         Analyze WhatsApp message using OpenRouter to extract transaction information.
 
         Fills ``trace`` with the model used, token usage, latency and raw output.
         """
         if not self.client:
-            raise ValueError("OpenRouter client not initialized. Please provide an API key.")
+            raise ValueError(
+                "OpenRouter client not initialized. Please provide an API key."
+            )
 
         prompt = PROMPT_TEMPLATE.format(
             today=date.today(),
@@ -153,14 +159,8 @@ class WhatsAppParser:
                 model=self.model,
                 response_format={"type": "json_object"},
                 messages=[
-                    {
-                        "role": "system",
-                        "content": prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Message to parse: \"{message}\""
-                    }
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": f'Message to parse: "{message}"'},
                 ],
                 max_tokens=1000,
                 extra_body=extra_body,
@@ -186,7 +186,9 @@ class WhatsAppParser:
                 "prompt_tokens": usage.prompt_tokens,
                 "completion_tokens": usage.completion_tokens,
                 "total_tokens": usage.total_tokens,
-            } if usage else None,
+            }
+            if usage
+            else None,
         )
 
         try:
@@ -201,7 +203,7 @@ class WhatsAppParser:
         categories: list[dict[str, Any]] = None,
         places: list[dict[str, Any]] = None,
         accounts: list[dict[str, Any]] = None,
-        default_account: Optional[Account] = None
+        default_account: Optional[Account] = None,
     ) -> ParseResult:
         """
         Parse WhatsApp message to extract transaction information
@@ -230,7 +232,9 @@ class WhatsAppParser:
             return fail("no_client")
 
         try:
-            ai_result = await self.analyze_with_ai(message, categories, places, accounts, trace)
+            ai_result = await self.analyze_with_ai(
+                message, categories, places, accounts, trace
+            )
         except ValueError as e:
             trace["error"] = str(e)
             return fail("llm_error")
@@ -240,16 +244,24 @@ class WhatsAppParser:
             return fail("empty_result")
 
         # The prompt asks for a null type/amount when the message isn't a transaction
-        if isinstance(ai_result, dict) and (ai_result.get("type") is None or ai_result.get("amount") is None):
+        if isinstance(ai_result, dict) and (
+            ai_result.get("type") is None or ai_result.get("amount") is None
+        ):
             return ParseResult(transaction={}, trace=trace, not_a_transaction=True)
 
         try:
-            transaction = self.convert_ai_result_to_transaction(ai_result, default_account)
+            transaction = self.convert_ai_result_to_transaction(
+                ai_result, default_account
+            )
         except (TypeError, ValueError, AttributeError) as e:
             trace["error"] = f"{type(e).__name__}: {e}"
             return fail("conversion_error")
 
-        if default_account and transaction.get("account_id") == default_account.id and not _ref_id(ai_result.get("account")):
+        if (
+            default_account
+            and transaction.get("account_id") == default_account.id
+            and not _ref_id(ai_result.get("account"))
+        ):
             trace["adjustments"].append("default_account_applied")
 
         # Validate the transaction has minimal required data
@@ -260,7 +272,7 @@ class WhatsAppParser:
         if not self.validate_subcategory_belongs_to_category(
             transaction.get("category_id"),
             transaction.get("subcategory_id"),
-            categories or []
+            categories or [],
         ):
             if transaction.get("subcategory_id"):
                 trace["adjustments"].append("subcategory_not_in_category")
@@ -291,7 +303,10 @@ class WhatsAppParser:
         return True
 
     def validate_subcategory_belongs_to_category(
-        self, category_id: int | None, subcategory_id: int | None, categories: list[dict[str, Any]]
+        self,
+        category_id: int | None,
+        subcategory_id: int | None,
+        categories: list[dict[str, Any]],
     ) -> bool:
         """
         Validate that a subcategory belongs to the specified category
@@ -313,7 +328,9 @@ class WhatsAppParser:
             return False
 
         # Find the category in the list
-        category = next((cat for cat in categories if cat.get("id") == category_id), None)
+        category = next(
+            (cat for cat in categories if cat.get("id") == category_id), None
+        )
         if not category:
             return False
 
@@ -323,7 +340,9 @@ class WhatsAppParser:
 
         return subcategory_id in subcategory_ids
 
-    def convert_ai_result_to_transaction(self, ai_result: dict, default_account: Optional[Account] = None) -> dict:
+    def convert_ai_result_to_transaction(
+        self, ai_result: dict, default_account: Optional[Account] = None
+    ) -> dict:
         """Convert AI analysis result to transaction format"""
         # Generate a unique transaction ID if none provided
         tx_id = ai_result.get("id", f"tx-{secrets.token_urlsafe(4)}")
@@ -344,8 +363,12 @@ class WhatsAppParser:
         category_name = category.get("name") if isinstance(category, dict) else None
 
         subcategory = ai_result.get("subcategory", {})
-        subcategory_id = subcategory.get("id") if isinstance(subcategory, dict) else None
-        subcategory_name = subcategory.get("name") if isinstance(subcategory, dict) else None
+        subcategory_id = (
+            subcategory.get("id") if isinstance(subcategory, dict) else None
+        )
+        subcategory_name = (
+            subcategory.get("name") if isinstance(subcategory, dict) else None
+        )
 
         # Extract place ID if present
         place = ai_result.get("place", {})
@@ -354,12 +377,18 @@ class WhatsAppParser:
 
         # Extract from_account and to_account for transfers
         from_account = ai_result.get("from_account", {})
-        from_account_id = from_account.get("id") if isinstance(from_account, dict) else None
-        from_account_name = from_account.get("name") if isinstance(from_account, dict) else None
+        from_account_id = (
+            from_account.get("id") if isinstance(from_account, dict) else None
+        )
+        from_account_name = (
+            from_account.get("name") if isinstance(from_account, dict) else None
+        )
 
         to_account = ai_result.get("to_account", {})
         to_account_id = to_account.get("id") if isinstance(to_account, dict) else None
-        to_account_name = to_account.get("name") if isinstance(to_account, dict) else None
+        to_account_name = (
+            to_account.get("name") if isinstance(to_account, dict) else None
+        )
 
         # Build the transaction object
         transaction = {

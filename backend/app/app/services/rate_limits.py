@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from app.services.errors import ServiceError
-from app.utilities.redis import hit_rate_limit
+from app.utilities.redis import hit_rate_limit, peek_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -65,3 +65,18 @@ async def enforce_rate_limit(
     if hits > limit:
         raise RateLimitedError(retry_after)
     return True
+
+
+async def rate_limit_reached(key: str, limit: int, *, window_seconds: int) -> bool:
+    """Whether `key` already used its `limit` this window; counts nothing.
+
+    For limits that count only some outcomes (e.g. failed lookups): check
+    first, then `enforce_rate_limit` when the outcome should count. Fails open.
+    """
+    if limit <= 0:
+        return False
+    try:
+        return await peek_rate_limit(key, window_seconds) >= limit
+    except Exception:
+        logger.warning("Rate limiter unavailable for %s", key, exc_info=True)
+        return False

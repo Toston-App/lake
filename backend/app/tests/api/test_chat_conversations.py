@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.ai import agent
+from app.ai import agent, confirmation
 from app.api.api_v1.endpoints import chat
 from app.schemas.chat import ChatConfirmRequest
 from app.services import rate_limits
@@ -119,7 +119,7 @@ async def test_confirmation_releases_lock_after_execute_tool_failure() -> None:
         patch.object(chat, "_enforce_quota", new=AsyncMock()),
         patch.object(
             chat,
-            "get_pending_action",
+            "claim_current_action",
             new=AsyncMock(
                 return_value={
                     "conversation_id": "conversation",
@@ -166,7 +166,7 @@ async def test_confirmation_releases_lock_after_persistence_failure(
         patch.object(chat, "_enforce_quota", new=AsyncMock()),
         patch.object(
             chat,
-            "get_pending_action",
+            "claim_current_action",
             new=AsyncMock(
                 return_value={
                     "conversation_id": "conversation",
@@ -182,7 +182,6 @@ async def test_confirmation_releases_lock_after_persistence_failure(
             "execute_tool",
             new=AsyncMock(return_value=({"success": True}, None)),
         ),
-        patch.object(chat, "delete_pending_action", new=AsyncMock(return_value=True)),
         patch.object(chat, "record_tool_call", new=AsyncMock()),
         patch.object(chat, "finalize_turn", new=AsyncMock()),
         patch.object(
@@ -264,12 +263,12 @@ async def test_failed_pending_write_cannot_render_an_approval_card() -> None:
 
     with (
         patch.object(
-            agent,
+            confirmation,
             "build_pending_preview",
             new=AsyncMock(return_value={}),
         ),
         patch.object(
-            agent,
+            confirmation,
             "store_pending_action",
             new=AsyncMock(
                 side_effect=PendingActionPersistenceError("redis unavailable")
@@ -418,7 +417,7 @@ async def test_failed_confirmation_does_not_refund_the_proposing_turn() -> None:
         patch.object(chat, "_enforce_quota", new=AsyncMock()),
         patch.object(
             chat,
-            "get_pending_action",
+            "claim_current_action",
             new=AsyncMock(
                 return_value={
                     "conversation_id": "conversation",
@@ -434,7 +433,6 @@ async def test_failed_confirmation_does_not_refund_the_proposing_turn() -> None:
             "execute_tool",
             new=AsyncMock(return_value=({"success": False, "error": "nope"}, None)),
         ),
-        patch.object(chat, "delete_pending_action", new=AsyncMock(return_value=True)),
         patch.object(chat, "record_tool_call", new=AsyncMock()),
         patch.object(chat, "finalize_turn", new=finalize),
         patch.object(chat, "get_conversation", new=AsyncMock(return_value=None)),
@@ -535,3 +533,38 @@ def test_chat_model_caps_output_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent.settings, "CHAT_MAX_OUTPUT_TOKENS", 1234)
 
     assert agent.build_model("openai/test-model").settings["max_tokens"] == 1234
+
+
+@pytest.mark.asyncio
+async def test_outdated_preview_is_refused_and_its_turn_closed() -> None:
+    from app.ai.confirmation import PreviewOutdated
+    from fastapi import HTTPException
+
+    finalize = AsyncMock()
+    with (
+        patch.object(
+            chat, "acquire_conversation_lock", new=AsyncMock(return_value="token")
+        ),
+        patch.object(chat, "release_conversation_lock", new=AsyncMock()),
+        patch.object(chat, "_enforce_quota", new=AsyncMock()),
+        patch.object(
+            chat,
+            "claim_current_action",
+            new=AsyncMock(side_effect=PreviewOutdated({"turn_id": 7})),
+        ),
+        patch.object(chat, "finalize_turn", new=finalize),
+        patch.object(chat, "execute_tool", new=AsyncMock()) as execute,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await chat.confirm_chat_action(
+            request=_request(),
+            conversation_id="conversation",
+            body=ChatConfirmRequest(action_id="action"),
+            db=AsyncMock(),
+            current_user=SimpleNamespace(id=1),
+        )
+
+    assert exc_info.value.status_code == 409
+    execute.assert_not_called()
+    assert finalize.await_args.args == (7,)
+    assert finalize.await_args.kwargs["pending_confirmation"] is False

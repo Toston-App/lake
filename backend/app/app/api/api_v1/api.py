@@ -4,6 +4,7 @@ from app.api.api_v1.endpoints import (
     accounts,
     # ai, # Disabled OCR AI endpoint
     admin_observability,
+    api_tokens,
     balance_adjustments,
     categories,
     chat,
@@ -56,6 +57,9 @@ api_router.include_router(imports.router, prefix="/import", tags=["imports"])
 # api_router.include_router(ai.router, prefix="/ai", tags=["ai"]) # Disabled OCR AI endpoint
 api_router.include_router(whatsapp.router, prefix="/whatsapp", tags=["whatsapp"])
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
+api_router.include_router(
+    api_tokens.router, prefix="/api-tokens", tags=["api-tokens"]
+)
 api_router.include_router(recap.router, prefix="/recap", tags=["recap"])
 api_router.include_router(
     investments.router, prefix="/investments", tags=["investments"]

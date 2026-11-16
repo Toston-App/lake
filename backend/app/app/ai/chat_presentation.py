@@ -143,9 +143,7 @@ def public_ui_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]
         ):
             continue
         if message.role == "user" and any(
-            isinstance(part, dict)
-            and part.get("type") == "text"
-            and part.get("text")
+            isinstance(part, dict) and part.get("type") == "text" and part.get("text")
             for part in parts
         ):
             blocking_ui_emitted = False

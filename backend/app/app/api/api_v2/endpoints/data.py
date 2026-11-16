@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models, schemas
 from app.api import deps
-from app.api.deps import DateFilterType
 from app.process_data.process import (
     account_charts,
     account_diff,
@@ -20,6 +19,7 @@ from app.process_data.process import (
     get_df,
     transaction_charts,
 )
+from app.services.periods import DateFilterType
 from app.utilities.wide_events import enrich_event, timed
 
 router = APIRouter()
