@@ -520,6 +520,23 @@ async def delete_pending_action(action_id: str) -> bool:
         return False
 
 
+async def claim_pending_action(action_id: str, user_id: int) -> dict | None:
+    """Load and delete a pending action in one winner-takes-all step.
+
+    Two concurrent confirms of the same action must not both execute it. Only
+    the caller whose DELETE removes the key gets the payload; the other gets None.
+    """
+    pending = await get_pending_action(action_id, user_id)
+    if pending is None:
+        return None
+    try:
+        deleted = await r.delete(_chat_pending_key(action_id))
+    except Exception as e:
+        logging.error(f"Error claiming pending action {action_id}: {e}")
+        return None
+    return pending if deleted == 1 else None
+
+
 async def invalidate_user_cache(user_id: int) -> bool:
     """Delete all cached dashboard data for a user using SCAN + DEL."""
     try:
@@ -568,6 +585,14 @@ async def hit_rate_limit(key: str, window_seconds: int) -> tuple[int, int]:
         args=[str(window_seconds)],
     )
     return int(count), window_start + window_seconds - now
+
+
+async def peek_rate_limit(key: str, window_seconds: int) -> int:
+    """Hits counted so far in the current window, without counting one."""
+    now = int(time.time())
+    window_start = now - now % window_seconds
+    count = await r.get(f"{RATE_LIMIT_PREFIX}:{key}:{window_seconds}:{window_start}")
+    return int(count or 0)
 
 
 # ==================== Subscription entitlement cache ====================

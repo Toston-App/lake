@@ -3,11 +3,10 @@ Portfolio analytics endpoints for the Investment Dashboard.
 """
 
 from collections import defaultdict
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import crud, models
@@ -25,7 +24,7 @@ from app.schemas.portfolio import (
     TopHolding,
     TopHoldingsResponse,
 )
-from app.services.currency_converter import CurrencyConverter, CurrencyRateUnavailable
+from app.services import investments as investment_service
 from app.utilities.investment_telemetry import (
     begin_investment_stage,
     complete_investment_event,
@@ -34,16 +33,12 @@ from app.utilities.investment_telemetry import (
 )
 
 router = APIRouter()
-ZERO = Decimal("0")
+ZERO = investment_service.ZERO
 
 
 async def _trusted_usd_mxn_rate() -> Decimal:
-    try:
-        return await CurrencyConverter.get_usd_to_mxn_rate()
-    except CurrencyRateUnavailable as exc:
-        raise HTTPException(
-            status_code=503, detail="A current USD/MXN rate is unavailable"
-        ) from exc
+    # FxRateUnavailable is a ServiceError: the API reports it as a 503.
+    return await investment_service.usd_mxn_rate()
 
 
 @router.get("/summary", response_model=PortfolioSummary)
@@ -64,61 +59,14 @@ async def get_portfolio_summary(
     with investment_stage(request, "fx_lookup"):
         usd_mxn_rate = await _trusted_usd_mxn_rate()
     begin_investment_stage(request, "aggregation")
-
-    total_value_usd = ZERO
-    total_value_mxn = ZERO
-    total_invested_usd = ZERO
-    total_invested_mxn = ZERO
-    total_gain_loss = ZERO
-
-    for holding in holdings:
-        total_value_usd += holding.current_value_usd
-        total_value_mxn += holding.current_value_mxn
-        # Separate total_invested by cost_currency
-        if holding.cost_currency == Currency.USD:
-            total_invested_usd += holding.total_invested
-        else:
-            total_invested_mxn += holding.total_invested
-
-    # Calculate combined totals (all investments converted to single currency)
-    total_invested_combined_usd = total_invested_usd + (
-        total_invested_mxn / usd_mxn_rate
-    )
-    total_invested_combined_mxn = (
-        total_invested_usd * usd_mxn_rate
-    ) + total_invested_mxn
-
-    total_gain_loss = total_value_usd - total_invested_combined_usd
-    # Calculate total percentage gain/loss
-    total_gain_loss_pct = ZERO
-    if total_invested_combined_usd > 0:
-        total_gain_loss_pct = (
-            (total_value_usd - total_invested_combined_usd)
-            / total_invested_combined_usd
-        ) * 100
-
-    # Count unique assets
-    asset_ids = {h.asset_id for h in holdings}
-
+    summary = investment_service.summarize_holdings(holdings, usd_mxn_rate)
     complete_investment_stage(request, "aggregation")
     complete_investment_event(
         request,
-        holdings_count=len(holdings),
-        assets_count=len(asset_ids),
+        holdings_count=summary.total_holdings,
+        assets_count=summary.total_assets,
     )
-    return PortfolioSummary(
-        total_value_usd=round(total_value_usd, 2),
-        total_value_mxn=round(total_value_mxn, 2),
-        total_invested_usd=round(total_invested_usd, 2),
-        total_invested_mxn=round(total_invested_mxn, 2),
-        total_invested_combined_usd=round(total_invested_combined_usd, 2),
-        total_invested_combined_mxn=round(total_invested_combined_mxn, 2),
-        total_gain_loss=round(total_gain_loss, 2),
-        total_gain_loss_pct=round(total_gain_loss_pct, 2),
-        total_holdings=len(holdings),
-        total_assets=len(asset_ids),
-        last_updated=datetime.now(timezone.utc),
-    )
+    return summary
 
 
 @router.get("/allocation/by-class", response_model=AllocationByClass)

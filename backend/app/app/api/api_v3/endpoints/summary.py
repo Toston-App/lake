@@ -1,12 +1,12 @@
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.api import deps
-from app.api.deps import DateFilterType
 from app.schemas.dashboard import SummaryResponse
+from app.services.periods import DateFilterType
 from app.services.v3_dashboard import fetch_period_summary
 from app.utilities.wide_events import enrich_event, timed
 
@@ -39,13 +39,11 @@ async def get_summary(
         },
     )
 
-    try:
-        with timed() as t:
-            result = await fetch_period_summary(
-                db, current_user, date_filter_type, date, account_id
-            )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    # A foreign or missing account raises NotFoundError, reported as a 404.
+    with timed() as t:
+        result = await fetch_period_summary(
+            db, current_user, date_filter_type, date, account_id
+        )
 
     enrich_event(
         request,

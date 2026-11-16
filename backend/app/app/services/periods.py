@@ -1,12 +1,28 @@
+"""Reporting periods: a period kind plus its value, as a date range.
+
+Shared by the v3 dashboard API and the chat/MCP tools. A malformed period
+raises ``DomainError``, which the API reports as a 400 like any other
+service error.
+"""
+
 import calendar
 from dataclasses import dataclass
 from datetime import date as Date
 from datetime import datetime, timedelta
+from enum import Enum
 
 from dateutil.relativedelta import relativedelta
-from fastapi import HTTPException
 
-from app.api.deps import DateFilterType
+from app.services.errors import DomainError
+
+
+class DateFilterType(str, Enum):
+    date = "date"
+    week = "week"
+    month = "month"
+    quarter = "quarter"
+    year = "year"
+    range = "range"
 
 
 @dataclass
@@ -42,7 +58,7 @@ class DateRange:
 def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateRange:
     """
     Parse a date_filter_type + date string into a structured DateRange.
-    Raises HTTPException(400) on invalid input.
+    Raises DomainError on invalid input.
     """
     if date_filter_type == DateFilterType.date:
         try:
@@ -54,10 +70,7 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
                 time_difference=0,
             )
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Date must be in the format YYYY-MM-DD",
-            )
+            raise DomainError("Date must be in the format YYYY-MM-DD")
 
     elif date_filter_type == DateFilterType.week:
         try:
@@ -70,10 +83,7 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
                 time_difference=6,
             )
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Date must be in the format YYYY-MM-DD",
-            )
+            raise DomainError("Date must be in the format YYYY-MM-DD")
 
     elif date_filter_type == DateFilterType.month:
         try:
@@ -87,10 +97,7 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
                 time_difference=1,
             )
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Date must be in the format YYYY-MM",
-            )
+            raise DomainError("Date must be in the format YYYY-MM")
 
     elif date_filter_type == DateFilterType.quarter:
         try:
@@ -114,10 +121,7 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
                 time_difference=3,
             )
         except (ValueError, IndexError):
-            raise HTTPException(
-                status_code=400,
-                detail="Date must be in the format YYYY-QX",
-            )
+            raise DomainError("Date must be in the format YYYY-QX")
 
     elif date_filter_type == DateFilterType.year:
         try:
@@ -131,10 +135,7 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
                 time_difference=365,
             )
         except (ValueError, IndexError):
-            raise HTTPException(
-                status_code=400,
-                detail="Date must be in the format YYYY",
-            )
+            raise DomainError("Date must be in the format YYYY")
 
     elif date_filter_type == DateFilterType.range:
         try:
@@ -142,16 +143,10 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
             start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
             end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="Date range must be in the format YYYY-MM-DD:YYYY-MM-DD",
-            )
+            raise DomainError("Date range must be in the format YYYY-MM-DD:YYYY-MM-DD")
 
         if start_date > end_date:
-            raise HTTPException(
-                status_code=400,
-                detail="Start date must be before end date",
-            )
+            raise DomainError("Start date must be before end date")
 
         return DateRange(
             start_date=start_date,
@@ -160,7 +155,7 @@ def parse_date_range(date_filter_type: DateFilterType, date_param: str) -> DateR
             time_difference=(end_date - start_date).days,
         )
 
-    raise HTTPException(status_code=400, detail="Invalid date filter type")
+    raise DomainError("Invalid date filter type")
 
 
 def get_previous_period_date_range(
@@ -177,6 +172,8 @@ def get_previous_period_date_range(
     - Date 2026-03-22 → 2026-03-21
     - Range (90 days) → Previous 90 days
     """
+    # Validates the value, so a malformed one is a DomainError here too.
+    parse_date_range(date_filter_type, date_param)
     if date_filter_type == DateFilterType.month:
         date_obj = datetime.strptime(date_param, "%Y-%m")
         prev_date = date_obj - relativedelta(months=1)
@@ -229,4 +226,4 @@ def get_previous_period_date_range(
         )
         return parse_date_range(date_filter_type, prev_date_param)
 
-    raise HTTPException(status_code=400, detail="Invalid date filter type")
+    raise DomainError("Invalid date filter type")

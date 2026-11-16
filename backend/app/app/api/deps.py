@@ -1,7 +1,5 @@
 import logging
 from collections.abc import AsyncGenerator, Generator
-from enum import Enum
-from typing import NoReturn
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie, OAuth2PasswordBearer
@@ -13,6 +11,13 @@ from app import crud, models, schemas
 from app.core import security
 from app.core.config import settings
 from app.db.session import SessionLocal, async_session
+from app.services.errors import ServiceError
+from app.services.investments import InvestmentsReadOnly, investment_access
+from app.utilities.investment_telemetry import (
+    complete_investment_stage,
+    fail_investment_event,
+    start_investment_event,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +38,6 @@ cookie_scheme = APIKeyCookie(
 )
 
 
-class DateFilterType(str, Enum):
-    date = "date"
-    week = "week"
-    month = "month"
-    quarter = "quarter"
-    year = "year"
-    range = "range"
 
 
 def get_db() -> Generator:
@@ -89,7 +87,15 @@ def verify_clerk_token(token: str) -> schemas.ClerkTokenPayload:
     azp = payload.get("azp")
     if not azp or azp not in settings.CLERK_AUTHORIZED_PARTIES:
         raise jwt.JWTError("Unauthorized party (azp)")
+    # An OAuth access token (RFC 9068) is for /mcp only: an AI app holding
+    # one must not reach the REST API, e.g. to turn off its read-only setting.
+    # The header is covered by the signature verified above.
+    if str(jwt.get_unverified_header(token).get("typ", "")).lower() in _OAUTH_JWT_TYPES:
+        raise jwt.JWTError("OAuth access tokens are only accepted on /mcp")
     return schemas.ClerkTokenPayload(**payload)
+
+
+_OAUTH_JWT_TYPES = frozenset({"at+jwt", "application/at+jwt"})
 
 
 async def get_current_user(
@@ -200,47 +206,19 @@ async def require_investments_access(
     edit or delete anything until they renew. They may still refresh prices,
     which the endpoint limits to once a day.
     """
-    from app.core.tiers import FEATURE_INVESTMENTS, has_feature
-    from app.crud import crud_subscription
-    from app.services.entitlements import get_user_tier
-    from app.utilities.investment_telemetry import (
-        complete_investment_stage,
-        fail_investment_event,
-        start_investment_event,
-    )
-
     start_investment_event(request, user_id=current_user.id)
 
-    def deny(status_code: int, reason: str, detail: str) -> NoReturn:
-        fail_investment_event(request, reason=reason, stage="access")
-        raise HTTPException(status_code=status_code, detail=detail)
-
-    if not settings.INVESTMENTS_ENABLED:
-        deny(
-            status.HTTP_403_FORBIDDEN,
-            "feature_access_denied",
-            "Investments feature is not enabled",
-        )
-    if not crud.user.is_superuser(current_user):
-        tier, _ = await get_user_tier(db, current_user.id)
-        if not has_feature(tier, FEATURE_INVESTMENTS):
-            subscription = await crud_subscription.get_by_user(db, current_user.id)
-            if subscription is None or not subscription.polar_subscription_id:
-                deny(
-                    status.HTTP_402_PAYMENT_REQUIRED,
-                    "subscription_required",
-                    "Investments require an active paid subscription",
-                )
+    try:
+        read_only = await investment_access(db, current_user)
+        if read_only:
             request.state.investments_read_only = True
             if request.method not in _INVESTMENT_READ_METHODS and (
                 (request.method, request.url.path) not in _INVESTMENT_LAPSED_WRITES
             ):
-                deny(
-                    status.HTTP_402_PAYMENT_REQUIRED,
-                    "subscription_inactive",
-                    "Your subscription is inactive: investments are read-only "
-                    "until you renew",
-                )
+                raise InvestmentsReadOnly()
+    except ServiceError as exc:
+        fail_investment_event(request, reason=exc.reason, stage="access")
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from None
     complete_investment_stage(request, "access")
     return current_user
 

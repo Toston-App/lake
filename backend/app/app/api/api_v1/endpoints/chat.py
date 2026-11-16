@@ -36,12 +36,18 @@ from app.ai.chat_presentation import (
     public_ui_messages,
     serialize_model_messages,
 )
-from app.ai.chat_tools import (
-    PROMPT_VERSION,
-    execute_tool,
+from app.ai.chat_prompt import PROMPT_VERSION
+from app.ai.confirmation import (
+    MCP_CONVERSATION_ID,
+    PREVIEW_OUTDATED,
+    PendingActionConversationMismatch,
+    PendingActionNotFound,
+    PreviewOutdated,
+    claim_current_action,
     format_confirmation_result,
     merge_confirm_tool_args,
 )
+from app.ai.dispatch import execute_tool
 from app.api import deps
 from app.core.config import settings
 from app.core.tiers import Tier, chat_model_for_tier
@@ -73,9 +79,7 @@ from app.utilities.redis import (
     CHAT_CONVERSATION_LOCK_TTL,
     acquire_conversation_lock,
     delete_conversation,
-    delete_pending_action,
     get_conversation,
-    get_pending_action,
     list_user_conversations,
     refresh_conversation_lock,
     release_conversation_lock,
@@ -98,6 +102,9 @@ router = APIRouter()
 
 
 def _require_valid_conversation_id(conversation_id: str) -> str:
+    if conversation_id == MCP_CONVERSATION_ID:
+        # MCP's pending actions live under this id.
+        raise HTTPException(status_code=422, detail="This conversation id is reserved")
     try:
         return validate_conversation_id(conversation_id)
     except ValueError as exc:
@@ -622,15 +629,29 @@ async def confirm_chat_action(
     conversation_id = _require_valid_conversation_id(conversation_id)
     await _enforce_quota(db, current_user)
 
-    pending = await get_pending_action(body.action_id, current_user.id)
-    if not pending:
+    # Claimed before executing, so a second confirm of the same action (another
+    # tab, a retry after a lost response) can never run it twice.
+    try:
+        pending = await claim_current_action(
+            db, current_user, body.action_id, conversation_id
+        )
+    except PreviewOutdated as exc:
+        # The action is gone; close its turn so the approval card goes away.
+        await finalize_turn(
+            exc.pending.get("turn_id"),
+            status="ok",
+            pending_confirmation=False,
+            error=PREVIEW_OUTDATED,
+        )
+        raise HTTPException(status_code=409, detail=PREVIEW_OUTDATED) from None
+    except PendingActionNotFound:
         raise HTTPException(
             status_code=404, detail="Pending action not found or expired"
-        )
-    if pending.get("conversation_id") != conversation_id:
+        ) from None
+    except PendingActionConversationMismatch:
         raise HTTPException(
             status_code=400, detail="Action does not belong to this conversation"
-        )
+        ) from None
 
     enrich_event(
         request,
@@ -641,7 +662,6 @@ async def confirm_chat_action(
             "action_id": body.action_id,
         },
     )
-
     tool_args = merge_confirm_tool_args(
         pending["tool_name"],
         pending["tool_args"],
@@ -658,10 +678,7 @@ async def confirm_chat_action(
             tool_args,
             db,
             current_user,
-            confirmed=True,
         )
-
-    await delete_pending_action(body.action_id)
 
     success = bool(result.get("success"))
     await record_tool_call(

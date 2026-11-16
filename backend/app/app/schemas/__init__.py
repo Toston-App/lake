@@ -160,3 +160,11 @@ from .transfer import (
     TransferUpdate,
 )
 from .user import User, UserCreate, UserCreateUuid, UserGetMe, UserInDB, UserUpdate
+from .api_token import (
+    AiConnection,
+    AiConnections,
+    AiConnectionSettings,
+    ApiToken,
+    ApiTokenCreate,
+    ApiTokenCreated,
+)

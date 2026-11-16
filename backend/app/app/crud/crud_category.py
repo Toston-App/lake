@@ -16,7 +16,7 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
     ) -> list[Category]:
         result = await db.execute(
             select(self.model)
-            .order_by(Category.name)
+            .order_by(Category.name, Category.id)
             .options(selectinload(self.model.subcategories))
             .offset(skip)
             .limit(limit)
@@ -46,7 +46,7 @@ class CRUDCategory(CRUDBase[Category, CategoryCreate, CategoryUpdate]):
         result = await db.execute(
             select(self.model)
             .filter(Category.owner_id == owner_id)
-            .order_by(Category.name)
+            .order_by(Category.name, Category.id)
             .options(selectinload(self.model.subcategories))
             .offset(skip)
             .limit(limit)

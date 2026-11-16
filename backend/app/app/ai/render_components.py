@@ -135,9 +135,7 @@ def resolve_render_detail(
         return None
 
     component = next(c for c in RENDER_COMPONENTS if c["id"] == component_id)
-    candidate_types = (
-        [from_action] if from_action else component["source_action_types"]
-    )
+    candidate_types = [from_action] if from_action else component["source_action_types"]
 
     # Prefer the most recent matching action in the turn.
     for action in reversed(actions):

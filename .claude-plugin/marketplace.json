@@ -1,0 +1,14 @@
+{
+  "name": "toston",
+  "description": "Toston (Clever) personal finance plugins for Claude",
+  "owner": {
+    "name": "Toston"
+  },
+  "plugins": [
+    {
+      "name": "toston",
+      "source": "./integrations/toston",
+      "description": "Use Toston (Clever) personal finance from Claude"
+    }
+  ]
+}

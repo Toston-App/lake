@@ -35,7 +35,12 @@ class OCRHelper:
             return base64.b64encode(image_file.read()).decode("utf-8")
 
     async def analyze_image(
-        self, image_path: str, categories, places, model: str = "gpt-4o-mini", json: bool = True
+        self,
+        image_path: str,
+        categories,
+        places,
+        model: str = "gpt-4o-mini",
+        json: bool = True,
     ) -> str:
         """Analyze image using OpenAI Vision API"""
         base64_image = self.encode_image(image_path)
@@ -103,9 +108,9 @@ class OCRHelper:
 
                 # Ensure amount is float
                 if "amount" in transaction:
-                    transaction["amount"] = abs(float(
-                        str(transaction["amount"]).replace(",", "")
-                    ))
+                    transaction["amount"] = abs(
+                        float(str(transaction["amount"]).replace(",", ""))
+                    )
 
                 # Parse date string to datetime
                 if "date" in transaction and transaction["date"]:
@@ -119,11 +124,17 @@ class OCRHelper:
                 # Extract category and subcategory IDs if present
                 category = transaction.get("category", {})
                 category_id = category.get("id") if isinstance(category, dict) else None
-                category_name = category.get("name") if isinstance(category, dict) else None
+                category_name = (
+                    category.get("name") if isinstance(category, dict) else None
+                )
 
                 subcategory = transaction.get("subcategory", {})
-                subcategory_id = subcategory.get("id") if isinstance(subcategory, dict) else None
-                subcategory_name = subcategory.get("name") if isinstance(subcategory, dict) else None
+                subcategory_id = (
+                    subcategory.get("id") if isinstance(subcategory, dict) else None
+                )
+                subcategory_name = (
+                    subcategory.get("name") if isinstance(subcategory, dict) else None
+                )
 
                 if category_id and category_name:
                     transaction["category_id"] = category_id

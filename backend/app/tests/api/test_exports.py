@@ -22,10 +22,9 @@ def mock_r2(monkeypatch: pytest.MonkeyPatch) -> dict:
     delete = AsyncMock()
     presign = AsyncMock(return_value="https://signed.example/file.xlsx")
     monkeypatch.setattr("app.services.r2.is_configured", lambda: True)
-    monkeypatch.setattr("app.api.api_v1.endpoints.exports.r2.is_configured", lambda: True)
-    monkeypatch.setattr("app.api.api_v1.endpoints.exports.r2.upload_file", upload)
-    monkeypatch.setattr("app.api.api_v1.endpoints.exports.r2.delete_object", delete)
-    monkeypatch.setattr("app.api.api_v1.endpoints.exports.r2.presign_get", presign)
+    monkeypatch.setattr("app.services.r2.upload_file", upload)
+    monkeypatch.setattr("app.services.r2.delete_object", delete)
+    monkeypatch.setattr("app.services.r2.presign_get", presign)
     monkeypatch.setattr("app.services.user_export.r2.upload_file", upload)
     monkeypatch.setattr("app.services.user_export.r2.delete_object", delete)
     return {"upload": upload, "delete": delete, "presign": presign}

@@ -21,8 +21,13 @@ async def test_create_and_latest_ordering(db_session: AsyncSession):
             price_mxn=Decimal("180"),
         ),
     )
+    # Relative to the first row's server-side timestamp: the host and the
+    # database container clocks can disagree by a little.
     newer = await create_test_asset_price(
-        db_session, asset_id=asset.id, price=Decimal("11")
+        db_session,
+        asset_id=asset.id,
+        price=Decimal("11"),
+        fetched_at=created.fetched_at + timedelta(minutes=1),
     )
     assert created.id is not None
     assert (

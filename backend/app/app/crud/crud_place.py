@@ -24,7 +24,7 @@ class CRUDPlace(CRUDBase[Place, PlaceCreate, PlaceUpdate]):
         result = await db.execute(
             select(self.model)
             .filter(Place.owner_id == owner_id)
-            .order_by(Place.name)
+            .order_by(Place.name, Place.id)
             .offset(skip)
             .limit(limit)
         )

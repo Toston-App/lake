@@ -33,7 +33,8 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
         result = await db.execute(
             select(self.model)
             .filter(AssetPrice.asset_id == asset_id)
-            .order_by(AssetPrice.fetched_at.desc())
+            # Prices stored in one transaction share fetched_at (now()).
+            .order_by(AssetPrice.fetched_at.desc(), AssetPrice.id.desc())
             .limit(1)
         )
         return result.scalars().first()
@@ -50,7 +51,7 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
                 func.row_number()
                 .over(
                     partition_by=AssetPrice.asset_id,
-                    order_by=AssetPrice.fetched_at.desc(),
+                    order_by=(AssetPrice.fetched_at.desc(), AssetPrice.id.desc()),
                 )
                 .label("position"),
             )
@@ -93,7 +94,9 @@ class CRUDAssetPrice(CRUDBase[AssetPrice, AssetPriceCreate, AssetPriceUpdate]):
         if end_date:
             query = query.filter(AssetPrice.fetched_at <= end_date)
 
-        query = query.order_by(AssetPrice.fetched_at.desc()).limit(limit)
+        query = query.order_by(
+            AssetPrice.fetched_at.desc(), AssetPrice.id.desc()
+        ).limit(limit)
         result = await db.execute(query)
         return result.scalars().all()
 

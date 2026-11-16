@@ -100,7 +100,9 @@ class CRUDInvestmentTransaction(
         result = await db.execute(
             self._with_asset(select(self.model))
             .filter(InvestmentTransaction.owner_id == owner_id)
-            .order_by(InvestmentTransaction.executed_at.desc())
+            .order_by(
+                InvestmentTransaction.executed_at.desc(), InvestmentTransaction.id.desc()
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -122,7 +124,9 @@ class CRUDInvestmentTransaction(
                 InvestmentTransaction.holding_id == holding_id,
                 InvestmentTransaction.owner_id == owner_id,
             )
-            .order_by(InvestmentTransaction.executed_at.desc())
+            .order_by(
+                InvestmentTransaction.executed_at.desc(), InvestmentTransaction.id.desc()
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -144,7 +148,9 @@ class CRUDInvestmentTransaction(
                 InvestmentTransaction.account_id == account_id,
                 InvestmentTransaction.owner_id == owner_id,
             )
-            .order_by(InvestmentTransaction.executed_at.desc())
+            .order_by(
+                InvestmentTransaction.executed_at.desc(), InvestmentTransaction.id.desc()
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -166,7 +172,9 @@ class CRUDInvestmentTransaction(
                 InvestmentTransaction.owner_id == owner_id,
                 InvestmentTransaction.transaction_type == transaction_type,
             )
-            .order_by(InvestmentTransaction.executed_at.desc())
+            .order_by(
+                InvestmentTransaction.executed_at.desc(), InvestmentTransaction.id.desc()
+            )
             .offset(skip)
             .limit(limit)
         )
@@ -190,7 +198,9 @@ class CRUDInvestmentTransaction(
                 InvestmentTransaction.executed_at >= start_date,
                 InvestmentTransaction.executed_at <= end_date,
             )
-            .order_by(InvestmentTransaction.executed_at.desc())
+            .order_by(
+                InvestmentTransaction.executed_at.desc(), InvestmentTransaction.id.desc()
+            )
             .offset(skip)
             .limit(limit)
         )

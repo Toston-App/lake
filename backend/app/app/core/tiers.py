@@ -8,6 +8,9 @@ Each tier maps to a Polar product (except `free`) and defines:
 * `premium_model` — whether chat runs on `CHAT_PREMIUM_MODEL` instead of
   `CHAT_MODEL`. Every tier gets the same chat tools.
 * `features` — non-chat feature flags (investments, unlimited recurring detection).
+* `mcp_monthly_call_limit` — MCP tool calls per calendar month (UTC), counted
+  from the `mcp_tool_call` audit log. `None` means unlimited, which every tier
+  is until prices are decided.
 * `polar_product_id` — the Polar product id this tier corresponds to.
   Set from env / Polar dashboard. Used only for the checkout flow; the
   webhook maps the *incoming* product id back to a tier via
@@ -53,6 +56,8 @@ class TierConfig:
     price_hint: str | None = None
     # Catalog list price used by the admin P&L dashboard. Not Polar invoices.
     monthly_price_usd: float = 0.0
+    # MCP tool calls per calendar month; None => unlimited.
+    mcp_monthly_call_limit: int | None = None
 
 
 # Map of product id -> tier, rebuilt whenever product ids are configured.

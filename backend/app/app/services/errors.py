@@ -11,6 +11,8 @@ class ServiceError(Exception):
     status_code = 400
     # Recorded as the request's operation outcome when set.
     event_outcome: str | None = None
+    # A short machine-readable cause, for telemetry and audit logs.
+    reason: str = "service_error"
 
     def __init__(self, message: str):
         self.message = message
